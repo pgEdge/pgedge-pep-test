@@ -36,7 +36,7 @@ fi
 
 # Run tests for each combination
 for env in "${env_list[@]}"; do
-  envfile="${ENV_DIR}/.env-${env}"
+  envfile="${ENV_DIR}/config${env}.env"
 
   if [[ ! -f "$envfile" ]]; then
     echo "⚠️  Skipping missing environment file: $envfile"
@@ -49,19 +49,20 @@ for env in "${env_list[@]}"; do
   set -a
   source "$envfile"
   set +a
-
+timestamp=$(date +%Y%m%d_%H%M%S)
+report_dir="test-logs/report-${env}-${timestamp}"
   for platform in "${platform_list[@]}"; do
     case "$platform" in
       RPM|rpm)
         echo "▶️ Running RPM tests for env ${env}"
         pytest -v -s test_pep_server_rhel.py \
-          --html="test-logs/report-rpm-${env}.html" \
+          --html="${report_dir}/report-deb-${env}.html" \
           --self-contained-html
         ;;
       DEB|deb)
         echo "▶️ Running DEB tests for env ${env}"
         pytest -v -s test_pep_server_deb.py \
-          --html="test-logs/report-deb-${env}.html" \
+          --html="${report_dir}/report-deb-${env}.html" \
           --self-contained-html
         ;;
       *)

@@ -10,7 +10,7 @@ load_dotenv()
 client = docker.from_env()
 
 # Load values from .env
-containers = os.getenv("DEB-CONTAINERS", "").split(",")
+containers = os.getenv("DEB_CONTAINERS", "").split(",")
 repo = os.getenv("REPO", "release")
 ## Components for Deb
 components = os.getenv("DEB_SERVER_COMPONENTS", "").split(",")
@@ -158,49 +158,36 @@ def test_single_component_install(container_name, component):
 
 
 
-@pytest.mark.parametrize("container_name", containers)
-def test_install_components(container_name):
-    container = client.containers.get(container_name.strip())
-    assert container.status == "running"
-
-    # Detect package manager inside the container
-    exit_code, _ = container.exec_run("command -v dnf", user="root")
-    if exit_code == 0:
-        pkg_mgr = "dnf install -y"
-    else:
-        exit_code, _ = container.exec_run("/bin/bash -c 'command -v apt-get'", user="root")
-        print(exit_code)
-        if exit_code == 0:
-            # ensure apt repo is updated
-            container.exec_run("apt-get update", user="root")
-            pkg_mgr = "apt-get install -y"
-        else:
-            pytest.skip(f"No supported package manager found in {container_name}")
-
-    # Install all requested components
-    for pkg in components:
-        pkg = pkg.strip()
-        if pkg:
-            print(f"Installing {pkg} in {container_name} using {pkg_mgr}")
-            exit_code, output = container.exec_run(
-                f"{pkg_mgr} {pkg}", user="root"
-            )
-            assert exit_code == 0, f"Failed to install {pkg}: {output.decode()}"
-
-### Function only handling the RHEL platform.
 # @pytest.mark.parametrize("container_name", containers)
 # def test_install_components(container_name):
 #     container = client.containers.get(container_name.strip())
 #     assert container.status == "running"
 #
+#     # Detect package manager inside the container
+#     exit_code, _ = container.exec_run("command -v dnf", user="root")
+#     if exit_code == 0:
+#         pkg_mgr = "dnf install -y"
+#     else:
+#         exit_code, _ = container.exec_run("/bin/bash -c 'command -v apt-get'", user="root")
+#         print(exit_code)
+#         if exit_code == 0:
+#             # ensure apt repo is updated
+#             container.exec_run("apt-get update", user="root")
+#             pkg_mgr = "apt-get install -y"
+#         else:
+#             pytest.skip(f"No supported package manager found in {container_name}")
+#
+#     # Install all requested components
 #     for pkg in components:
 #         pkg = pkg.strip()
 #         if pkg:
-#             print(f"Installing {pkg} in {container_name}")
+#             print(f"Installing {pkg} in {container_name} using {pkg_mgr}")
 #             exit_code, output = container.exec_run(
-#                 f"dnf install -y {pkg}", user="root"
+#                 f"{pkg_mgr} {pkg}", user="root"
 #             )
 #             assert exit_code == 0, f"Failed to install {pkg}: {output.decode()}"
+
+
 
 @pytest.mark.parametrize("container_name", containers)
 def test_init_cluster(container_name):
@@ -218,11 +205,6 @@ def test_init_cluster(container_name):
 def test_start_server(container_name):
     container = client.containers.get(container_name.strip())
     assert container.status == "running"
-    # Before line copy the postgresql file incase user need to test all components
-    # exit_code, output = container.exec_run(
-    #     f"cp /tmp/postgresql_{server_major_version}_all.conf /tmp/n1/postgresql.conf",
-    #     user="postgres"
-    # )
     local_file = f"./config/postgresql_{pg_major_version}_all.conf"
     container_dest = f"{container_name}:/tmp/n1/postgresql.conf"
 
@@ -289,103 +271,6 @@ pl_packages = os.getenv("PL_PACKAGES", "pgedge-postgresql18-plperl,pgedge-postgr
 pl_extensions = os.getenv("PL_EXTENSIONS", "plperl,plpython3u,pltcl").split(",")
 
 
-# @pytest.mark.parametrize("container_name", containers)
-# def test_pgedge_install(container_name):
-#     container_name = container_name.strip()
-#     if not container_name:
-#         pytest.skip("No container defined in .env")
-#
-#     try:
-#         container = client.containers.get(container_name)
-#     except docker.errors.NotFound:
-#         pytest.skip(f"Container {container_name} not found or not running.")
-#
-#     assert container.status == "running"
-#
-#     # Step 1: Install repo
-#     print(f"\n--- Installing repo in {container_name} ---")
-#     repo_url = "https://dnf.pgedge.com/reporpm/pgedge-release-latest.noarch.rpm"
-#     container.exec_run(f"dnf install -y {repo_url}", user="root")
-#
-#     # Switch repo (release → staging/daily)
-#     if repo in ["staging", "daily"]:
-#         container.exec_run(
-#             f"sed -i 's|release|{repo}|g' /etc/yum.repos.d/pgedge.repo", user="root"
-#         )
-#
-# @pytest.mark.parametrize("container_name", containers)
-# def test_install_components(container_name):
-#     container = client.containers.get(container_name.strip())
-#     assert container.status == "running"
-#
-#     for pkg in components:
-#         pkg = pkg.strip()
-#         if pkg:
-#             print(f"Installing {pkg} in {container_name}")
-#             exit_code, output = container.exec_run(
-#                 f"dnf install -y {pkg}", user="root"
-#             )
-#             assert exit_code == 0, f"Failed to install {pkg}: {output.decode()}"
-#
-# @pytest.mark.parametrize("container_name", containers)
-# def test_init_cluster(container_name):
-#     container = client.containers.get(container_name.strip())
-#     assert container.status == "running"
-#
-#     print(f"Initializing cluster on {container_name}")
-#     container.exec_run(f"rm -rf {pgdata}", user=pguser)
-#     exit_code, output = container.exec_run(
-#         f"{pgbin}/initdb -D {pgdata}", user=pguser
-#     )
-#     assert exit_code == 0, f"Initdb failed: {output.decode()}"
-#
-# @pytest.mark.parametrize("container_name", containers)
-# def test_start_server(container_name):
-#     container = client.containers.get(container_name.strip())
-#     assert container.status == "running"
-#
-#     print(f"Starting PostgreSQL server on {container_name}")
-#     exit_code, output = container.exec_run(
-#         f"{pgbin}/pg_ctl -D {pgdata} -o '-p {pgport}' -l {pgdata}/logfile start",
-#         user=pguser,
-#     )
-#     assert exit_code == 0, f"pg_ctl start failed: {output.decode()}"
-#
-# @pytest.mark.parametrize("container_name", containers)
-# def test_check_connection(container_name):
-#     if not check_extensions:
-#         pytest.skip("Extension check disabled via .env")
-#
-#     container = client.containers.get(container_name.strip())
-#     assert container.status == "running"
-#
-#     print(f"Checking PostgreSQL is running on {container_name}")
-#     exit_code, output = container.exec_run(
-#         f"{pgbin}/psql -p {pgport} -U {pguser} -c 'SELECT version();'",
-#         user=pguser,
-#     )
-#     assert exit_code == 0, f"psql failed: {output.decode()}"
-#     print(f"Postgres running:\n{output.decode()}")
-#
-# @pytest.mark.parametrize("container_name", containers)
-# def test_binaries_stripped(container_name):
-#     """Check all binaries in pgbin are stripped"""
-#     container = client.containers.get(container_name.strip())
-#     exit_code, output = container.exec_run(
-#         f"find {pgbin} -type f -exec file {{}} \\; | grep ELF | grep -v stripped",
-#         user="root",
-#     )
-#     assert exit_code == 1, f"Unstripped binaries found:\n{output.decode()}"
-#
-#
-# @pytest.mark.parametrize("container_name", containers)
-# def test_binary_versions(container_name):
-#     """Check postgres binary version matches expected"""
-#     container = client.containers.get(container_name.strip())
-#     exit_code, output = container.exec_run(f"{pgbin}/postgres -V", user=pguser)
-#     assert exit_code == 0, f"Failed to get postgres version: {output.decode()}"
-#     version_str = output.decode().strip()
-#     assert server_version in version_str, f"Version mismatch: {version_str}"
 
 
 @pytest.mark.parametrize("container_name", containers)
@@ -440,26 +325,6 @@ def test_create_single_extension(container_name, extension):
     print(f"✅ Successfully created extension '{extension}' in {container_name}")
 
 
-@pytest.mark.parametrize("container_name", containers)
-def create_extensions(container_name):
-    """Create all base extensions"""
-
-    if not check_extensions:
-        pytest.skip("Extension check disabled via .env")
-
-    container = client.containers.get(container_name.strip())
-    # Normalize extensions (quote if they contain a dash)
-    normalized_exts = [f'"{ext}"' if "-" in ext else ext for ext in base_extensions]
-    for ext in normalized_exts:
-        ext = ext.strip()
-        if ext:
-            print(f"Creating extension {ext} in {container_name}")
-            exit_code, output = container.exec_run(
-                f"{pgbin}/psql -p {pgport} -U {pguser} -d postgres "
-                f"-c 'CREATE EXTENSION IF NOT EXISTS {ext};'",
-                user=pguser,
-            )
-            assert exit_code == 0, f"Failed to create {ext}: {output.decode()}"
 
 @pytest.mark.parametrize("container_name", containers)
 def test_stop_server(container_name):
@@ -476,7 +341,7 @@ def test_stop_server(container_name):
 
 @pytest.mark.parametrize("container_name", containers)
 @pytest.mark.parametrize("component", components)
-def test_uninstall_single_component(container_name, component):
+def uninstall_single_component(container_name, component):
     """Simple approach: Uninstall each component individually
 
     This creates a separate test for each container-component combination
@@ -520,7 +385,7 @@ def test_uninstall_single_component(container_name, component):
 
 
 @pytest.mark.parametrize("container_name", containers)
-def test_cleanup_all_pgedge_packages(container_name):
+def cleanup_all_pgedge_packages(container_name):
     """Clean up all remaining pgedge packages after component uninstall"""
     container_name = container_name.strip()
 
@@ -571,7 +436,7 @@ def test_cleanup_all_pgedge_packages(container_name):
 
 
 @pytest.mark.parametrize("container_name", containers)
-def test_remove_pgdata_directory(container_name):
+def remove_pgdata_directory(container_name):
     """Remove PGDATA directory if defined"""
     container_name = container_name.strip()
 

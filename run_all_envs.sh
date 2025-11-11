@@ -56,7 +56,7 @@ report_dir="test-logs/report-${env}-${timestamp}"
       RPM|rpm)
         echo "▶️ Running RPM tests for env ${env}"
         pytest -v -s test_pep_server_rhel.py \
-          --html="${report_dir}/report-deb-${env}.html" \
+          --html="${report_dir}/report-rpm-${env}.html" \
           --self-contained-html
         ;;
       DEB|deb)

@@ -91,6 +91,9 @@ def test_pgedge_install(container_name):
         # Step 1: Install repo
         repo_url = "https://dnf.pgedge.com/reporpm/pgedge-release-latest.noarch.rpm"
         exit_code, output = container.exec_run(
+            f"dnf upgrade -y", user="root"
+        )
+        exit_code, output = container.exec_run(
             f"dnf install -y {repo_url}", user="root"
         )
         assert exit_code == 0, f"Failed to install repo: {output.decode()}"

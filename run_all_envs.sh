@@ -20,6 +20,14 @@ echo "2) DEB"
 echo "3) All"
 read -p "Enter your choice (RPM/DEB/all): " platform_choice
 
+# Prompt user for test type choice
+echo "Select test type(s) to run:"
+echo "1) server - PostgreSQL server tests"
+echo "2) snowflake - Snowflake extension tests"
+echo "3) pgbouncer - PgBouncer tests"
+echo "4) all - All tests"
+read -p "Enter your choice (server/snowflake/pgbouncer/all): " test_type_choice
+
 # Determine environments to run
 if [[ "$env_choice" == "all" || "$env_choice" == "All" ]]; then
   env_list=(16 17 18)
@@ -32,6 +40,13 @@ if [[ "$platform_choice" == "all" || "$platform_choice" == "All" ]]; then
   platform_list=(RPM DEB)
 else
   platform_list=("$platform_choice")
+fi
+
+# Determine test types to run
+if [[ "$test_type_choice" == "all" || "$test_type_choice" == "All" ]]; then
+  test_type_list=(server snowflake pgbouncer)
+else
+  test_type_list=("$test_type_choice")
 fi
 
 # Run tests for each combination
@@ -49,26 +64,67 @@ for env in "${env_list[@]}"; do
   set -a
   source "$envfile"
   set +a
-timestamp=$(date +%Y%m%d_%H%M%S)
-report_dir="test-logs/report-${env}-${timestamp}"
+  timestamp=$(date +%Y%m%d_%H%M%S)
+  report_dir="test-logs/report-${env}-${timestamp}"
+
   for platform in "${platform_list[@]}"; do
-    case "$platform" in
-      RPM|rpm)
-        echo "▶️ Running RPM tests for env ${env}"
-        pytest -v -s test_pep_server_rhel.py \
-          --html="${report_dir}/report-rpm-${env}.html" \
-          --self-contained-html
-        ;;
-      DEB|deb)
-        echo "▶️ Running DEB tests for env ${env}"
-        pytest -v -s test_pep_server_deb.py \
-          --html="${report_dir}/report-deb-${env}.html" \
-          --self-contained-html
-        ;;
-      *)
-        echo "⚠️ Unknown platform: $platform"
-        ;;
-    esac
+    for test_type in "${test_type_list[@]}"; do
+      case "$platform" in
+        RPM|rpm)
+          case "$test_type" in
+            server)
+              echo "▶️ Running RPM server tests for env ${env}"
+              pytest -v -s test_pep_server_rhel.py \
+                --html="${report_dir}/report-rpm-server-${env}.html" \
+                --self-contained-html
+              ;;
+            snowflake)
+              echo "▶️ Running RPM snowflake tests for env ${env}"
+              pytest -v -s test_pep_snowflake.py \
+                --html="${report_dir}/report-rpm-snowflake-${env}.html" \
+                --self-contained-html
+              ;;
+            pgbouncer)
+              echo "▶️ Running RPM pgbouncer tests for env ${env}"
+              pytest -v -s test_pep_pgbouncer.py \
+                --html="${report_dir}/report-rpm-pgbouncer-${env}.html" \
+                --self-contained-html
+              ;;
+            *)
+              echo "⚠️ Unknown test type: $test_type"
+              ;;
+          esac
+          ;;
+        DEB|deb)
+          case "$test_type" in
+            server)
+              echo "▶️ Running DEB server tests for env ${env}"
+              pytest -v -s test_pep_server_deb.py \
+                --html="${report_dir}/report-deb-server-${env}.html" \
+                --self-contained-html
+              ;;
+            snowflake)
+              echo "▶️ Running DEB snowflake tests for env ${env}"
+              pytest -v -s test_pep_snowflake_deb.py \
+                --html="${report_dir}/report-deb-snowflake-${env}.html" \
+                --self-contained-html
+              ;;
+            pgbouncer)
+              echo "▶️ Running DEB pgbouncer tests for env ${env}"
+              pytest -v -s test_pep_pgbouncer_deb.py \
+                --html="${report_dir}/report-deb-pgbouncer-${env}.html" \
+                --self-contained-html
+              ;;
+            *)
+              echo "⚠️ Unknown test type: $test_type"
+              ;;
+          esac
+          ;;
+        *)
+          echo "⚠️ Unknown platform: $platform"
+          ;;
+      esac
+    done
   done
 done
 

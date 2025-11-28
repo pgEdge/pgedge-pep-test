@@ -6,12 +6,15 @@ import pytest
 import docker
 from dotenv import load_dotenv
 
+from test_pep_server_rhel import upgrade_repo
+
 load_dotenv()
 client = docker.from_env()
 
 # Load values from .env
 containers = os.getenv("DEB_CONTAINERS", "").split(",")
 repo = os.getenv("REPO", "release")
+upgrade_repo = os.getenv("UPGRADE_REPO", "staging")
 ## Components for Deb
 components = os.getenv("DEB_SERVER_COMPONENTS", "").split(",")
 ## Components for Rhel
@@ -153,40 +156,74 @@ def test_single_component_install(container_name, component):
     print(f"✅ Successfully installed {component}")
 
 
+@pytest.mark.parametrize("container_name", containers)
+@pytest.mark.parametrize("component", components)
+def test_single_component_upgrade(container_name, component):
+    """Simple approach: Test each component individually
+
+    This creates separate test for each container-component combination
+    """
+    if os.getenv("UPGRADE", "false").lower() != "true":
+        pytest.skip("Skipping upgrade tests because UPGRADE=false in .env")
+
+    container_name = container_name.strip()
+    component = component.strip()
+
+    if not container_name or not component:
+        pytest.skip("Invalid container or component")
+
+    try:
+        container = client.containers.get(container_name)
+    except docker.errors.NotFound:
+        pytest.skip(f"Container {container_name} not found or not running.")
+
+    assert container.status == "running"
 
 
+    # Detect platform
+    exit_code, _ = container.exec_run("command -v dnf", user="root")
+    if exit_code == 0:
+        platform = "rhel"
+        if upgrade_repo in ["staging", "daily"]:
+            container.exec_run(
+                f"sed -i 's|release|{repo}|g' /etc/yum.repos.d/pgedge.repo", user="root"
+            )
+        pkg_mgr = "dnf upgrade -y"
+    else:
+        exit_code, _ = container.exec_run("/bin/bash -c 'command -v apt-get'", user="root")
+        if exit_code == 0:
+            platform = "ubuntu"
+            if upgrade_repo in ["staging", "daily"]:
+                container.exec_run(
+                    f"sed -i 's|release|{repo}|g' /etc/apt/sources.list.d/pgedge.list",
+                    user="root",
+                )
+            # Ensure apt repo is updated (only once per container)
+            container.exec_run("apt-get update", user="root")
+            pkg_mgr = "apt-get upgrade -y"
+        else:
+            pytest.skip(f"No supported package manager found in {container_name}")
 
+    print(f"\n--- Installing {component} on {container_name} ({platform}) ---")
 
+    # Install the component
+    exit_code, output = container.exec_run(
+        f"{pkg_mgr} {component} ",
+        user="root"
+    )
+    output_text = output.decode("utf-8").lower()
+    print(f"<UNK> Successfully installed {component}: {output_text}")
+    if exit_code == 0:
+        if "already the newest version" in output_text or "already installed" in output_text:
+            print(f"ℹ️ {component} version is already installed.")
+            pytest.skip(f" {component} upgrade not found, version is already installed. {container_name}")
+        elif "upgraded" in output_text or "install" in output_text:
+            print(f"✅ Successfully upgraded {component}.")
+        else:
+            print(f"⚠️ Could not determine status for {component}.")
 
-# @pytest.mark.parametrize("container_name", containers)
-# def test_install_components(container_name):
-#     container = client.containers.get(container_name.strip())
-#     assert container.status == "running"
-#
-#     # Detect package manager inside the container
-#     exit_code, _ = container.exec_run("command -v dnf", user="root")
-#     if exit_code == 0:
-#         pkg_mgr = "dnf install -y"
-#     else:
-#         exit_code, _ = container.exec_run("/bin/bash -c 'command -v apt-get'", user="root")
-#         print(exit_code)
-#         if exit_code == 0:
-#             # ensure apt repo is updated
-#             container.exec_run("apt-get update", user="root")
-#             pkg_mgr = "apt-get install -y"
-#         else:
-#             pytest.skip(f"No supported package manager found in {container_name}")
-#
-#     # Install all requested components
-#     for pkg in components:
-#         pkg = pkg.strip()
-#         if pkg:
-#             print(f"Installing {pkg} in {container_name} using {pkg_mgr}")
-#             exit_code, output = container.exec_run(
-#                 f"{pkg_mgr} {pkg}", user="root"
-#             )
-#             assert exit_code == 0, f"Failed to install {pkg}: {output.decode()}"
-
+    assert exit_code == 0, f"Failed to install {component}: {output.decode()}"
+    print(f"✅ Successfully installed {component}")
 
 
 @pytest.mark.parametrize("container_name", containers)

@@ -12,6 +12,7 @@ client = docker.from_env()
 # Load values from .env
 containers = os.getenv("CONTAINERS", "").split(",")
 repo = os.getenv("REPO", "release")
+upgrade_repo = os.getenv("UPGRADE_REPO", "release")
 components = os.getenv("SERVER_COMPONENTS", "").split(",")
 pguser = os.getenv("PG_USER", "postgres")
 pgport = os.getenv("PG_PORT", "5432")
@@ -89,6 +90,9 @@ def test_pgedge_install(container_name):
     if platform == "rhel":
         # Step 1: Install repo
         repo_url = "https://dnf.pgedge.com/reporpm/pgedge-release-latest.noarch.rpm"
+        exit_code, output = container.exec_run(
+            f"dnf upgrade -y", user="root"
+        )
         exit_code, output = container.exec_run(
             f"dnf install -y {repo_url}", user="root"
         )
@@ -170,6 +174,76 @@ def test_install_components(container_name, component):
     assert exit_code == 0, f"Failed to install {component}: {output.decode()}"
     print(f"✅ Successfully installed {component}")
 
+
+@pytest.mark.parametrize("container_name", containers)
+@pytest.mark.parametrize("component", components)
+def test_upgrade_components(container_name, component):
+    """Install each component individually with separate test results
+
+    This creates a separate test for each container-component combination
+    """
+    if os.getenv("UPGRADE", "false").lower() != "true":
+        pytest.skip("Skipping upgrade tests because UPGRADE=false in .env")
+
+    container_name = container_name.strip()
+    component = component.strip()
+
+    if not container_name or not component:
+        pytest.skip("Invalid container or component")
+
+    try:
+        container = client.containers.get(container_name)
+    except docker.errors.NotFound:
+        pytest.skip(f"Container {container_name} not found or not running.")
+
+    assert container.status == "running"
+
+
+    # Detect package manager inside the container
+    exit_code, _ = container.exec_run("command -v dnf", user="root")
+    if exit_code == 0:
+        # Step 2: Switch repo if needed
+        if upgrade_repo in ["staging", "daily"]:
+            container.exec_run(
+                f"sed -i 's|release|{repo}|g' /etc/yum.repos.d/pgedge.repo", user="root"
+            )
+        pkg_mgr = "dnf upgrade -y"
+        platform = "rhel"
+    else:
+        exit_code, _ = container.exec_run("command -v apt-get", user="root")
+        if exit_code == 0:
+            if upgrade_repo in ["staging", "daily"]:
+                container.exec_run(
+                    f"sed -i 's|release|{repo}|g' /etc/apt/sources.list.d/pgedge.list",
+                    user="root",
+                )
+            # Ensure apt repo is updated (only once per container)
+            container.exec_run("apt-get update", user="root")
+            pkg_mgr = "apt-get upgrade -y"
+            platform = "debian"
+        else:
+            pytest.skip(f"No supported package manager found in {container_name}")
+
+    print(f"\n--- Installing {component} on {container_name} ({platform}) using {pkg_mgr} ---")
+
+    # Install the component
+    exit_code, output = container.exec_run(
+        f"{pkg_mgr} {component} ",
+        user="root"
+    )
+    output_text = output.decode("utf-8").lower()
+    print(f"<UNK> Successfully installed {component}: {output_text}")
+    if exit_code==0:
+        if "nothing to do." in output_text or "already installed" in output_text:
+            print(f"ℹ️ {component} version is already installed.")
+            pytest.skip(f" {component} upgrade not found, version is already installed. {container_name}")
+        elif "upgraded" in output_text or "install" in output_text:
+            print(f"✅ Successfully upgraded {component}.")
+        else:
+            print(f"⚠️ Could not determine status for {component}.")
+
+    assert exit_code == 0, f"Failed to install {component}: {output.decode()}"
+    print(f"✅ Successfully installed {component}")
 
 # Alternative: Optimized version with apt-get update only once per container
 @pytest.fixture(scope="module")

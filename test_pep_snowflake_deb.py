@@ -10,23 +10,25 @@ load_dotenv()
 client = docker.from_env()
 
 # Load values from .env
-containers = os.getenv("CONTAINERS", "").split(",")
+containers = os.getenv("DEB_CONTAINERS", "").split(",")
 repo = os.getenv("REPO", "release")
 
 # PgBouncer specific configuration
-snowflake_package = os.getenv("SNOWFLAKE_PACKAGE", "pgedge-snowflake_17")
-snowflake_version = os.getenv("PGEDGE_SNOWFLAKE_18_VERSION", "2.2")
+snowflake_package = os.getenv("DEB_SNOWFLAKE_PACKAGE", "pgedge-postgresql-16-snowflake")
+snowflake_version = os.getenv("PGEDGE_SNOWFLAKE_16_VERSION", "2.2")
 snowflake_node = os.getenv("SNOWFLAKE_NODE", "1")
 pguser = os.getenv("PG_USER", "postgres")
 pgport = os.getenv("PG_PORT", "5432")
-pgbin = os.getenv("PG_BIN_PATH", "/usr/pgsql-17/bin")
+pgbin = os.getenv("DEB_PG_BIN_PATH", "/usr/lib/postgresql/16/bin/")
+pgpath = os.getenv("DEB_PG_PATH", "/usr/lib/postgresql/16/")
+pgshare = os.getenv("DEB_PG_SHARE_PATH", "/usr/share/postgresql/16/")
 pgdata = os.getenv("PG_DATA_DIR", "/tmp/n1")
 pg_major_version = os.getenv("PG_MAJOR_VERSION", "17")
 
 # Expected bundled files to validate
 snowflake_bundled_files = os.getenv(
     "SNOWFLAKE_BUNDLED_FILES",
-    f"usr/pgsql-{pg_major_version}/lib/snowflake.so,/usr/pgsql-{pg_major_version}/sbom/snowflake-sbom.json,/usr/pgsql-{pg_major_version}/sbom/snowflake-sbom.json.asc,/usr/pgsql-{pg_major_version}/share/extension/snowflake--1.0--1.1.sql,/usr/pgsql-{pg_major_version}/share/extension/snowflake--1.0.sql,/usr/pgsql-{pg_major_version}/share/extension/snowflake--1.1--1.2.sql,/usr/pgsql-{pg_major_version}/share/extension/snowflake--1.1.sql,/usr/pgsql-{pg_major_version}/share/extension/snowflake--1.2--2.0.sql,/usr/pgsql-{pg_major_version}/share/extension/snowflake--1.2.sql,/usr/pgsql-{pg_major_version}/share/extension/snowflake--2.0--2.2.sql,/usr/pgsql-{pg_major_version}/share/extension/snowflake--2.0.sql,/usr/pgsql-{pg_major_version}/share/extension/snowflake--2.2.sql,/usr/pgsql-{pg_major_version}/share/extension/snowflake.control,/usr/share/doc/pgedge-snowflake_{pg_major_version}/README.md,/usr/share/licenses/pgedge-snowflake_{pg_major_version}/LICENSE.md"
+    f"{pgpath}lib/snowflake.so,{pgpath}sbom/snowflake-sbom.json,{pgpath}sbom/snowflake-sbom.json.asc,{pgshare}extension/snowflake--1.0--1.1.sql,{pgshare}extension/snowflake--1.0.sql,{pgshare}extension/snowflake--1.1--1.2.sql,{pgshare}extension/snowflake--1.1.sql,{pgshare}extension/snowflake--1.2--2.0.sql,{pgshare}extension/snowflake--1.2.sql,{pgshare}extension/snowflake--2.0--2.2.sql,{pgshare}extension/snowflake--2.0.sql,{pgshare}extension/snowflake--2.2.sql,{pgshare}extension/snowflake.control,/usr/share/doc/pgedge-postgresql-{pg_major_version}-snowflake/README.md,/usr/share/licenses/pgedge-postgresql-{pg_major_version}-snowflake/LICENSE.md"
 ).split(",")
 
 def execute_psql_query(container, query, dbname="postgres"):
@@ -56,7 +58,7 @@ def test_configure_repository(container_name):
     if exit_code == 0:
         platform = "rhel"
     else:
-        exit_code, _ = container.exec_run("command -v apt-get", user="root")
+        exit_code, _ = container.exec_run("/bin/bash -c 'command -v apt-get'", user="root")
         if exit_code == 0:
             platform = "ubuntu"
         else:
@@ -83,10 +85,14 @@ def test_configure_repository(container_name):
     elif platform == "ubuntu":
         # Step 1: Install repo via .deb
         deb_url = "https://apt.pgedge.com/repodeb/pgedge-release_latest_all.deb"
+        install_cmd = f"""
+            curl -sSL {deb_url} -o /tmp/pgedge-release.deb && \\
+            dpkg -i /tmp/pgedge-release.deb && \\
+            rm -f /tmp/pgedge-release.deb || true
+        """
+
         exit_code, output = container.exec_run(
-            f"curl -sSL {deb_url} -o /tmp/pgedge-release.deb && "
-            f"dpkg -i /tmp/pgedge-release.deb && "
-            f"rm -f /tmp/pgedge-release.deb || true",
+            f"/bin/bash -c \"{install_cmd}\"",
             user="root",
         )
         assert exit_code == 0, f"Failed to install repo: {output.decode()}"
@@ -94,7 +100,7 @@ def test_configure_repository(container_name):
         # Step 2: Switch repo if needed
         if repo in ["staging", "daily"]:
             exit_code, output = container.exec_run(
-                f"sed -i 's|release|{repo}|g' /etc/apt/sources.list.d/pgedge.list",
+                f"sed -i 's|release|{repo}|g' /etc/apt/sources.list.d/pgedge.sources",
                 user="root",
             )
             assert exit_code == 0, f"Failed to switch repo to {repo}: {output.decode()}"
@@ -127,7 +133,7 @@ def test_component_install(container_name):
         pkg_mgr = "dnf install -y"
         platform = "rhel"
     else:
-        exit_code, _ = container.exec_run("command -v apt-get", user="root")
+        exit_code, _ = container.exec_run("/bin/bash -c 'command -v apt-get'", user="root")
         if exit_code == 0:
             container.exec_run("apt-get update", user="root")
             pkg_mgr = "apt-get install -y"
@@ -175,7 +181,7 @@ def test_snowflake_verify_version(container_name):
         version_cmd = f"rpm -q --queryformat '%{{VERSION}}' {snowflake_package}"
         platform = "rhel"
     else:
-        exit_code, _ = container.exec_run("command -v apt-get", user="root")
+        exit_code, _ = container.exec_run("/bin/bash -c 'command -v apt-get'", user="root")
         if exit_code == 0:
             # Debian-based: use dpkg-query to get version
             version_cmd = f"dpkg-query --showformat='${{Version}}' --show {snowflake_package}"
@@ -792,7 +798,7 @@ def test_snowflake_uninstall(container_name):
     if exit_code == 0:
         pkg_mgr = "dnf remove -y"
     else:
-        exit_code, _ = container.exec_run("command -v apt-get", user="root")
+        exit_code, _ = container.exec_run("/bin/bash -c 'command -v apt-get'", user="root")
         if exit_code == 0:
             pkg_mgr = "apt-get remove -y"
         else:
@@ -836,14 +842,14 @@ def test_pgedge_cleanup(container_name):
     assert container.status == "running"
 
     # Step 1: Check if any pgedge packages exist
-    exit_code, output = container.exec_run("rpm -qa | grep pgedge", user="root")
+    exit_code, output = container.exec_run("dpkg-query -W -f='${Package}\n' | grep pgedge", user="root")
     packages = output.decode().strip().splitlines()
 
     if not packages:
         print(f"No pgedge packages found in {container_name}, skipping uninstall step.")
     else:
         print(f"Cleaning up pgedge packages in {container_name}: {packages}")
-        exit_code, output = container.exec_run("dnf remove -y 'pgedge-*'", user="root")
+        exit_code, output = container.exec_run("apt-get remove -y 'pgedge-*'", user="root")
         assert exit_code == 0, f"Failed global cleanup: {output.decode()}"
 
     # Step 2: Optionally clean data directory (if defined in .env)

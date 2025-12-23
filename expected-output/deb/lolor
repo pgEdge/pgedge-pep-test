@@ -1,0 +1,14 @@
+/usr/lib/postgresql/17/lib/bitcode/lolor/src/lolor.bc
+/usr/lib/postgresql/17/lib/bitcode/lolor/src/lolor_fsstubs.bc
+/usr/lib/postgresql/17/lib/bitcode/lolor/src/lolor_inv_api.bc
+/usr/lib/postgresql/17/lib/bitcode/lolor/src/lolor_largeobject.bc
+/usr/lib/postgresql/17/lib/bitcode/lolor.index.bc
+/usr/lib/postgresql/17/lib/lolor.so
+/usr/lib/postgresql/17/sbom/lolor-sbom.json
+/usr/lib/postgresql/17/sbom/lolor-sbom.json.asc
+/usr/share/doc/pgedge-postgresql-17-lolor/README.md
+/usr/share/doc/pgedge-postgresql-17-lolor/changelog.Debian.gz
+/usr/share/postgresql/17/extension/lolor--1.0--1.2.1.sql
+/usr/share/postgresql/17/extension/lolor--1.0.sql
+/usr/share/postgresql/17/extension/lolor--1.2.1--1.2.2.sql
+/usr/share/postgresql/17/extension/lolor.control

@@ -117,6 +117,94 @@ def setup_alma10():
     run("sudo dnf config-manager --set-enabled crb")
 
 
+def install_prerequisites_on_container(container):
+    """
+    Install prerequisites on a Docker container.
+
+    Args:
+        container: Docker container object with exec_run method
+
+    Returns:
+        tuple: (success: bool, os_id: str, message: str)
+
+    Raises:
+        Exception: If prerequisite installation fails
+    """
+
+    print(f"\n--- Installing prerequisites on container ---")
+
+    # Create a container-aware executor
+    def container_executor(cmd):
+        print(f"\n>>> Running: {cmd}")
+        exit_code, output = container.exec_run(cmd, user="root")
+        if exit_code != 0:
+            print(f"WARNING: Command failed (exit={exit_code})")
+        return exit_code
+
+    # Set the custom executor
+    set_executor(container_executor)
+
+    # Detect OS inside container
+    exit_code, output = container.exec_run("cat /etc/os-release", user="root")
+    if exit_code != 0:
+        raise Exception("Failed to detect OS inside container")
+
+    # Parse OS info
+    os_release = output.decode()
+    os_id = ""
+    version_id = ""
+    for line in os_release.split('\n'):
+        if line.startswith("ID="):
+            os_id = line.split('=')[1].strip('"').lower()
+        if line.startswith("VERSION_ID="):
+            version_id = line.split('=')[1].strip('"')
+
+    major = version_id.split('.')[0] if version_id else ""
+    print(f"Detected OS: {os_id}, Version: {version_id} (major={major})")
+
+    # Call the appropriate setup function
+    try:
+        if os_id in ["debian", "ubuntu"]:
+            setup_debian()
+        elif os_id in ["rhel", "redhat", "rhelserver"]:
+            if major == "9":
+                setup_rhel9()
+            elif major == "10":
+                setup_rhel10()
+            else:
+                raise Exception(f"Unsupported RHEL version: {major}")
+        elif os_id == "rocky":
+            if major == "9":
+                setup_rocky9()
+            elif major == "10":
+                setup_rocky10()
+            else:
+                raise Exception(f"Unsupported Rocky version: {major}")
+        elif os_id in ["ol", "oracle", "oraclelinux"]:
+            if major == "9":
+                setup_oracle9()
+            elif major == "10":
+                setup_oracle10()
+            else:
+                raise Exception(f"Unsupported Oracle Linux version: {major}")
+        elif os_id in ["almalinux", "alma"]:
+            if major == "9":
+                setup_alma9()
+            elif major == "10":
+                setup_alma10()
+            else:
+                raise Exception(f"Unsupported AlmaLinux version: {major}")
+        else:
+            print(f"⚠️ Unsupported OS: {os_id} {major}, skipping prerequisites...")
+            return True, f"{os_id} {major}", "Unsupported OS - prerequisites skipped"
+    except Exception as e:
+        raise Exception(f"Failed to install prerequisites: {str(e)}")
+
+    message = f"Prerequisites installed successfully for {os_id} {major}"
+    print(f"\n✅ {message}")
+    return True, f"{os_id} {major}", message
+
+
 def main():
     os_id, major = get_os_info()
 

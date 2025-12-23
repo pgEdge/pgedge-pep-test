@@ -1,0 +1,11 @@
+/usr/pgsql-17/lib/pg_tokenizer.so
+/usr/pgsql-17/sbom/pg_tokenizer-sbom.json
+/usr/pgsql-17/sbom/pg_tokenizer-sbom.json.asc
+/usr/pgsql-17/share/extension/pg_tokenizer--0.1.0--0.1.1.sql
+/usr/pgsql-17/share/extension/pg_tokenizer--0.1.0.sql
+/usr/pgsql-17/share/extension/pg_tokenizer--0.1.1.sql
+/usr/pgsql-17/share/extension/pg_tokenizer.control
+/usr/share/doc/pgedge-pg-tokenizer_17
+/usr/share/doc/pgedge-pg-tokenizer_17/README.md
+/usr/share/licenses/pgedge-pg-tokenizer_17
+/usr/share/licenses/pgedge-pg-tokenizer_17/LICENSE

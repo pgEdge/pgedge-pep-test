@@ -1,0 +1,16 @@
+/etc/pgedge/pgedge-nla-kb-builder.yaml
+/etc/pgedge/postgres-mcp.env
+/etc/pgedge/postgres-mcp.yaml
+/usr/bin/pgedge-nla-kb-builder
+/usr/bin/pgedge-postgres-mcp
+/usr/lib/systemd/system/pgedge-postgres-mcp.service
+/usr/share/doc/pgedge-postgres-mcp/LICENCE.md
+/usr/share/doc/pgedge-postgres-mcp/README.md.gz
+/usr/share/doc/pgedge-postgres-mcp/changelog.Debian.gz
+/usr/share/pgedge-nla-kb-builder-sbom.json
+/usr/share/pgedge-nla-kb-builder-sbom.json.asc
+/usr/share/pgedge-postgres-mcp-sbom.json
+/usr/share/pgedge-postgres-mcp-sbom.json.asc
+/var/lib/pgedge/postgres-mcp
+/var/log/pgedge/nla-web
+/var/log/pgedge/postgres-mcp

@@ -1,0 +1,7 @@
+/etc/pgedge/nla-cli.yaml
+/etc/skel/.config/pgedge
+/usr/bin/pgedge-nla-cli
+/usr/share/doc/pgedge-nla-cli/LICENCE.md
+/usr/share/doc/pgedge-nla-cli/README.md
+/usr/share/pgedge-nla-cli-sbom.json
+/usr/share/pgedge-nla-cli-sbom.json.asc

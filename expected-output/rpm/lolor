@@ -1,0 +1,9 @@
+/usr/pgsql-17/lib/lolor.so
+/usr/pgsql-17/sbom/lolor-sbom.json
+/usr/pgsql-17/sbom/lolor-sbom.json.asc
+/usr/pgsql-17/share/extension/lolor--1.0--1.2.1.sql
+/usr/pgsql-17/share/extension/lolor--1.0.sql
+/usr/pgsql-17/share/extension/lolor--1.2.1--1.2.2.sql
+/usr/pgsql-17/share/extension/lolor.control
+/usr/share/doc/pgedge-lolor_17/README.md
+/usr/share/licenses/pgedge-lolor_17/LICENSE.md

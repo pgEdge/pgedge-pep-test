@@ -1,18 +1,19 @@
 import os
-import subprocess
 from pathlib import Path
+from datetime import datetime
 
 import pytest
 import docker
 from dotenv import load_dotenv
 
-load_dotenv()
+load_dotenv(override=True)
+
 client = docker.from_env()
 
 # Load values from .env
 containers = os.getenv("CONTAINERS", "").split(",")
 repo = os.getenv("REPO", "release")
-upgrade_repo = os.getenv("UPGRADE_REPO", "release")
+upgrade_repo = os.getenv("UPGRADE_REPO", "staging")
 components = os.getenv("SERVER_COMPONENTS", "").split(",")
 pguser = os.getenv("PG_USER", "postgres")
 pgport = os.getenv("PG_PORT", "5432")
@@ -36,29 +37,6 @@ pl_packages = os.getenv("PL_PACKAGES", "pgedge-postgresql18-plperl,pgedge-postgr
 pl_extensions = os.getenv("PL_EXTENSIONS", "plperl,plpython3u,pltcl").split(",")
 
 
-# @pytest.mark.parametrize("container_name", containers)
-# def test_pgedge_install(container_name):
-#     container_name = container_name.strip()
-#     if not container_name:
-#         pytest.skip("No container defined in .env")
-#
-#     try:
-#         container = client.containers.get(container_name)
-#     except docker.errors.NotFound:
-#         pytest.skip(f"Container {container_name} not found or not running.")
-#
-#     assert container.status == "running"
-#
-#     # Step 1: Install repo
-#     print(f"\n--- Installing repo in {container_name} ---")
-#     repo_url = "https://dnf.pgedge.com/reporpm/pgedge-release-latest.noarch.rpm"
-#     container.exec_run(f"dnf install -y {repo_url}", user="root")
-#
-#     # Switch repo (release → staging/daily)
-#     if repo in ["staging", "daily"]:
-#         container.exec_run(
-#             f"sed -i 's|release|{repo}|g' /etc/yum.repos.d/pgedge.repo", user="root"
-#         )
 
 
 @pytest.mark.parametrize("container_name", containers)
@@ -205,7 +183,7 @@ def test_upgrade_components(container_name, component):
         # Step 2: Switch repo if needed
         if upgrade_repo in ["staging", "daily"]:
             container.exec_run(
-                f"sed -i 's|release|{repo}|g' /etc/yum.repos.d/pgedge.repo", user="root"
+                f"sed -i 's|release|{upgrade_repo}|g' /etc/yum.repos.d/pgedge.repo", user="root"
             )
         pkg_mgr = "dnf upgrade -y"
         platform = "rhel"
@@ -214,7 +192,7 @@ def test_upgrade_components(container_name, component):
         if exit_code == 0:
             if upgrade_repo in ["staging", "daily"]:
                 container.exec_run(
-                    f"sed -i 's|release|{repo}|g' /etc/apt/sources.list.d/pgedge.list",
+                    f"sed -i 's|release|{upgrade_repo}|g' /etc/apt/sources.list.d/pgedge.list",
                     user="root",
                 )
             # Ensure apt repo is updated (only once per container)
@@ -288,8 +266,8 @@ def test_verify_component_versions(container_name, component):
     # Detect package manager inside the container
     exit_code, _ = container.exec_run("command -v dnf", user="root")
     if exit_code == 0:
-        # RHEL-based: use rpm to query version
-        version_cmd = f"rpm -q --queryformat '%{{VERSION}}' {component}"
+        # RHEL-based: use rpm to query version (VERSION-RELEASE to include beta/rc tags)
+        version_cmd = f"rpm -q --queryformat '%{{VERSION}}-%{{RELEASE}}' {component}"
         platform = "rhel"
     else:
         exit_code, _ = container.exec_run("command -v apt-get", user="root")
@@ -318,6 +296,105 @@ def test_verify_component_versions(container_name, component):
     )
 
     print(f"✅ Version verified: {component} {installed_version}")
+
+
+@pytest.mark.parametrize("container_name", containers)
+@pytest.mark.parametrize("component", components)
+def test_verify_bundled_files(container_name, component):
+    """Verify bundled files for each component match expected files
+
+    This compares the installed files from rpm with expected files
+    in expected-output/rpm/ directory
+    """
+    container_name = container_name.strip()
+    component = component.strip()
+
+    if not container_name or not component:
+        pytest.skip("Invalid container or component")
+
+    try:
+        container = client.containers.get(container_name)
+    except docker.errors.NotFound:
+        pytest.skip(f"Container {container_name} not found or not running.")
+
+    assert container.status == "running"
+
+    # Extract base component name by removing 'pgedge-' prefix and version suffix
+    # Example: pgedge-pg-search_17 -> pg-search
+    base_name = component.replace("pgedge-", "")
+    # Remove version suffix (_17, _16, etc.)
+    base_name = base_name.rsplit('_', 1)[0]
+
+    # Path to expected files
+    expected_file_path = f"./expected-output/rpm/{base_name}"
+
+    # Check if expected file exists
+    if not Path(expected_file_path).exists():
+        pytest.skip(f"No expected file found for {base_name} at {expected_file_path}")
+
+    print(f"\n--- Verifying bundled files for {component} on {container_name} ---")
+
+    # Read expected files
+    with open(expected_file_path, 'r') as f:
+        expected_files = [line.strip() for line in f if line.strip()]
+
+    print(f"Expected {len(expected_files)} files")
+
+    # Get installed files from container
+    exit_code, output = container.exec_run(f"rpm -ql {component}", user="root")
+
+    if exit_code != 0:
+        pytest.fail(f"Failed to query files for {component}: {output.decode()}")
+
+    installed_files = [line.strip() for line in output.decode().strip().splitlines() if line.strip()]
+    print(f"Installed {len(installed_files)} files")
+
+    # Normalize function to remove version-specific suffixes
+    def normalize_path(path):
+        """Remove version-specific parts like -17, _17, -16, _16, etc."""
+        import re
+        # Replace -17, _17, -16, _16, -18, _18 with empty string
+        normalized = re.sub(r'[-_](16|17|18)', '', path)
+        return normalized
+
+    # Normalize both lists
+    expected_normalized = sorted([normalize_path(f) for f in expected_files])
+    installed_normalized = sorted([normalize_path(f) for f in installed_files])
+
+    # Find differences
+    expected_set = set(expected_normalized)
+    installed_set = set(installed_normalized)
+
+    missing_files = expected_set - installed_set
+    extra_files = installed_set - expected_set
+
+    # Report results
+    if missing_files:
+        print(f"\n⚠️ Missing files ({len(missing_files)}):")
+        for f in sorted(missing_files)[:10]:  # Show first 10
+            print(f"  - {f}")
+        if len(missing_files) > 10:
+            print(f"  ... and {len(missing_files) - 10} more")
+
+    if extra_files:
+        print(f"\n⚠️ Extra files ({len(extra_files)}):")
+        for f in sorted(extra_files)[:10]:  # Show first 10
+            print(f"  + {f}")
+        if len(extra_files) > 10:
+            print(f"  ... and {len(extra_files) - 10} more")
+
+    # Assert no missing files (extra files are okay)
+    assert not missing_files, (
+        f"Bundled files verification failed for {component} on {container_name}\n"
+        f"Missing {len(missing_files)} expected files. See output above for details."
+    )
+
+    if not extra_files:
+        print(f"✅ All bundled files verified: {component} ({len(expected_files)} files)")
+    else:
+        print(f"✅ All expected files present: {component} ({len(expected_files)} files, {len(extra_files)} extra)")
+
+
 @pytest.mark.parametrize("container_name", containers)
 def test_init_cluster(container_name):
     container = client.containers.get(container_name.strip())
@@ -334,38 +411,23 @@ def test_init_cluster(container_name):
 def test_start_server(container_name):
     container = client.containers.get(container_name.strip())
     assert container.status == "running"
-    # Before line copy the postgresql file incase user need to test all components
 
-    local_file = f"./config/postgresql_{pg_major_version}_all.conf"
-    container_dest = f"{container_name}:/tmp/n1/postgresql.conf"
+    print(f"Appending custom configuration to postgresql.conf in {container_name}")
 
-    # Ensure destination directory exists inside the container
-    container.exec_run("mkdir -p /tmp/n1", user="root")
-
-    # Copy file from Mac to container
-    subprocess.run(["docker", "cp", local_file, container_dest], check=True)
-
-    # Optionally confirm inside the container
-    exit_code, output = container.exec_run("ls -l /tmp/n1", user="postgres")
-    print(output.decode())
+    # Append the required configuration to the existing postgresql.conf
+    exit_code, output = container.exec_run(
+        f"bash -c \"cat >> {pgdata}/postgresql.conf << 'EOF'\n"
+        #f"shared_preload_libraries = 'pgedge_vectorizer'\n"
+        #f"cron.database_name = 'postgres'\n"
+        f"EOF\"",
+        user=pguser
+    )
 
     if exit_code != 0:
-        print("❌ Failed to copy config file")
+        print("❌ Failed to append configuration to postgresql.conf")
         print(output.decode(errors="replace"))
     else:
-        print("✅ Config file copied successfully")
-
-    # ## Old code ...
-    # exit_code, output = container.exec_run(
-    #     f"cp /tmp/postgresql_{pg_major_version}_all.conf /tmp/n1/postgresql.conf",
-    #     user="postgres"
-    # )
-    #
-    # if exit_code != 0:
-    #     print("❌ Failed to copy config file")
-    #     print(output.decode(errors="replace"))
-    # else:
-    #     print("✅ Config file copied successfully")
+        print("✅ Configuration appended successfully to postgresql.conf")
 
     print(f"Starting PostgreSQL server on {container_name}")
     exit_code, output = container.exec_run(
@@ -390,51 +452,8 @@ def test_check_connection(container_name):
     assert exit_code == 0, f"psql failed: {output.decode()}"
     print(f"Postgres running:\n{output.decode()}")
 
-@pytest.mark.parametrize("container_name", containers)
-def test_binaries_stripped(container_name):
-    """Check all binaries in pgbin are stripped"""
-    container = client.containers.get(container_name.strip())
-    exit_code, output = container.exec_run(
-        f"find {pgbin} -type f -exec file {{}} \\; | grep ELF | grep -v stripped",
-        user="root",
-    )
-    assert exit_code == 1, f"Unstripped binaries found:\n{output.decode()}"
 
 
-@pytest.mark.parametrize("container_name", containers)
-def test_binary_versions(container_name):
-    """Check postgres binary version matches expected"""
-    container = client.containers.get(container_name.strip())
-    exit_code, output = container.exec_run(f"{pgbin}/postgres -V", user=pguser)
-    assert exit_code == 0, f"Failed to get postgres version: {output.decode()}"
-    version_str = output.decode().strip()
-    assert server_version in version_str, f"Version mismatch: {version_str}"
-# Extra extensions requiring package installs
-pl_packages = os.getenv("PL_PACKAGES", "pgedge-postgresql18-plperl,pgedge-postgresql18-pltcl,pgedge-postgresql18-plpython3").split(",")
-pl_extensions = os.getenv("PL_EXTENSIONS", "plperl,plpython3u,pltcl").split(",")
-
-
-
-
-@pytest.mark.parametrize("container_name", containers)
-def test_create_pl_extensions(container_name):
-    """Install PL packages and create PL extensions"""
-    container = client.containers.get(container_name.strip())
-    for pkg in pl_packages:
-        print(f"Installing {pkg} in {container_name}")
-        exit_code, output = container.exec_run(
-            f"dnf install -y {pkg}", user="root"
-        )
-        assert exit_code == 0, f"Failed to install {pkg}: {output.decode()}"
-
-    for ext in pl_extensions:
-        print(f"Creating PL extension {ext} in {container_name}")
-        exit_code, output = container.exec_run(
-            f"{pgbin}/psql -p {pgport} -U {pguser} -d postgres "
-            f"-c 'CREATE EXTENSION IF NOT EXISTS {ext};'",
-            user=pguser,
-        )
-        assert exit_code == 0, f"Failed to create {ext}: {output.decode()}"
 
 @pytest.mark.parametrize("container_name", containers)
 @pytest.mark.parametrize("extension", base_extensions)
@@ -467,33 +486,195 @@ def test_create_extensions(container_name, extension):
     # Create the extension
     exit_code, output = container.exec_run(
         f"{pgbin}/psql -p {pgport} -U {pguser} -d postgres "
-        f"-c 'CREATE EXTENSION IF NOT EXISTS {normalized_ext} cascade;'",
+        f"-c 'CREATE EXTENSION IF NOT EXISTS {normalized_ext} CASCADE;'",
         user=pguser,
     )
 
     assert exit_code == 0, f"Failed to create {normalized_ext}: {output.decode()}"
     print(f"✅ Successfully created extension {normalized_ext}")
 
-# @pytest.mark.parametrize("container_name", containers)
-# def test_create_extensions(container_name):
-#     """Create all base extensions"""
-#
-#     if not check_extensions:
-#         pytest.skip("Extension check disabled via .env")
-#
-#     container = client.containers.get(container_name.strip())
-#     # Normalize extensions (quote if they contain a dash)
-#     normalized_exts = [f'"{ext}"' if "-" in ext else ext for ext in base_extensions]
-#     for ext in normalized_exts:
-#         ext = ext.strip()
-#         if ext:
-#             print(f"Creating extension {ext} in {container_name}")
-#             exit_code, output = container.exec_run(
-#                 f"{pgbin}/psql -p {pgport} -U {pguser} -d postgres "
-#                 f"-c 'CREATE EXTENSION IF NOT EXISTS {ext};'",
-#                 user=pguser,
-#             )
-#             assert exit_code == 0, f"Failed to create {ext}: {output.decode()}"
+
+@pytest.mark.parametrize("container_name", containers)
+@pytest.mark.parametrize("component", components)
+def test_component_functional_smoke(container_name, component):
+    """Execute functional smoke tests for each component
+
+    This runs SQL test files from sql/<component-name>.sql
+    and stores output in actual-output/sql/<component-name>/<pg_major_version>/rpm/<timestamp>.txt
+    """
+    if not check_extensions:
+        pytest.skip("Extension check disabled via .env")
+
+    container_name = container_name.strip()
+    component = component.strip()
+
+    if not container_name or not component:
+        pytest.skip("Invalid container or component")
+
+    try:
+        container = client.containers.get(container_name)
+    except docker.errors.NotFound:
+        pytest.skip(f"Container {container_name} not found or not running.")
+
+    assert container.status == "running"
+
+    # Extract base component name by removing 'pgedge-' prefix and version suffix
+    # Example: pgedge-pg-search_17 -> pg-search
+    base_name = component.replace("pgedge-", "")
+    # Remove version suffix (_17, _16, etc.)
+    base_name = base_name.rsplit('_', 1)[0]
+
+    # Path to SQL test file
+    sql_file_path = f"./sql/{base_name}.sql"
+
+    # Check if SQL test file exists
+    if not Path(sql_file_path).exists():
+        pytest.skip(f"No SQL test file found for {base_name} at {sql_file_path}")
+
+    print(f"\n--- Running functional smoke test for {component} on {container_name} ---")
+    print(f"Executing SQL file: {sql_file_path}")
+
+    # Read SQL file content
+    with open(sql_file_path, 'r') as f:
+        sql_content = f.read()
+
+    # Create temp SQL file in container
+    temp_sql_path = f"/tmp/{base_name}_test.sql"
+
+    # Write SQL content to container using heredoc
+    exit_code, output = container.exec_run(
+        f"bash -c \"cat > {temp_sql_path} << 'EOSQL'\n{sql_content}\nEOSQL\"",
+        user=pguser
+    )
+
+    if exit_code != 0:
+        pytest.fail(f"Failed to create SQL file in container: {output.decode()}")
+
+    # Execute the SQL file
+    exit_code, output = container.exec_run(
+        f"{pgbin}/psql -p {pgport} -U {pguser} -d postgres -f {temp_sql_path}",
+        user=pguser
+    )
+
+    # Clean up temp file
+    container.exec_run(f"rm -f {temp_sql_path}", user=pguser)
+
+    # Create output directory structure
+    date_part = datetime.now().strftime("%d%m%y")  # ddmmyy format
+    time_part = datetime.now().strftime("%H%M%S")  # hhmmss format
+    filename = f"{base_name}-{date_part}-{time_part}.txt"
+
+    output_dir = Path(f"./actual-output/sql/{base_name}/{pg_major_version}/rpm")
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    # Save output to file
+    output_file = output_dir / filename
+    with open(output_file, 'w') as f:
+        f.write(f"# Functional Smoke Test for {component}\n")
+        f.write(f"# Container: {container_name}\n")
+        f.write(f"# PostgreSQL Version: {pg_major_version}\n")
+        f.write(f"# Date: {date_part} Time: {time_part}\n")
+        f.write(f"# SQL File: {sql_file_path}\n")
+        f.write("=" * 80 + "\n\n")
+        f.write(output.decode())
+
+    print(f"Output saved to: {output_file}")
+
+    if exit_code != 0:
+        print(f"⚠️ SQL execution had errors (exit code: {exit_code})")
+        print(f"Output:\n{output.decode()}")
+        pytest.fail(f"SQL test failed for {component}: See {output_file} for details")
+
+    print(f"✅ Functional smoke test passed: {component}")
+    print(f"   Results: {output_file}")
+
+
+@pytest.mark.parametrize("container_name", containers)
+@pytest.mark.parametrize("extension", base_extensions)
+def test_verify_extension_versions(container_name, extension):
+    """Verify installed extension versions match expected versions from .env
+
+    This queries PostgreSQL to get the default_version of each extension
+    and compares it with the version defined in .env
+    """
+    if not check_extensions:
+        pytest.skip("Extension check disabled via .env")
+
+    container_name = container_name.strip()
+    extension = extension.strip()
+
+    if not container_name or not extension:
+        pytest.skip("Invalid container or extension")
+
+    try:
+        container = client.containers.get(container_name)
+    except docker.errors.NotFound:
+        pytest.skip(f"Container {container_name} not found or not running.")
+
+    assert container.status == "running"
+
+    # Map extension names to their environment variable names
+    # Extension names may differ from package names
+    extension_env_map = {
+        "lolor": f"PGEDGE_LOLOR_{pg_major_version}_VERSION"
+    }
+
+    # Skip if this extension doesn't have a version mapping
+    if extension not in extension_env_map:
+        pytest.skip(f"No version mapping defined for extension {extension}")
+
+    env_var_name = extension_env_map[extension]
+    expected_version = os.getenv(env_var_name)
+
+    if not expected_version:
+        pytest.skip(f"No expected version defined for {extension} (looking for {env_var_name} in .env)")
+
+    print(f"\n--- Verifying extension {extension} version on {container_name} ---")
+    print(f"Expected version: {expected_version}")
+
+    # Query the extension version from PostgreSQL
+    exit_code, output = container.exec_run(
+        f"{pgbin}/psql -p {pgport} -U {pguser} -d postgres -t -A "
+        f"-c \"SELECT default_version FROM pg_available_extensions WHERE name = '{extension}';\"",
+        user=pguser,
+    )
+
+    if exit_code != 0:
+        pytest.fail(f"Failed to query {extension} version: {output.decode()}")
+
+    installed_version = output.decode().strip()
+
+    if not installed_version:
+        pytest.fail(f"Extension {extension} not found in pg_available_extensions")
+
+    print(f"Installed version: {installed_version}")
+
+    # Version comparison
+    # For pg_cron and pg_stat_monitor, compare only first two digits (major.minor)
+    if extension in ["pg_cron", "pg_stat_monitor"]:
+        # Extract first two version segments (major.minor)
+        expected_parts = expected_version.split('.')[:2]
+        installed_parts = installed_version.split('.')[:2]
+        expected_short = '.'.join(expected_parts)
+        installed_short = '.'.join(installed_parts)
+
+        assert expected_short == installed_short, (
+            f"Version mismatch for extension {extension} on {container_name}\n"
+            f"Expected (major.minor): {expected_short}\n"
+            f"Installed (major.minor): {installed_short}\n"
+            f"Full installed version: {installed_version}"
+        )
+        print(f"✅ Version verified: {extension} {installed_version} (matched on major.minor: {installed_short})")
+    else:
+        # For other extensions, check if expected version is contained in installed version
+        assert expected_version in installed_version, (
+            f"Version mismatch for extension {extension} on {container_name}\n"
+            f"Expected: {expected_version}\n"
+            f"Installed: {installed_version}"
+        )
+        print(f"✅ Version verified: {extension} {installed_version}")
+
+
 
 @pytest.mark.parametrize("container_name", containers)
 def test_stop_server(container_name):

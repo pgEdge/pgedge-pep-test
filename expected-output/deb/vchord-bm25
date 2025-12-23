@@ -1,0 +1,11 @@
+/usr/lib/postgresql/17/lib/vchord_bm25.so
+/usr/lib/postgresql/17/sbom/vchord-bm25-sbom.json
+/usr/lib/postgresql/17/sbom/vchord-bm25-sbom.json.asc
+/usr/share/doc/pgedge-postgresql-17-vchord-bm25
+/usr/share/doc/pgedge-postgresql-17-vchord-bm25/changelog.Debian.gz
+/usr/share/postgresql/17/extension/vchord_bm25--0.1.0--0.1.1.sql
+/usr/share/postgresql/17/extension/vchord_bm25--0.1.1--0.2.0.sql
+/usr/share/postgresql/17/extension/vchord_bm25--0.2.0--0.2.1.sql
+/usr/share/postgresql/17/extension/vchord_bm25--0.2.1--0.2.2.sql
+/usr/share/postgresql/17/extension/vchord_bm25--0.2.2.sql
+/usr/share/postgresql/17/extension/vchord_bm25.control

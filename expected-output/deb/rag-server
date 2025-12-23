@@ -1,0 +1,9 @@
+/etc/logrotate.d/pgedge-rag-server
+/etc/pgedge/pgedge-rag-server.yaml
+/usr/bin/pgedge-rag-server
+/usr/lib/systemd/system/pgedge-rag-server.service
+/usr/lib/tmpfiles.d/pgedge-rag-server.conf
+/usr/share/doc/pgedge-rag-server/changelog.Debian.gz
+/usr/share/doc/pgedge-rag-server/changelog.gz
+/usr/share/pgedge-rag-server/pgedge-rag-server-sbom.json
+/usr/share/pgedge-rag-server/pgedge-rag-server-sbom.json.asc

@@ -1,0 +1,10 @@
+/usr/lib/postgresql/17/lib/pg_tokenizer.so
+/usr/lib/postgresql/17/sbom
+/usr/lib/postgresql/17/sbom/pg_tokenizer-sbom.json
+/usr/lib/postgresql/17/sbom/pg_tokenizer-sbom.json.asc
+/usr/share/doc/pgedge-postgresql-17-pg-tokenizer
+/usr/share/doc/pgedge-postgresql-17-pg-tokenizer/changelog.Debian.gz
+/usr/share/postgresql/17/extension/pg_tokenizer--0.1.0--0.1.1.sql
+/usr/share/postgresql/17/extension/pg_tokenizer--0.1.0.sql
+/usr/share/postgresql/17/extension/pg_tokenizer--0.1.1.sql
+/usr/share/postgresql/17/extension/pg_tokenizer.control

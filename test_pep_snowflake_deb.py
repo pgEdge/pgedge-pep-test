@@ -15,7 +15,7 @@ repo = os.getenv("REPO", "release")
 
 # PgBouncer specific configuration
 snowflake_package = os.getenv("DEB_SNOWFLAKE_PACKAGE", "pgedge-postgresql-16-snowflake")
-snowflake_version = os.getenv("PGEDGE_SNOWFLAKE_16_VERSION", "2.2")
+snowflake_version = os.getenv("PGEDGE_SNOWFLAKE_16_VERSION", "2.4")
 snowflake_node = os.getenv("SNOWFLAKE_NODE", "1")
 pguser = os.getenv("PG_USER", "postgres")
 pgport = os.getenv("PG_PORT", "5432")

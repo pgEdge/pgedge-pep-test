@@ -109,6 +109,96 @@ def copy_config_files_to_container(
 
     return True, files_copied, message
 
+
+def set_file_permissions(
+    container,
+    file_path,
+    owner,
+    group,
+    permissions,
+    create_user=True,
+    user_options="-r -s /sbin/nologin"
+):
+    """
+    Set ownership and permissions on a file in a container.
+
+    Args:
+        container: Docker container object with exec_run method
+        file_path: Full path to the file in the container (e.g., "/etc/pgbouncer/userlist.txt")
+        owner: Owner username for the file
+        group: Group name for the file
+        permissions: File permissions in octal string format (e.g., "600", "644")
+        create_user: Whether to create the user if it doesn't exist (default: True)
+        user_options: Options for useradd command if creating user (default: "-r -s /sbin/nologin")
+
+    Returns:
+        tuple: (success: bool, file_info: str, message: str)
+
+    Raises:
+        Exception: If permission or ownership setting fails
+    """
+
+    print(f"\n--- Setting permissions on {file_path} ---")
+
+    # Ensure user exists if create_user is True
+    if create_user:
+        exit_code, output = container.exec_run(
+            f"id {owner}",
+            user="root"
+        )
+        if exit_code != 0:
+            print(f"Creating {owner} user...")
+            exit_code, output = container.exec_run(
+                f"useradd {user_options} {owner}",
+                user="root"
+            )
+            # Ignore error if user already exists
+            if exit_code != 0 and "already exists" not in output.decode():
+                raise Exception(f"Failed to create {owner} user: {output.decode()}")
+            print(f"✅ Created user: {owner}")
+
+    # Set ownership
+    exit_code, output = container.exec_run(
+        f"chown {owner}:{group} {file_path}",
+        user="root"
+    )
+    if exit_code != 0:
+        raise Exception(f"Failed to change ownership: {output.decode()}")
+
+    print(f"✅ Changed ownership to {owner}:{group}")
+
+    # Set permissions
+    exit_code, output = container.exec_run(
+        f"chmod {permissions} {file_path}",
+        user="root"
+    )
+    if exit_code != 0:
+        raise Exception(f"Failed to change permissions: {output.decode()}")
+
+    print(f"✅ Changed permissions to {permissions}")
+
+    # Verify permissions and ownership
+    exit_code, output = container.exec_run(
+        f"ls -la {file_path}",
+        user="root"
+    )
+    if exit_code != 0:
+        raise Exception(f"Failed to verify permissions: {output.decode()}")
+
+    file_info = output.decode().strip()
+    print(f"File info: {file_info}")
+
+    # Verify ownership is set correctly
+    if owner not in file_info:
+        raise Exception(f"Ownership not set correctly. Expected {owner} in: {file_info}")
+
+    print(f"✅ Permissions and ownership verified")
+
+    message = f"Successfully set permissions {permissions} and ownership {owner}:{group} on {file_path}"
+
+    return True, file_info, message
+
+
 def verify_bundled_files(
     container,
     container_name,

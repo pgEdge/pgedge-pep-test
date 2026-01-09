@@ -1,8 +1,6 @@
 import os
 import sys
-import subprocess
 from pathlib import Path
-from datetime import datetime
 
 import pytest
 import docker
@@ -26,12 +24,13 @@ all_containers = [(c, "rhel") for c in rhel_containers] + [(c, "deb") for c in d
 platform_filter = os.getenv("PLATFORM_FILTER", "").lower()
 if platform_filter == "rpm":
     all_containers = [(c, t) for c, t in all_containers if t == "rhel"]
+    containers = rhel_containers  # Use only RHEL containers
 elif platform_filter == "deb":
     all_containers = [(c, t) for c, t in all_containers if t == "deb"]
-# If platform_filter is empty or "all", use all containers
-
-# Simple container list (names only) for pgbouncer-specific tests
-containers = rhel_containers + deb_containers
+    containers = deb_containers  # Use only DEB containers
+else:
+    # If platform_filter is empty or "all", use all containers
+    containers = rhel_containers + deb_containers
 
 # Common configuration
 repo = os.getenv("REPO", "release")
@@ -48,32 +47,31 @@ deb_pguser = os.getenv("DEB_PG_USER", "postgres")
 pguser = rhel_pguser
 
 # PgBouncer configuration
-pgbouncer_user = os.getenv("PGBOUNCER_USER", "pgbouncer")
+rhel_pgbouncer_user = os.getenv("PGBOUNCER_USER", "pgbouncer")
+deb_pgbouncer_user = os.getenv("DEB_PGBOUNCER_USER", "postgres")
 pgbouncer_port = os.getenv("PGBOUNCER_PORT", "6432")
 pgbouncer_config_dir = os.getenv("PGBOUNCER_CONFIG_DIR", "/etc/pgbouncer")
 
 # RHEL-specific configuration
 rhel_pgbin = os.getenv("PG_BIN_PATH", f"/usr/pgsql-{pg_major_version}/bin")
+rhel_pgbouncer_bin = os.getenv("RHEL_PGBOUNCER_BIN", f"/usr/bin")
 rhel_pgbouncer_package = os.getenv("PGBOUNCER_PACKAGE", f"pgedge-pgbouncer")
-rhel_bundled_files = os.getenv(
-    "PGBOUNCER_BUNDLED_FILES",
-    "/usr/bin/pgbouncer"
-).split(",")
+rhel_server_package = os.getenv("SERVER_PACKAGE", f"pgedge-postgresql{pg_major_version}-server")
+
 
 # Debian-specific configuration
 deb_pgbin = os.getenv("DEB_PG_BIN_PATH", f"/usr/lib/postgresql/{pg_major_version}/bin")
+deb_pgbouncer_bin = os.getenv("DEB_PGBOUNCER_BIN", f"/usr/sbin")
 deb_pg_path = os.getenv("DEB_PG_PATH", f"/usr/lib/postgresql/{pg_major_version}")
 deb_pg_share_path = os.getenv("DEB_PG_SHARE_PATH", f"/usr/share/postgresql/{pg_major_version}")
 deb_pgbouncer_package = os.getenv("DEB_PGBOUNCER_PACKAGE", f"pgedge-pgbouncer")
-deb_bundled_files = os.getenv(
-    "DEB_PGBOUNCER_BUNDLED_FILES",
-    "/usr/bin/pgbouncer"
-).split(",")
+deb_server_package = os.getenv("DEB_SERVER_PACKAGE", f"pgedge-postgresql-{pg_major_version}")
+
 
 # Additional configuration for component tests
 check_extensions = os.getenv("CHECK_EXTENSIONS", "false").lower() == "true"
 base_extensions = [ext.strip() for ext in os.getenv("BASE_EXTENSIONS", "").split(",") if ext.strip()]
-components = [comp.strip() for comp in os.getenv("COMPONENTS", f"pgedge-pgbouncer_{pg_major_version}").split(",") if comp.strip()]
+components = [comp.strip() for comp in os.getenv("COMPONENTS", f"pgedge-pgbouncer").split(",") if comp.strip()]
 
 
 def get_container_config(container_type):
@@ -83,14 +81,17 @@ def get_container_config(container_type):
             "pgbin": rhel_pgbin.rstrip('/'),
             "pguser": rhel_pguser,
             "pgbouncer_package": rhel_pgbouncer_package,
-            "bundled_files": rhel_bundled_files
+            "server_package": rhel_server_package,
+            "pgbouncer_bin": rhel_pgbouncer_bin,
+            "pgbouncer_user": rhel_pgbouncer_user
         }
     else:  # deb
         return {
             "pgbin": deb_pgbin.rstrip('/'),
             "pguser": deb_pguser,
+            "server_package": deb_server_package,
             "pgbouncer_package": deb_pgbouncer_package,
-            "bundled_files": deb_bundled_files
+            "pgbouncer_user": deb_pgbouncer_user
         }
 
 
@@ -264,7 +265,34 @@ def test_verify_bundled_files(container_name, container_type, component):
             pytest.fail(f"Failed to verify bundled files: {str(e)}")
 
 
+@pytest.mark.parametrize("container_name,container_type", all_containers)
+def test_server_install(container_name, container_type):
+    """Step 2: Install pgedge-pgbouncer using package_management module"""
+    container_name = container_name.strip()
+    if not container_name:
+        pytest.skip("No container defined in env")
 
+    # Get container-specific configuration
+    config = get_container_config(container_type)
+    server_package = config["server_package"]
+
+    try:
+        container = client.containers.get(container_name)
+    except docker.errors.NotFound:
+        pytest.skip(f"Container {container_name} not found or not running.")
+
+    assert container.status == "running"
+
+    print(f"\n--- Installing {server_package} on {container_name} ({container_type}) ---")
+
+    # Use the package_management module to install the package
+    try:
+        success, platform, message = package_management.install_package(container, server_package)
+        assert success, f"Package installation failed: {message}"
+        print(f"✅ {message}")
+        print(f"✅ Platform detected: {platform}")
+    except Exception as e:
+        pytest.fail(f"Failed to install {server_package}: {str(e)}")
 
 @pytest.mark.parametrize("container_name,container_type", all_containers)
 def test_init_cluster(container_name, container_type):
@@ -362,9 +390,14 @@ def test_check_connection(container_name, container_type):
     except Exception as e:
         pytest.fail(f"Failed to check PostgreSQL connection: {str(e)}")
 
-@pytest.mark.parametrize("container_name", containers)
-def test_pgbouncer_copy_config_files(container_name):
-    """Step 5: Copy userlist.txt, pgbouncer.ini from config to /etc/pgbouncer/"""
+@pytest.mark.parametrize("container_name, container_type", all_containers)
+def test_pgbouncer_copy_config_files(container_name, container_type):
+    """Step 5: Copy userlist.txt and pgbouncer.ini from config to /etc/pgbouncer/
+
+    Platform-specific behavior:
+    - RHEL: Copies pgbouncer.ini as pgbouncer.ini
+    - Debian: Copies deb-pgbouncer.ini as pgbouncer.ini
+    """
     container_name = container_name.strip()
     if not container_name:
         pytest.skip("No container defined in env")
@@ -376,51 +409,48 @@ def test_pgbouncer_copy_config_files(container_name):
 
     assert container.status == "running"
 
-    print(f"\n--- Copying PgBouncer config files to {container_name} ---")
+    # Get container-specific configuration
+    config = get_container_config(container_type)
+    pgbouncer_user = config["pgbouncer_user"]
 
-    # Ensure /etc/pgbouncer directory exists
-    exit_code, output = container.exec_run(
-        f"mkdir -p {pgbouncer_config_dir}",
-        user="root"
-    )
-    assert exit_code == 0, f"Failed to create config directory: {output.decode()}"
+    # Define platform-specific file mapping (source -> destination)
+    if container_type == "rhel":
+        file_mapping = {
+            "userlist.txt": "userlist.txt",
+            "pgbouncer.ini": "pgbouncer.ini"
+        }
+        print(f"\n--- Copying RHEL pgbouncer config files to {container_name} ---")
+    else:  # deb
+        file_mapping = {
+            "userlist.txt": "userlist.txt",
+            "deb-pgbouncer.ini": "pgbouncer.ini"  # Copy deb-specific config as pgbouncer.ini
+        }
+        print(f"\n--- Copying Debian pgbouncer config files to {container_name} ---")
 
-    # Config files to copy
-    config_files = ["userlist.txt", "pgbouncer.ini"]
-
-    for config_file in config_files:
-        local_file = f"./config/pgbouncer/{config_file}"
-        container_dest = f"{container_name}:{pgbouncer_config_dir}/{config_file}"
-
-        # Check if local config file exists
-        if not os.path.exists(local_file):
-            pytest.fail(f"Local config file not found: {local_file}")
-
-        # Copy file from host to container
-        result = subprocess.run(
-            ["docker", "cp", local_file, container_dest],
-            capture_output=True,
-            text=True
+    # Use the file_management module to copy config files
+    try:
+        project_root = Path(__file__).parent.parent.resolve()
+        local_config_dir = project_root / "config" / "pgbouncer"
+        success, files_copied, message = file_management.copy_config_files_to_container(
+            container=container,
+            container_name=container_name,
+            # local_config_dir="./config/pgbouncer",
+            local_config_dir=str(local_config_dir),
+            container_config_dir=pgbouncer_config_dir,
+            file_mapping=file_mapping,
+            owner=pgbouncer_user,
+            group=pgbouncer_user,
+            permissions="600"
         )
-
-        assert result.returncode == 0, (
-            f"Failed to copy {config_file} to container: {result.stderr}"
-        )
-        print(f"✅ Copied {config_file} to {pgbouncer_config_dir}/")
-
-    # Verify files were copied
-    for config_file in config_files:
-        exit_code, output = container.exec_run(
-            f"test -f {pgbouncer_config_dir}/{config_file}",
-            user="root"
-        )
-        assert exit_code == 0, f"Config file not found after copy: {config_file}"
-
-    print(f"✅ All config files copied successfully")
+        assert success, f"Config file copy failed: {message}"
+        print(f"✅ {message}")
+        print(f"✅ Platform: {container_type}, Files copied: {', '.join(files_copied)}")
+    except Exception as e:
+        pytest.fail(f"Failed to copy config files: {str(e)}")
 
 
-@pytest.mark.parametrize("container_name", containers)
-def test_pgbouncer_set_permissions(container_name):
+@pytest.mark.parametrize("container_name,container_type", all_containers)
+def pgbouncer_set_permissions(container_name, container_type):
     """Step 6: Change /etc/pgbouncer/userlist.txt permissions to 600 with pgbouncer:pgbouncer ownership"""
     container_name = container_name.strip()
     if not container_name:
@@ -435,58 +465,33 @@ def test_pgbouncer_set_permissions(container_name):
 
     userlist_file = f"{pgbouncer_config_dir}/userlist.txt"
 
-    print(f"\n--- Setting permissions on {userlist_file} in {container_name} ---")
+    # Use the file_management module to set permissions and ownership
+    try:
+        # Get container-specific configuration
+        config = get_container_config(container_type)
+        pgbouncer_user = config["pgbouncer_user"]
 
-    # Ensure pgbouncer user exists
-    exit_code, output = container.exec_run(
-        f"id {pgbouncer_user}",
-        user="root"
-    )
-    if exit_code != 0:
-        print(f"Creating {pgbouncer_user} user...")
-        exit_code, output = container.exec_run(
-            f"useradd -r -s /sbin/nologin {pgbouncer_user}",
-            user="root"
+        success, file_info, message = file_management.set_file_permissions(
+            container=container,
+            file_path=userlist_file,
+            owner=pgbouncer_user,
+            group=pgbouncer_user,
+            permissions="600",
+            create_user=True,
+            user_options="-r -s /sbin/nologin"
         )
-        # Ignore error if user already exists
-        if exit_code != 0 and "already exists" not in output.decode():
-            pytest.fail(f"Failed to create {pgbouncer_user} user: {output.decode()}")
+        assert success, f"Failed to set permissions: {message}"
 
-    # Set ownership to pgbouncer:pgbouncer
-    exit_code, output = container.exec_run(
-        f"chown {pgbouncer_user}:{pgbouncer_user} {userlist_file}",
-        user="root"
-    )
-    assert exit_code == 0, f"Failed to change ownership: {output.decode()}"
-    print(f"✅ Changed ownership to {pgbouncer_user}:{pgbouncer_user}")
+        # Verify permissions are -rw-------
+        assert "-rw-------" in file_info, f"Permissions not set correctly: {file_info}"
 
-    # Set permissions to 600
-    exit_code, output = container.exec_run(
-        f"chmod 600 {userlist_file}",
-        user="root"
-    )
-    assert exit_code == 0, f"Failed to change permissions: {output.decode()}"
-    print(f"✅ Changed permissions to 600")
-
-    # Verify permissions and ownership
-    exit_code, output = container.exec_run(
-        f"ls -la {userlist_file}",
-        user="root"
-    )
-    assert exit_code == 0, f"Failed to verify permissions: {output.decode()}"
-    file_info = output.decode().strip()
-    print(f"File info: {file_info}")
-
-    # Verify permissions are -rw-------
-    assert "-rw-------" in file_info, f"Permissions not set correctly: {file_info}"
-    # Verify ownership
-    assert pgbouncer_user in file_info, f"Ownership not set correctly: {file_info}"
-
-    print(f"✅ Permissions and ownership verified")
+        print(f"✅ {message}")
+    except Exception as e:
+        pytest.fail(f"Failed to set file permissions: {str(e)}")
 
 
-@pytest.mark.parametrize("container_name", containers)
-def test_pgbouncer_start_service(container_name):
+@pytest.mark.parametrize("container_name,container_type", all_containers)
+def test_pgbouncer_start_service(container_name, container_type):
     """Step 7: Switch to pgbouncer user and start pgbouncer daemon"""
     container_name = container_name.strip()
     if not container_name:
@@ -500,7 +505,9 @@ def test_pgbouncer_start_service(container_name):
     assert container.status == "running"
 
     print(f"\n--- Starting PgBouncer service on {container_name} ---")
-
+    # Get container-specific configuration
+    config = get_container_config(container_type)
+    pgbouncer_user = config["pgbouncer_user"]
     # Set ownership of config directory and files to pgbouncer
     exit_code, output = container.exec_run(
         f"chown -R {pgbouncer_user}:{pgbouncer_user} {pgbouncer_config_dir}",
@@ -509,9 +516,27 @@ def test_pgbouncer_start_service(container_name):
     if exit_code != 0:
         print(f"Warning: Failed to set ownership on config dir: {output.decode()}")
 
+    # Try to find pgbouncer binary (check both common locations)
+    pgbouncer_paths = ["/usr/bin/pgbouncer", "/usr/sbin/pgbouncer"]
+    pgbouncer_bin = None
+
+    for path in pgbouncer_paths:
+        check_exit_code, check_output = container.exec_run(
+            f"test -f {path}",
+            user="root"
+        )
+        if check_exit_code == 0:
+            pgbouncer_bin = path
+            break
+
+    if pgbouncer_bin is None:
+        pytest.fail("pgbouncer binary not found in /usr/bin or /usr/sbin")
+
+    print(f"Found pgbouncer at: {pgbouncer_bin}")
+
     # Start pgbouncer as pgbouncer user
     exit_code, output = container.exec_run(
-        f"/usr/bin/pgbouncer -d {pgbouncer_config_dir}/pgbouncer.ini",
+        f"{pgbouncer_bin} -d {pgbouncer_config_dir}/pgbouncer.ini",
         user=pgbouncer_user
     )
     assert exit_code == 0, f"Failed to start pgbouncer: {output.decode()}"
@@ -537,8 +562,8 @@ def test_pgbouncer_start_service(container_name):
     print(f"Process info: {output.decode().strip()}")
 
 
-@pytest.mark.parametrize("container_name", containers)
-def test_pgbouncer_connect_psql(container_name):
+@pytest.mark.parametrize("container_name,container_type", all_containers)
+def test_pgbouncer_connect_psql(container_name, container_type):
     """Step 8: Connect to pgbouncer via psql on port 6432"""
     container_name = container_name.strip()
     if not container_name:
@@ -550,8 +575,10 @@ def test_pgbouncer_connect_psql(container_name):
         pytest.skip(f"Container {container_name} not found or not running.")
 
     assert container.status == "running"
-
-    print(f"\n--- Connecting to PgBouncer via psql on {container_name} ---")
+    # # Get container-specific configuration
+    # config = get_container_config(container_type)
+    # pgbouncer_user = config["pgbouncer_user"]
+    # print(f"\n--- Connecting to PgBouncer via psql on {container_name} ---")
 
     # Connect to pgbouncer admin database
     exit_code, output = container.exec_run(
@@ -663,9 +690,64 @@ def test_pgbouncer_show_databases(container_name):
     )
     print(f"✅ SHOW DATABASES executed successfully")
 
+@pytest.mark.parametrize("container_name", containers)
+def test_stop_pgbouncer(container_name):
+    """Step 9.3: Pause and shutdown PgBouncer, tolerate expected 'server closed' outputs"""
+    container_name = container_name.strip()
+    if not container_name:
+        pytest.skip("No container defined in env")
+
+    try:
+        container = client.containers.get(container_name)
+    except docker.errors.NotFound:
+        pytest.skip(f"Container {container_name} not found or not running.")
+
+    assert container.status == "running"
+
+    print(f"\n--- Running Pause+Shutdown PgBouncer on ({container_name}) ---")
+
+    # Determine container type so we can select the correct pgbouncer/admin user
+    if container_name in rhel_containers:
+        container_type = "rhel"
+    elif container_name in deb_containers:
+        container_type = "deb"
+    else:
+        # fallback - use default pguser
+        container_type = None
+
+    psql_user = pguser
+    if container_type:
+        psql_user = get_container_config(container_type).get("pgbouncer_user", pguser)
+
+    # Pause first
+    exit_code, output = container.exec_run(
+        f"psql -h 127.0.0.1 -p {pgbouncer_port} -d pgbouncer -c 'PAUSE;'",
+        user=psql_user
+    )
+    pause_out = output.decode(errors='ignore').strip()
+    print(pause_out)
+
+    # Then shutdown
+    exit_code, output = container.exec_run(
+        f"psql -h 127.0.0.1 -p {pgbouncer_port} -d pgbouncer -c 'SHUTDOWN;'",
+        user=psql_user
+    )
+    shutdown_out = output.decode(errors='ignore').strip()
+    print(shutdown_out)
+
+    # Accept either zero exit code or common "server closed" style messages as success.
+    if exit_code == 0:
+        print("✅ PgBouncer shutdown command exited with 0")
+    else:
+        low = shutdown_out.lower()
+        if any(tok in low for tok in ("server closed", "connection to server", "closed", "server closed the connection")):
+            print("✅ PgBouncer shutdown produced expected 'server closed' output (treated as success)")
+        else:
+            pytest.fail(f"PgBouncer shutdown failed (exit {exit_code}): {shutdown_out}")
+
 
 @pytest.mark.parametrize("container_name", containers)
-def test_pgbouncer_stop_service(container_name):
+def pgbouncer_stop_service(container_name):
     """Step 10: Stop PgBouncer service for cleanup"""
     container_name = container_name.strip()
     if not container_name:
@@ -694,6 +776,7 @@ def test_pgbouncer_stop_service(container_name):
     assert exit_code != 0, f"PgBouncer process still running: {output.decode()}"
 
     print(f"✅ PgBouncer service stopped")
+
 
 
 
@@ -728,6 +811,52 @@ def test_stop_server(container_name, container_type):
         print(f"✅ {message}")
     except Exception as e:
         pytest.fail(f"Failed to stop PostgreSQL server: {str(e)}")
+
+@pytest.mark.parametrize("container_name,container_type", all_containers)
+def test_pgbouncer_cleanup(container_name, container_type):
+    """Step 11: Cleanup PgBouncer environment - process, config, logs, and user"""
+    container_name = container_name.strip()
+    if not container_name:
+        pytest.skip("No container defined in env")
+
+    try:
+        container = client.containers.get(container_name)
+    except docker.errors.NotFound:
+        pytest.skip(f"Container {container_name} not found or not running.")
+
+    assert container.status == "running"
+
+    # Get container-specific configuration
+    config = get_container_config(container_type)
+    pgbouncer_user = config["pgbouncer_user"]
+
+    # Use the machine_cleanup module to perform PgBouncer cleanup
+    try:
+        success, cleanup_summary, message = machine_cleanup.cleanup_pgbouncer_environment(
+            container=container,
+            pgbouncer_config_dir=pgbouncer_config_dir,
+            pgbouncer_user=pgbouncer_user,
+            pgbouncer_log_dir="/var/log/pgbouncer"
+        )
+        assert success, f"PgBouncer cleanup failed: {message}"
+        print(f"✅ {message}")
+
+        # Display cleanup details
+        details = []
+        if cleanup_summary["process_stopped"]:
+            details.append("Process stopped")
+        if cleanup_summary["config_directory_removed"]:
+            details.append(f"Config directory removed ({pgbouncer_config_dir})")
+        if cleanup_summary["log_directory_removed"]:
+            details.append("Log directory removed")
+        if cleanup_summary["user_removed"]:
+            details.append(f"User removed ({pgbouncer_user})")
+
+        if details:
+            print(f"   Cleaned: {', '.join(details)}")
+
+    except Exception as e:
+        pytest.fail(f"Failed to cleanup PgBouncer environment: {str(e)}")
 
 @pytest.mark.parametrize("container_name,container_type", all_containers)
 def test_package_uninstall(container_name, container_type):

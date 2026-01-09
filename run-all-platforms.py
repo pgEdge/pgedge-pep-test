@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 Run PEP server tests across multiple environments and platforms.
-Each .env file is loaded in isolation for a clean test run.
+Each env file is loaded in isolation for a clean test run.
 """
 
 import os
@@ -40,7 +40,7 @@ def run_pytest(env_file, platform, env_name):
 
     print(f"▶️ Running {platform.upper()} tests for env {env_name}")
 
-    # Load only this .env file
+    # Load only this env file
     env_vars = os.environ.copy()
     env_vars.update(dotenv_values(env_file))
 
@@ -71,7 +71,7 @@ def main():
     print("\n🚀 Starting test runs...")
 
     for env_name in env_choices:
-        env_file = os.path.join(ENV_DIR, f".env-{env_name}")
+        env_file = os.path.join(ENV_DIR, f"env-{env_name}")
         if not os.path.exists(env_file):
             print(f"⚠️ Skipping missing environment file: {env_file}")
             continue

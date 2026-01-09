@@ -10,7 +10,7 @@ load_dotenv(override=True)
 
 client = docker.from_env()
 
-# Load values from .env
+# Load values from env
 containers = os.getenv("CONTAINERS", "").split(",")
 repo = os.getenv("REPO", "release")
 upgrade_repo = os.getenv("UPGRADE_REPO", "staging")
@@ -22,7 +22,7 @@ pgdata = os.getenv("PG_DATA_DIR", "/tmp/n1")
 server_version = os.getenv("PG_VERSION", "17.6")
 pg_major_version = os.getenv("PG_MAJOR_VERSION", "17")
 check_extensions = os.getenv("TEST_EXTENSIONS", "false").lower() == "true"
-# Extensions defined in .env (core + contrib)
+# Extensions defined in env (core + contrib)
 base_extensions = os.getenv(
     "EXTENSIONS",
     "bloom,bool_plperl,btree_gin,btree_gist,citext,cube,dblink,"
@@ -43,7 +43,7 @@ pl_extensions = os.getenv("PL_EXTENSIONS", "plperl,plpython3u,pltcl").split(",")
 def test_pgedge_install(container_name):
     container_name = container_name.strip()
     if not container_name:
-        pytest.skip("No container defined in .env")
+        pytest.skip("No container defined in env")
 
     try:
         container = client.containers.get(container_name)
@@ -161,7 +161,7 @@ def test_upgrade_components(container_name, component):
     This creates a separate test for each container-component combination
     """
     if os.getenv("UPGRADE", "false").lower() != "true":
-        pytest.skip("Skipping upgrade tests because UPGRADE=false in .env")
+        pytest.skip("Skipping upgrade tests because UPGRADE=false in env")
 
     container_name = container_name.strip()
     component = component.strip()
@@ -237,7 +237,7 @@ def test_verify_component_versions(container_name, component):
     """Verify each component version individually with separate test results
 
     This creates a separate test for each container-component combination
-    and validates the installed version matches the expected version from .env
+    and validates the installed version matches the expected version from env
     """
     container_name = container_name.strip()
     component = component.strip()
@@ -258,7 +258,7 @@ def test_verify_component_versions(container_name, component):
     expected_version = os.getenv(component_env_key)
 
     if not expected_version:
-        pytest.skip(f"No expected version defined for {component} (looking for {component_env_key} in .env)")
+        pytest.skip(f"No expected version defined for {component} (looking for {component_env_key} in env)")
 
     print(f"\n--- Verifying {component} version on {container_name} ---")
     print(f"Expected version: {expected_version}")
@@ -439,7 +439,7 @@ def test_start_server(container_name):
 @pytest.mark.parametrize("container_name", containers)
 def test_check_connection(container_name):
     if not check_extensions:
-        pytest.skip("Extension check disabled via .env")
+        pytest.skip("Extension check disabled via env")
 
     container = client.containers.get(container_name.strip())
     assert container.status == "running"
@@ -463,7 +463,7 @@ def test_create_extensions(container_name, extension):
     This creates a separate test for each container-extension combination
     """
     if not check_extensions:
-        pytest.skip("Extension check disabled via .env")
+        pytest.skip("Extension check disabled via env")
 
     container_name = container_name.strip()
     extension = extension.strip()
@@ -503,7 +503,7 @@ def test_component_functional_smoke(container_name, component):
     and stores output in actual-output/sql/<component-name>/<pg_major_version>/rpm/<timestamp>.txt
     """
     if not check_extensions:
-        pytest.skip("Extension check disabled via .env")
+        pytest.skip("Extension check disabled via env")
 
     container_name = container_name.strip()
     component = component.strip()
@@ -592,13 +592,13 @@ def test_component_functional_smoke(container_name, component):
 @pytest.mark.parametrize("container_name", containers)
 @pytest.mark.parametrize("extension", base_extensions)
 def test_verify_extension_versions(container_name, extension):
-    """Verify installed extension versions match expected versions from .env
+    """Verify installed extension versions match expected versions from env
 
     This queries PostgreSQL to get the default_version of each extension
-    and compares it with the version defined in .env
+    and compares it with the version defined in env
     """
     if not check_extensions:
-        pytest.skip("Extension check disabled via .env")
+        pytest.skip("Extension check disabled via env")
 
     container_name = container_name.strip()
     extension = extension.strip()
@@ -627,7 +627,7 @@ def test_verify_extension_versions(container_name, extension):
     expected_version = os.getenv(env_var_name)
 
     if not expected_version:
-        pytest.skip(f"No expected version defined for {extension} (looking for {env_var_name} in .env)")
+        pytest.skip(f"No expected version defined for {extension} (looking for {env_var_name} in env)")
 
     print(f"\n--- Verifying extension {extension} version on {container_name} ---")
     print(f"Expected version: {expected_version}")
@@ -691,10 +691,10 @@ def test_stop_server(container_name):
 
 @pytest.mark.parametrize("container_name", containers)
 def test_pgedge_uninstall(container_name):
-    """Uninstall only the listed components from .env"""
+    """Uninstall only the listed components from env"""
     container_name = container_name.strip()
     if not container_name:
-        pytest.skip("No container defined in .env")
+        pytest.skip("No container defined in env")
 
     try:
         container = client.containers.get(container_name)
@@ -715,7 +715,7 @@ def test_pgedge_cleanup(container_name):
     """Full cleanup: remove all pgedge packages + leftover data"""
     container_name = container_name.strip()
     if not container_name:
-        pytest.skip("No container defined in .env")
+        pytest.skip("No container defined in env")
 
     try:
         container = client.containers.get(container_name)
@@ -735,7 +735,7 @@ def test_pgedge_cleanup(container_name):
         exit_code, output = container.exec_run("dnf remove -y 'pgedge-*'", user="root")
         assert exit_code == 0, f"Failed global cleanup: {output.decode()}"
 
-    # Step 2: Optionally clean data directory (if defined in .env)
+    # Step 2: Optionally clean data directory (if defined in env)
     if pgdata:
         print(f"Removing PGDATA directory {pgdata} in {container_name}")
         container.exec_run(f"rm -rf {pgdata}", user="root")

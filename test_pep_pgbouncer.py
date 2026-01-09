@@ -9,7 +9,7 @@ from dotenv import load_dotenv
 load_dotenv()
 client = docker.from_env()
 
-# Load values from .env
+# Load values from env
 containers = os.getenv("CONTAINERS", "").split(",")
 repo = os.getenv("REPO", "release")
 
@@ -38,7 +38,7 @@ def test_pgbouncer_configure_repository(container_name):
     """Step 1: Configure the repository file"""
     container_name = container_name.strip()
     if not container_name:
-        pytest.skip("No container defined in .env")
+        pytest.skip("No container defined in env")
 
     try:
         container = client.containers.get(container_name)
@@ -108,7 +108,7 @@ def test_pgbouncer_install(container_name):
     """Step 2: Install pgedge-pgbouncer from staging, release, or daily repository"""
     container_name = container_name.strip()
     if not container_name:
-        pytest.skip("No container defined in .env")
+        pytest.skip("No container defined in env")
 
     try:
         container = client.containers.get(container_name)
@@ -150,13 +150,13 @@ def test_pgbouncer_install(container_name):
 
 @pytest.mark.parametrize("container_name", containers)
 def test_pgbouncer_verify_version(container_name):
-    """Step 3: Check the package version matches the version in .env file"""
+    """Step 3: Check the package version matches the version in env file"""
     container_name = container_name.strip()
     if not container_name:
-        pytest.skip("No container defined in .env")
+        pytest.skip("No container defined in env")
 
     if not pgbouncer_version:
-        pytest.skip("No PGBOUNCER_VERSION defined in .env, skipping version check")
+        pytest.skip("No PGBOUNCER_VERSION defined in env, skipping version check")
 
     try:
         container = client.containers.get(container_name)
@@ -243,7 +243,7 @@ def test_pgbouncer_copy_config_files(container_name):
     """Step 5: Copy userlist.txt, pgbouncer.ini from config to /etc/pgbouncer/"""
     container_name = container_name.strip()
     if not container_name:
-        pytest.skip("No container defined in .env")
+        pytest.skip("No container defined in env")
 
     try:
         container = client.containers.get(container_name)
@@ -300,7 +300,7 @@ def test_pgbouncer_set_permissions(container_name):
     """Step 6: Change /etc/pgbouncer/userlist.txt permissions to 600 with pgbouncer:pgbouncer ownership"""
     container_name = container_name.strip()
     if not container_name:
-        pytest.skip("No container defined in .env")
+        pytest.skip("No container defined in env")
 
     try:
         container = client.containers.get(container_name)
@@ -433,7 +433,7 @@ def test_pgbouncer_start_service(container_name):
     """Step 7: Switch to pgbouncer user and start pgbouncer daemon"""
     container_name = container_name.strip()
     if not container_name:
-        pytest.skip("No container defined in .env")
+        pytest.skip("No container defined in env")
 
     try:
         container = client.containers.get(container_name)
@@ -485,7 +485,7 @@ def test_pgbouncer_connect_psql(container_name):
     """Step 8: Connect to pgbouncer via psql on port 6432"""
     container_name = container_name.strip()
     if not container_name:
-        pytest.skip("No container defined in .env")
+        pytest.skip("No container defined in env")
 
     try:
         container = client.containers.get(container_name)
@@ -511,7 +511,7 @@ def test_pgbouncer_show_help(container_name):
     """Step 9.1: Run SHOW HELP command"""
     container_name = container_name.strip()
     if not container_name:
-        pytest.skip("No container defined in .env")
+        pytest.skip("No container defined in env")
 
     try:
         container = client.containers.get(container_name)
@@ -541,7 +541,7 @@ def test_pgbouncer_show_version(container_name):
     """Step 9.2: Run SHOW VERSION command and verify it matches config version"""
     container_name = container_name.strip()
     if not container_name:
-        pytest.skip("No container defined in .env")
+        pytest.skip("No container defined in env")
 
     try:
         container = client.containers.get(container_name)
@@ -561,7 +561,7 @@ def test_pgbouncer_show_version(container_name):
     version_output = output.decode()
     print(f"SHOW VERSION output:\n{version_output}")
 
-    # Verify version matches expected version from .env
+    # Verify version matches expected version from env
     if pgbouncer_version:
         assert pgbouncer_version in version_output, (
             f"Version mismatch!\n"
@@ -570,7 +570,7 @@ def test_pgbouncer_show_version(container_name):
         )
         print(f"✅ Version verified: {pgbouncer_version}")
     else:
-        print(f"⚠️ PGBOUNCER_VERSION not set in .env, skipping version verification")
+        print(f"⚠️ PGBOUNCER_VERSION not set in env, skipping version verification")
 
     print(f"✅ SHOW VERSION executed successfully")
 
@@ -580,7 +580,7 @@ def test_pgbouncer_show_databases(container_name):
     """Step 9.3: Run SHOW DATABASES command"""
     container_name = container_name.strip()
     if not container_name:
-        pytest.skip("No container defined in .env")
+        pytest.skip("No container defined in env")
 
     try:
         container = client.containers.get(container_name)
@@ -612,7 +612,7 @@ def pgbouncer_stop_service(container_name):
     """Stop PgBouncer service for cleanup"""
     container_name = container_name.strip()
     if not container_name:
-        pytest.skip("No container defined in .env")
+        pytest.skip("No container defined in env")
 
     try:
         container = client.containers.get(container_name)
@@ -644,7 +644,7 @@ def pgbouncer_uninstall(container_name):
     """Uninstall pgbouncer package"""
     container_name = container_name.strip()
     if not container_name:
-        pytest.skip("No container defined in .env")
+        pytest.skip("No container defined in env")
 
     try:
         container = client.containers.get(container_name)
@@ -690,7 +690,7 @@ def pgbouncer_cleanup(container_name):
     """Full cleanup: remove config files and pgbouncer user"""
     container_name = container_name.strip()
     if not container_name:
-        pytest.skip("No container defined in .env")
+        pytest.skip("No container defined in env")
 
     try:
         container = client.containers.get(container_name)
@@ -716,7 +716,7 @@ def pgbouncer_cleanup(container_name):
     if exit_code == 0:
         print(f"Removed user: {pgbouncer_user}")
 
-    # Step 2: Optionally clean data directory (if defined in .env)
+    # Step 2: Optionally clean data directory (if defined in env)
     if pgdata:
         print(f"Removing PGDATA directory {pgdata} in {container_name}")
         container.exec_run(f"rm -rf {pgdata}", user="root")

@@ -9,16 +9,16 @@ import pytest
 from dotenv import load_dotenv
 import json
 
-# CRITICAL: Load .env BEFORE any other imports or code
+# CRITICAL: Load env BEFORE any other imports or code
 load_dotenv()
 
 # Verify instances are loaded
 if not os.getenv("INSTANCES"):
-    print("ERROR: INSTANCES not found in .env file!")
+    print("ERROR: INSTANCES not found in env file!")
     print(f"Current INSTANCES value: {os.getenv('INSTANCES')}")
     sys.exit(1)
 
-# Load values from .env
+# Load values from env
 repo = os.getenv("REPO", "release")
 components = os.getenv("SERVER_COMPONENTS", "").split(",")
 pguser = os.getenv("PG_USER", "postgres")
@@ -222,7 +222,7 @@ print("=" * 80 + "\n")
 
 if not INSTANCES_LIST:
     print("WARNING: No instances configured!")
-    print("Please check your .env file has INSTANCES variable set correctly")
+    print("Please check your env file has INSTANCES variable set correctly")
 
 
 # Pytest configuration
@@ -230,9 +230,9 @@ def pytest_configure(config):
     """Pytest configuration hook"""
     if not INSTANCES_LIST:
         print("\n" + "=" * 80)
-        print("ERROR: No instances configured in .env file")
+        print("ERROR: No instances configured in env file")
         print("=" * 80)
-        print("\nPlease add the following to your .env file:")
+        print("\nPlease add the following to your env file:")
         print("INSTANCES=hostname1.com,hostname2.com")
         print("USERNAMES=rocky")
         print("KEY_PATHS=keys/yourkey.pem")
@@ -259,7 +259,7 @@ def pytest_generate_tests(metafunc):
 def ssh_manager(request):
     """Create SSH connection for each instance"""
     if request.param is None:
-        pytest.skip("No instances configured in .env file")
+        pytest.skip("No instances configured in env file")
 
     instance_config = request.param
     manager = get_ssh_manager(instance_config)

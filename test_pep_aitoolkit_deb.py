@@ -11,7 +11,7 @@ from test_pep_server_rhel import upgrade_repo
 load_dotenv()
 client = docker.from_env()
 
-# Load values from .env
+# Load values from env
 containers = os.getenv("DEB_CONTAINERS", "").split(",")
 repo = os.getenv("REPO", "release")
 upgrade_repo = os.getenv("UPGRADE_REPO", "staging")
@@ -27,7 +27,7 @@ pgdata = os.getenv("PG_DATA_DIR", "/tmp/n1")
 server_version = os.getenv("PG_VERSION", "17.6")
 pg_major_version = os.getenv("PG_MAJOR_VERSION", "17")
 check_extensions = os.getenv("TEST_EXTENSIONS", "false").lower() == "true"
-# Extensions defined in .env (core + contrib)
+# Extensions defined in env (core + contrib)
 base_extensions = os.getenv(
     "EXTENSIONS",
     "bloom,bool_plperl,btree_gin,btree_gist,citext,cube,dblink,"
@@ -46,7 +46,7 @@ pl_extensions = os.getenv("PL_EXTENSIONS", "plperl,plpython3u,pltcl").split(",")
 def test_pgedge_install(container_name):
     container_name = container_name.strip()
     if not container_name:
-        pytest.skip("No container defined in .env")
+        pytest.skip("No container defined in env")
 
     try:
         container = client.containers.get(container_name)
@@ -164,7 +164,7 @@ def test_single_component_upgrade(container_name, component):
     This creates separate test for each container-component combination
     """
     if os.getenv("UPGRADE", "false").lower() != "true":
-        pytest.skip("Skipping upgrade tests because UPGRADE=false in .env")
+        pytest.skip("Skipping upgrade tests because UPGRADE=false in env")
 
     container_name = container_name.strip()
     component = component.strip()
@@ -271,7 +271,7 @@ def test_start_server(container_name):
 @pytest.mark.parametrize("container_name", containers)
 def test_check_connection(container_name):
     if not check_extensions:
-        pytest.skip("Extension check disabled via .env")
+        pytest.skip("Extension check disabled via env")
 
     container = client.containers.get(container_name.strip())
     assert container.status == "running"
@@ -331,7 +331,7 @@ def test_create_single_extension(container_name, extension):
     """Create each extension individually per container"""
 
     if not check_extensions:
-        pytest.skip("Extension check disabled via .env")
+        pytest.skip("Extension check disabled via env")
 
     container_name = container_name.strip()
     extension = extension.strip()
@@ -427,7 +427,7 @@ def cleanup_all_pgedge_packages(container_name):
     container_name = container_name.strip()
 
     if not container_name:
-        pytest.skip("No container defined in .env")
+        pytest.skip("No container defined in env")
 
     try:
         container = client.containers.get(container_name)
@@ -478,7 +478,7 @@ def remove_pgdata_directory(container_name):
     container_name = container_name.strip()
 
     if not container_name:
-        pytest.skip("No container defined in .env")
+        pytest.skip("No container defined in env")
 
     try:
         container = client.containers.get(container_name)
@@ -489,7 +489,7 @@ def remove_pgdata_directory(container_name):
 
 
     if not pgdata:
-        pytest.skip("PGDATA not defined in .env")
+        pytest.skip("PGDATA not defined in env")
 
     print(f"\n--- Removing PGDATA directory {pgdata} from {container_name} ---")
 

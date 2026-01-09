@@ -6,22 +6,22 @@ import pytest
 import docker
 from dotenv import load_dotenv
 
-load_dotenv(override=True)
-
+load_dotenv()
 client = docker.from_env()
 
 # Load values from env
 containers = os.getenv("DEB_CONTAINERS", "").split(",")
 repo = os.getenv("REPO", "release")
-upgrade_repo = os.getenv("UPGRADE_REPO", "staging")
+upgrade_repo = os.getenv("UPGRADE_REPO", "release")
 components = os.getenv("DEB_SERVER_COMPONENTS", "").split(",")
 pguser = os.getenv("PG_USER", "postgres")
 pgport = os.getenv("PG_PORT", "5432")
-pgbin = os.getenv("DEB_PG_BIN_PATH", "/usr/lib/postgresql/18/bin/")
+pgbin = os.getenv("DEB_PG_BIN_PATH", "/usr/lib/postgresql/17/bin")
 pgdata = os.getenv("PG_DATA_DIR", "/tmp/n1")
-server_version = os.getenv("PG_VERSION", "17.6")
+server_version = os.getenv("PG_VERSION", "17.2")
 pg_major_version = os.getenv("PG_MAJOR_VERSION", "17")
 check_extensions = os.getenv("TEST_EXTENSIONS", "false").lower() == "true"
+
 # Extensions defined in env (core + contrib)
 base_extensions = os.getenv(
     "EXTENSIONS",
@@ -31,12 +31,6 @@ base_extensions = os.getenv(
     "pg_trgm,pgcrypto,pgrowlocks,pgstattuple,plperl,plpgsql,postgres_fdw,"
     "seg,sslinfo,tablefunc,tsm_system_rows,tsm_system_time,unaccent,uuid-ossp",
 ).split(",")
-
-# Extra extensions requiring package installs
-pl_packages = os.getenv("PL_PACKAGES", "pgedge-postgresql18-plperl,pgedge-postgresql18-pltcl,pgedge-postgresql18-plpython3").split(",")
-pl_extensions = os.getenv("PL_EXTENSIONS", "plperl,plpython3u,pltcl").split(",")
-
-
 
 
 @pytest.mark.parametrize("container_name", containers)
@@ -53,11 +47,11 @@ def test_pgedge_install(container_name):
     assert container.status == "running"
 
     # Detect platform: RHEL (dnf) or Ubuntu (apt-get)
-    exit_code, _ = container.exec_run("sh -c 'command -v dnf'", user="root")
+    exit_code, _ = container.exec_run("command -v dnf", user="root")
     if exit_code == 0:
         platform = "rhel"
     else:
-        exit_code, _ = container.exec_run("sh -c 'command -v apt-get'", user="root")
+        exit_code, _ = container.exec_run("/bin/bash -c 'command -v apt-get'", user="root")
         if exit_code == 0:
             platform = "ubuntu"
         else:
@@ -68,9 +62,6 @@ def test_pgedge_install(container_name):
     if platform == "rhel":
         # Step 1: Install repo
         repo_url = "https://dnf.pgedge.com/reporpm/pgedge-release-latest.noarch.rpm"
-        exit_code, output = container.exec_run(
-            f"dnf upgrade -y", user="root"
-        )
         exit_code, output = container.exec_run(
             f"dnf install -y {repo_url}", user="root"
         )
@@ -85,10 +76,14 @@ def test_pgedge_install(container_name):
     elif platform == "ubuntu":
         # Step 1: Install repo via .deb
         deb_url = "https://apt.pgedge.com/repodeb/pgedge-release_latest_all.deb"
+        install_cmd = f"""
+            curl -sSL {deb_url} -o /tmp/pgedge-release.deb && \
+            dpkg -i /tmp/pgedge-release.deb && \
+            rm -f /tmp/pgedge-release.deb || true
+        """
+
         exit_code, output = container.exec_run(
-            f"bash -c 'curl -sSL {deb_url} -o /tmp/pgedge-release.deb && "
-            f"dpkg -i /tmp/pgedge-release.deb && "
-            f"rm -f /tmp/pgedge-release.deb || true'",
+            f"/bin/bash -c \"{install_cmd}\"",
             user="root",
         )
         assert exit_code == 0, f"Failed to install repo: {output.decode()}"
@@ -96,7 +91,7 @@ def test_pgedge_install(container_name):
         # Step 2: Switch repo if needed
         if repo in ["staging", "daily"]:
             container.exec_run(
-                f"sed -i 's|release|{repo}|g' /etc/apt/sources.list.d/pgedge.list",
+                f"sed -i 's|release|{repo}|g' /etc/apt/sources.list.d/pgedge.sources",
                 user="root",
             )
 
@@ -104,14 +99,13 @@ def test_pgedge_install(container_name):
         exit_code, output = container.exec_run("apt-get update", user="root")
         assert exit_code == 0, f"apt-get update failed: {output.decode()}"
 
-
-# Rewritten version with individual component marking
+# Simple approach: One test per component with dynamic parametrization
 @pytest.mark.parametrize("container_name", containers)
 @pytest.mark.parametrize("component", components)
-def test_install_components(container_name, component):
-    """Install each component individually with separate test results
+def test_single_component_install(container_name, component):
+    """Simple approach: Test each component individually
 
-    This creates a separate test for each container-component combination
+    This creates separate test for each container-component combination
     """
     container_name = container_name.strip()
     component = component.strip()
@@ -126,37 +120,38 @@ def test_install_components(container_name, component):
 
     assert container.status == "running"
 
-    # Detect package manager inside the container
-    exit_code, _ = container.exec_run("sh -c 'command -v dnf'", user="root")
+    # Detect platform
+    exit_code, _ = container.exec_run("command -v dnf", user="root")
     if exit_code == 0:
-        pkg_mgr = "dnf install -y"
         platform = "rhel"
     else:
-        exit_code, _ = container.exec_run("sh -c 'command -v apt-get'", user="root")
+        exit_code, _ = container.exec_run("/bin/bash -c 'command -v apt-get'", user="root")
         if exit_code == 0:
-            # Ensure apt repo is updated (only once per container)
-            container.exec_run("apt-get update", user="root")
-            pkg_mgr = "apt-get install -y"
-            platform = "debian"
+            platform = "ubuntu"
         else:
             pytest.skip(f"No supported package manager found in {container_name}")
 
-    print(f"\n--- Installing {component} on {container_name} ({platform}) using {pkg_mgr} ---")
+    print(f"\n--- Installing {component} on {container_name} ({platform}) ---")
 
-    # Install the component
-    exit_code, output = container.exec_run(
-        f"{pkg_mgr} {component}",
-        user="root"
-    )
+    # Install component
+    if platform == "rhel":
+        exit_code, output = container.exec_run(
+            f"dnf install -y {component}", user="root"
+        )
+    else:  # ubuntu
+        exit_code, output = container.exec_run(
+            f"apt-get install -y {component}", user="root"
+        )
 
     assert exit_code == 0, f"Failed to install {component}: {output.decode()}"
     print(f"✅ Successfully installed {component}")
 
 
+
 @pytest.mark.parametrize("container_name", containers)
 @pytest.mark.parametrize("component", components)
 def test_upgrade_components(container_name, component):
-    """Install each component individually with separate test results
+    """Upgrade each component individually with separate test results
 
     This creates a separate test for each container-component combination
     """
@@ -176,83 +171,38 @@ def test_upgrade_components(container_name, component):
 
     assert container.status == "running"
 
+    # Switch repo if needed
+    if upgrade_repo in ["staging", "daily"]:
+        container.exec_run(
+            f"sed -i 's|release|{upgrade_repo}|g' /etc/apt/sources.list.d/pgedge.list",
+            user="root",
+        )
 
-    # Detect package manager inside the container
-    exit_code, _ = container.exec_run("sh -c 'command -v dnf'", user="root")
-    if exit_code == 0:
-        # Step 2: Switch repo if needed
-        if upgrade_repo in ["staging", "daily"]:
-            container.exec_run(
-                f"sed -i 's|release|{upgrade_repo}|g' /etc/yum.repos.d/pgedge.repo", user="root"
-            )
-        pkg_mgr = "dnf upgrade -y"
-        platform = "rhel"
-    else:
-        exit_code, _ = container.exec_run("sh -c 'command -v apt-get'", user="root")
-        if exit_code == 0:
-            if upgrade_repo in ["staging", "daily"]:
-                print(f"Switching repository from 'release' to '{upgrade_repo}' for upgrades...")
+    # Update and upgrade
+    container.exec_run("apt-get update", user="root")
 
-                # Check file content before
-                before_exit, before_content = container.exec_run(
-                    "cat /etc/apt/sources.list.d/pgedge.sources",
-                    user="root"
-                )
-                print(f"Before: {before_content.decode().strip()}")
+    print(f"\n--- Upgrading {component} on {container_name} (Debian/Ubuntu) ---")
 
-                # Perform sed replacement
-                sed_exit, sed_output = container.exec_run(
-                    f"sh -c 'sed -i \"s|release|{upgrade_repo}|g\" /etc/apt/sources.list.d/pgedge.sources'",
-                    user="root",
-                )
-
-                # Check file content after
-                after_exit, after_content = container.exec_run(
-                    "cat /etc/apt/sources.list.d/pgedge.sources",
-                    user="root"
-                )
-                print(f"After: {after_content.decode().strip()}")
-
-                if sed_exit != 0:
-                    print(f"Warning: sed command failed: {sed_output.decode()}")
-                elif before_content == after_content:
-                    print(f"Warning: File content did not change - 'release' may not be present in file")
-                else:
-                    print(f"✅ Repository successfully switched to {upgrade_repo}")
-            # Ensure apt repo is updated (only once per container)
-            container.exec_run("apt-get update", user="root")
-            pkg_mgr = "apt-get install --only-upgrade -y"
-            platform = "debian"
-        else:
-            pytest.skip(f"No supported package manager found in {container_name}")
-
-    print(f"\n--- Installing {component} on {container_name} ({platform}) using {pkg_mgr} ---")
-
-    # Install the component
+    # Upgrade the component
     exit_code, output = container.exec_run(
-        f"{pkg_mgr} {component} ",
+        f"apt-get upgrade -y {component}",
         user="root"
     )
+
     output_text = output.decode("utf-8").lower()
-    print(f"<UNK> Successfully installed {component}: {output_text}")
-    if exit_code==0:
-        if "nothing to do." in output_text or "already installed" in output_text:
-            print(f"ℹ️ {component} version is already installed.")
-            pytest.skip(f" {component} upgrade not found, version is already installed. {container_name}")
-        elif "upgraded" in output_text or "install" in output_text:
+    print(f"Output: {output_text}")
+
+    if exit_code == 0:
+        if "0 upgraded" in output_text or "already the newest version" in output_text:
+            print(f"ℹ️ {component} version is already the newest.")
+            pytest.skip(f"{component} upgrade not found, version is already the newest. {container_name}")
+        elif "upgraded" in output_text or "newly installed" in output_text:
             print(f"✅ Successfully upgraded {component}.")
         else:
             print(f"⚠️ Could not determine status for {component}.")
 
-    assert exit_code == 0, f"Failed to install {component}: {output.decode()}"
-    print(f"✅ Successfully installed {component}")
-
-# Alternative: Optimized version with apt-get update only once per container
-@pytest.fixture(scope="module")
-def apt_update_cache():
-    """Cache to track which containers have had apt-get update run"""
-    return set()
-
+    assert exit_code == 0, f"Failed to upgrade {component}: {output.decode()}"
+    print(f"✅ Successfully upgraded {component}")
 
 
 @pytest.mark.parametrize("container_name", containers)
@@ -276,22 +226,38 @@ def test_verify_component_versions(container_name, component):
 
     assert container.status == "running"
 
-    # Extract base component name by removing 'pgedge-' prefix and version suffix
-    # For Debian: pgedge-postgresql-18-lolor -> lolor
-    base_name = component.replace("pgedge-", "")
+    # Extract base component name from Debian package format
+    # Example: pgedge-postgresql-16-pgvector -> PGEDGE_PGVECTOR_16_VERSION
+    import re
 
-    # Handle Debian package naming: postgresql-18-lolor -> lolor
-    if base_name.startswith("postgresql-"):
-        base_name = base_name.replace("postgresql-", "")
-        # Remove version prefix like "18-"
-        import re
-        base_name = re.sub(r'^\d+-', '', base_name)
+    # Remove 'pgedge-postgresql-' prefix if present
+    base_component = component
+    if base_component.startswith("pgedge-postgresql-"):
+        base_component = base_component.replace("pgedge-postgresql-", "")
+        # Now we have: "16-pgvector" or "plperl-16" etc.
+
+        # Try to extract version and component name
+        # Pattern: <version>-<component> or <component>-<version>
+        match = re.match(r'^(\d+)-(.+)$', base_component)
+        if match:
+            version_num = match.group(1)
+            comp_name = match.group(2)
+            # Construct: PGEDGE_PGVECTOR_16_VERSION
+            component_env_key = f"PGEDGE_{comp_name.upper().replace('-', '_')}_{version_num}_VERSION"
+        else:
+            # Handle cases like "plperl-16" (component-version format)
+            match = re.match(r'^(.+)-(\d+)$', base_component)
+            if match:
+                comp_name = match.group(1)
+                version_num = match.group(2)
+                component_env_key = f"PGEDGE_{comp_name.upper().replace('-', '_')}_{version_num}_VERSION"
+            else:
+                # Fallback to original logic for non-versioned packages
+                component_env_key = f"{component.upper().replace('-', '_')}_VERSION"
     else:
-        # Handle RHEL naming (if any): lolor_18 -> lolor
-        base_name = base_name.rsplit('_', 1)[0]
+        # For packages like pgedge-pgbouncer, pgedge-pgbackrest
+        component_env_key = f"{component.upper().replace('-', '_')}_VERSION"
 
-    # Construct environment variable name: PGEDGE_LOLOR_18_VERSION
-    component_env_key = f"PGEDGE_{base_name.upper()}_{pg_major_version}_VERSION"
     expected_version = os.getenv(component_env_key)
 
     if not expected_version:
@@ -300,20 +266,9 @@ def test_verify_component_versions(container_name, component):
     print(f"\n--- Verifying {component} version on {container_name} ---")
     print(f"Expected version: {expected_version}")
 
-    # Detect package manager inside the container
-    exit_code, _ = container.exec_run("sh -c 'command -v dnf'", user="root")
-    if exit_code == 0:
-        # RHEL-based: use rpm to query version (VERSION-RELEASE to include beta/rc tags)
-        version_cmd = f"rpm -q --queryformat '%{{VERSION}}-%{{RELEASE}}' {component}"
-        platform = "rhel"
-    else:
-        exit_code, _ = container.exec_run("sh -c 'command -v apt-get'", user="root")
-        if exit_code == 0:
-            # Debian-based: use dpkg-query to get version
-            version_cmd = f"dpkg-query --showformat='${{Version}}' --show {component}"
-            platform = "debian"
-        else:
-            pytest.skip(f"No supported package manager found in {container_name}")
+    # Debian-based: use dpkg-query to get version
+
+    version_cmd = f"dpkg-query --showformat='${{Version}}' --show {component}"
 
     # Get installed version
     exit_code, output = container.exec_run(version_cmd, user="root")
@@ -325,9 +280,8 @@ def test_verify_component_versions(container_name, component):
     print(f"Installed version: {installed_version}")
 
     # Version comparison - check if expected version is contained in installed version
-    # This handles cases like installed="16.2-1.el9" and expected="16.2"
     assert expected_version in installed_version, (
-        f"Version mismatch for {component} on {container_name} ({platform})\n"
+        f"Version mismatch for {component} on {container_name} (Debian/Ubuntu)\n"
         f"Expected: {expected_version}\n"
         f"Installed: {installed_version}"
     )
@@ -356,28 +310,29 @@ def test_verify_bundled_files(container_name, component):
 
     assert container.status == "running"
 
-    # Extract base component name by removing 'pgedge-' prefix and version suffix
-    # For Debian: pgedge-postgresql-18-lolor -> lolor
-    base_name = component.replace("pgedge-", "")
+    # Extract base component name by removing prefixes
+    # Example: pgedge-postgresql-17-pg-search -> pg-search
+    # Example: pgedge-anonymizer -> anonymizer
+    import re
+    base_name = component
 
-    # Handle Debian package naming: postgresql-18-lolor -> lolor
-    if base_name.startswith("postgresql-"):
-        base_name = base_name.replace("postgresql-", "")
-        # Remove version prefix like "18-"
-        import re
+    # First try to remove pgedge-postgresql-XX- pattern
+    if base_name.startswith("pgedge-postgresql-"):
+        base_name = base_name.replace("pgedge-postgresql-", "")
+        # Remove version prefix (17-, 16-, etc.)
         base_name = re.sub(r'^\d+-', '', base_name)
-    else:
-        # Handle RHEL naming (if any): lolor_18 -> lolor
-        base_name = base_name.rsplit('_', 1)[0]
+    # Otherwise just remove pgedge- prefix
+    elif base_name.startswith("pgedge-"):
+        base_name = base_name.replace("pgedge-", "", 1)
 
-    # Path to expected files (Debian systems)
+    # Path to expected files
     expected_file_path = f"./expected-output/deb/{base_name}"
 
     # Check if expected file exists
     if not Path(expected_file_path).exists():
         pytest.skip(f"No expected file found for {base_name} at {expected_file_path}")
 
-    print(f"\n--- Verifying bundled files for {component} on {container_name} (Debian) ---")
+    print(f"\n--- Verifying bundled files for {component} on {container_name} ---")
 
     # Read expected files
     with open(expected_file_path, 'r') as f:
@@ -385,7 +340,7 @@ def test_verify_bundled_files(container_name, component):
 
     print(f"Expected {len(expected_files)} files")
 
-    # Get installed files from container using dpkg
+    # Get installed files from container
     exit_code, output = container.exec_run(f"dpkg -L {component}", user="root")
 
     if exit_code != 0:
@@ -396,12 +351,32 @@ def test_verify_bundled_files(container_name, component):
 
     # Normalize function to remove version-specific suffixes
     def normalize_path(path):
-        """Remove version-specific parts like /17/, -17, _17, /16/, -16, _16, etc."""
+        """Remove version-specific parts like -17, /17/, -16, /16/, etc."""
         import re
-        # Replace /16/, /17/, /18/ with just /
-        normalized = re.sub(r'/(16|17|18)/', '/', path)
-        # Replace -16, -17, -18, _16, _17, _18 with empty string
-        normalized = re.sub(r'[-_](16|17|18)', '', normalized)
+        # Replace version numbers in various patterns:
+        # - /postgresql/17/ -> /postgresql/
+        # - /postgresql-17/ -> /postgresql/
+        # - -17- -> -
+        # - -17. -> .
+        # - _17_ -> _
+        # - _17. -> .
+        normalized = path
+        # Replace /16/, /17/, /18/ in paths
+        normalized = re.sub(r'/(16|17|18)/', '/', normalized)
+        # Replace /16, /17, /18 at end of path
+        normalized = re.sub(r'/(16|17|18)$', '', normalized)
+        # Replace -16-, -17-, -18-
+        normalized = re.sub(r'-(16|17|18)-', '-', normalized)
+        # Replace -16., -17., -18. (before file extension)
+        normalized = re.sub(r'-(16|17|18)\.', '.', normalized)
+        # Replace _16_, _17_, _18_
+        normalized = re.sub(r'_(16|17|18)_', '_', normalized)
+        # Replace _16., _17., _18.
+        normalized = re.sub(r'_(16|17|18)\.', '.', normalized)
+        # Replace -16, -17, -18 at end
+        normalized = re.sub(r'-(16|17|18)$', '', normalized)
+        # Replace _16, _17, _18 at end
+        normalized = re.sub(r'_(16|17|18)$', '', normalized)
         return normalized
 
     # Normalize both lists
@@ -454,6 +429,7 @@ def test_init_cluster(container_name):
     )
     assert exit_code == 0, f"Initdb failed: {output.decode()}"
 
+
 @pytest.mark.parametrize("container_name", containers)
 def test_start_server(container_name):
     container = client.containers.get(container_name.strip())
@@ -464,7 +440,8 @@ def test_start_server(container_name):
     # Append the required configuration to the existing postgresql.conf
     exit_code, output = container.exec_run(
         f"bash -c \"cat >> {pgdata}/postgresql.conf << 'EOF'\n"
-        #f"shared_preload_libraries = 'pgedge_vectorizer'\n"
+        f"shared_preload_libraries = 'pgedge_vectorizer,vector'\n"
+        #f"shared_preload_libraries = 'pg_tokenizer'\n"
         #f"cron.database_name = 'postgres'\n"
         f"EOF\"",
         user=pguser
@@ -483,6 +460,7 @@ def test_start_server(container_name):
     )
     assert exit_code == 0, f"pg_ctl start failed: {output.decode()}"
 
+
 @pytest.mark.parametrize("container_name", containers)
 def test_check_connection(container_name):
     if not check_extensions:
@@ -498,8 +476,6 @@ def test_check_connection(container_name):
     )
     assert exit_code == 0, f"psql failed: {output.decode()}"
     print(f"Postgres running:\n{output.decode()}")
-
-
 
 
 @pytest.mark.parametrize("container_name", containers)
@@ -547,7 +523,7 @@ def test_component_functional_smoke(container_name, component):
     """Execute functional smoke tests for each component
 
     This runs SQL test files from sql/<component-name>.sql
-    and stores output in actual-output/sql/<component-name>/<pg_major_version>/rpm/<timestamp>.txt
+    and stores output in actual-output/sql/<component-name>/<pg_major_version>/deb/<timestamp>.txt
     """
     if not check_extensions:
         pytest.skip("Extension check disabled via env")
@@ -565,19 +541,12 @@ def test_component_functional_smoke(container_name, component):
 
     assert container.status == "running"
 
-    # Extract base component name by removing 'pgedge-' prefix and version suffix
-    # For Debian: pgedge-postgresql-18-lolor -> lolor
-    base_name = component.replace("pgedge-", "")
-
-    # Handle Debian package naming: postgresql-18-lolor -> lolor
-    if base_name.startswith("postgresql-"):
-        base_name = base_name.replace("postgresql-", "")
-        # Remove version prefix like "18-"
-        import re
-        base_name = re.sub(r'^\d+-', '', base_name)
-    else:
-        # Handle RHEL naming (if any): lolor_18 -> lolor
-        base_name = base_name.rsplit('_', 1)[0]
+    # Extract base component name
+    # Example: pgedge-postgresql-17-pg-search -> pg-search
+    base_name = component.replace("pgedge-postgresql-", "")
+    # Remove version prefix (17-, 16-, etc.)
+    import re
+    base_name = re.sub(r'^\d+-', '', base_name)
 
     # Path to SQL test file
     sql_file_path = f"./sql/{base_name}.sql"
@@ -638,6 +607,23 @@ def test_component_functional_smoke(container_name, component):
     if exit_code != 0:
         print(f"⚠️ SQL execution had errors (exit code: {exit_code})")
         print(f"Output:\n{output.decode()}")
+
+        # Capture PostgreSQL server log for debugging
+        log_exit, log_output = container.exec_run(
+            f"tail -100 {pgdata}/logfile",
+            user=pguser
+        )
+        if log_exit == 0:
+            print(f"\n=== PostgreSQL Server Log (last 100 lines) ===")
+            print(log_output.decode())
+
+            # Append server log to output file
+            with open(output_file, 'a') as f:
+                f.write("\n\n" + "=" * 80 + "\n")
+                f.write("PostgreSQL Server Log (last 100 lines):\n")
+                f.write("=" * 80 + "\n")
+                f.write(log_output.decode())
+
         pytest.fail(f"SQL test failed for {component}: See {output_file} for details")
 
     print(f"✅ Functional smoke test passed: {component}")
@@ -669,9 +655,15 @@ def test_verify_extension_versions(container_name, extension):
     assert container.status == "running"
 
     # Map extension names to their environment variable names
-    # Extension names may differ from package names
     extension_env_map = {
-        "lolor": f"PGEDGE_LOLOR_{pg_major_version}_VERSION"
+        "vector": f"PGEDGE_PGVECTOR_{pg_major_version}_VERSION",
+        "pg_cron": f"PGEDGE_PG_CRON_{pg_major_version}_VERSION",
+        "pgmq": f"PGEDGE_PGMQ_{pg_major_version}_VERSION",
+        "vectorize": f"PGEDGE_PG_VECTORIZE_{pg_major_version}_VERSION",
+        "pg_stat_monitor": f"PGEDGE_PG_STAT_MONITOR_{pg_major_version}_VERSION",
+        "pg_tokenizer": f"PGEDGE_PG_TOKENIZER_{pg_major_version}_VERSION",
+        "vchord_bm25": f"PGEDGE_VCHORD_BM25_{pg_major_version}_VERSION",
+        "pg_search": f"PGEDGE_PG_SEARCH_{pg_major_version}_VERSION",
     }
 
     # Skip if this extension doesn't have a version mapping
@@ -730,23 +722,22 @@ def test_verify_extension_versions(container_name, extension):
         print(f"✅ Version verified: {extension} {installed_version}")
 
 
-
 @pytest.mark.parametrize("container_name", containers)
 def test_stop_server(container_name):
     container = client.containers.get(container_name.strip())
     assert container.status == "running"
 
-    print(f"Starting PostgreSQL server on {container_name}")
+    print(f"Stopping PostgreSQL server on {container_name}")
     exit_code, output = container.exec_run(
         f"{pgbin}/pg_ctl -D {pgdata} -o '-p {pgport}' -l {pgdata}/logfile stop",
         user=pguser,
     )
-    assert exit_code == 0, f"pg_ctl start failed: {output.decode()}"
+    assert exit_code == 0, f"pg_ctl stop failed: {output.decode()}"
 
 
 @pytest.mark.parametrize("container_name", containers)
 def test_pgedge_uninstall(container_name):
-    """Uninstall all pgedge packages"""
+    """Uninstall only the listed components from env"""
     container_name = container_name.strip()
     if not container_name:
         pytest.skip("No container defined in env")
@@ -758,16 +749,13 @@ def test_pgedge_uninstall(container_name):
 
     assert container.status == "running"
 
-    print(f"Uninstalling all pgedge packages in {container_name} (Debian)")
+    for pkg in components:
+        pkg = pkg.strip()
+        if pkg:
+            print(f"Uninstalling {pkg} in {container_name}")
+            exit_code, output = container.exec_run(f"apt-get remove -y '{pkg}*'", user="root")
+            assert exit_code == 0, f"Failed to uninstall {pkg}: {output.decode()}"
 
-    # Remove all packages starting with 'pgedge-'
-    exit_code, output = container.exec_run("apt-get remove -y 'pgedge-*'", user="root")
-
-    if exit_code == 0:
-        print(f"✅ Successfully uninstalled all pgedge packages")
-    else:
-        print(f"⚠️ Uninstall command exited with code {exit_code}")
-        print(f"Output: {output.decode()}")
 
 @pytest.mark.parametrize("container_name", containers)
 def test_pgedge_cleanup(container_name):
@@ -783,14 +771,14 @@ def test_pgedge_cleanup(container_name):
 
     assert container.status == "running"
 
-    # Step 1: Check if any pgedge packages exist (Debian)
-    exit_code, output = container.exec_run("dpkg -l | grep pgedge | awk '{print $2}'", user="root")
+    # Step 1: Check if any pgedge packages exist
+    exit_code, output = container.exec_run("dpkg -l | grep pgedge", user="root")
     packages = output.decode().strip().splitlines()
 
-    if not packages or exit_code != 0:
-        print(f"No pgedge packages found in {container_name} (Debian), skipping uninstall step.")
+    if not packages:
+        print(f"No pgedge packages found in {container_name}, skipping uninstall step.")
     else:
-        print(f"Cleaning up pgedge packages in {container_name} (Debian): {packages}")
+        print(f"Cleaning up pgedge packages in {container_name}: {packages}")
         exit_code, output = container.exec_run("apt-get remove -y 'pgedge-*'", user="root")
         assert exit_code == 0, f"Failed global cleanup: {output.decode()}"
 
@@ -800,5 +788,5 @@ def test_pgedge_cleanup(container_name):
         container.exec_run(f"rm -rf {pgdata}", user="root")
 
     # Step 3: Delete user postgres created by automation setup
-    print(f"Removing {pguser} User  in {container_name}")
+    print(f"Removing {pguser} User in {container_name}")
     container.exec_run(f"userdel {pguser}", user="root")

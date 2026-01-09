@@ -13,7 +13,7 @@ HOSTNAME = "ec2-65-0-18-65.ap-south-1.compute.amazonaws.com"
 USERNAME = "rocky"
 KEY_PATH = "keys/zaid_key_official.pem"
 
-# Load values from .env
+# Load values from env
 repo = os.getenv("REPO", "release")
 components = os.getenv("SERVER_COMPONENTS", "").split(",")
 pguser = os.getenv("PG_USER", "postgres")

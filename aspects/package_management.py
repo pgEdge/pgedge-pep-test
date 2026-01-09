@@ -97,7 +97,7 @@ def uninstall_package(container, package_name):
     else:
         exit_code, _ = container.exec_run("/bin/bash -c 'command -v apt-get'", user="root")
         if exit_code == 0:
-            pkg_mgr = "apt purge -y"
+            pkg_mgr = "apt-get purge -y"
             platform = "debian"
         else:
             raise Exception("No supported package manager found (dnf or apt-get)")
@@ -107,7 +107,9 @@ def uninstall_package(container, package_name):
     # Uninstall the package
     print(f"Uninstalling {package_name}...")
     exit_code, output = container.exec_run(
-        f"{pkg_mgr} {package_name}",
+        ## Comment out the line due to not working on Debian-based systems. User not properly removed.
+        #f"{pkg_mgr} {package_name}",
+        f"{pkg_mgr} pgedge-*",
         user="root"
     )
 
@@ -175,3 +177,47 @@ def verify_package_version(container, package_name, expected_version):
     print(f" {message}")
 
     return True, platform, installed_version, message
+
+
+def validate_bundled_file(container, file_path):
+    """
+    Validate that a bundled file exists in the container.
+
+    Args:
+        container: Docker container object with exec_run method
+        file_path: Path to the file/directory to validate
+
+    Returns:
+        tuple: (success: bool, file_info: str, message: str)
+
+    Raises:
+        Exception: If file validation fails
+    """
+
+    print(f"\n--- Validating bundled file: {file_path} ---")
+
+    # Check if file/directory exists
+    exit_code, output = container.exec_run(
+        f"test -e {file_path}",
+        user="root"
+    )
+
+    if exit_code != 0:
+        raise Exception(f"Bundled file/directory not found: {file_path}")
+
+    # Get file type info
+    exit_code, output = container.exec_run(
+        f"ls -la {file_path}",
+        user="root"
+    )
+
+    if exit_code != 0:
+        raise Exception(f"Failed to get file info for {file_path}: {output.decode()}")
+
+    file_info = output.decode().strip()
+    print(f"File info: {file_info}")
+
+    message = f"Bundled file validated: {file_path}"
+    print(f" {message}")
+
+    return True, file_info, message

@@ -9,7 +9,7 @@ from dotenv import load_dotenv
 load_dotenv()
 client = docker.from_env()
 
-# Load values from .env
+# Load values from env
 containers = os.getenv("CONTAINERS", "").split(",")
 repo = os.getenv("REPO", "release")
 
@@ -42,7 +42,7 @@ def test_configure_repository(container_name):
     """Step 1: Configure the repository file"""
     container_name = container_name.strip()
     if not container_name:
-        pytest.skip("No container defined in .env")
+        pytest.skip("No container defined in env")
 
     try:
         container = client.containers.get(container_name)
@@ -112,7 +112,7 @@ def test_component_install(container_name):
     """Step 2: Install pgedge-snowflake from staging, release, or daily repository"""
     container_name = container_name.strip()
     if not container_name:
-        pytest.skip("No container defined in .env")
+        pytest.skip("No container defined in env")
 
     try:
         container = client.containers.get(container_name)
@@ -150,13 +150,13 @@ def test_component_install(container_name):
 
 @pytest.mark.parametrize("container_name", containers)
 def test_snowflake_verify_version(container_name):
-    """Step 3: Check the package version matches the version in .env file"""
+    """Step 3: Check the package version matches the version in env file"""
     container_name = container_name.strip()
     if not container_name:
-        pytest.skip("No container defined in .env")
+        pytest.skip("No container defined in env")
 
     if not snowflake_version:
-        pytest.skip("No PGBOUNCER_VERSION defined in .env, skipping version check")
+        pytest.skip("No PGBOUNCER_VERSION defined in env, skipping version check")
 
     try:
         container = client.containers.get(container_name)
@@ -778,7 +778,7 @@ def test_snowflake_uninstall(container_name):
     """Uninstall pgbouncer package"""
     container_name = container_name.strip()
     if not container_name:
-        pytest.skip("No container defined in .env")
+        pytest.skip("No container defined in env")
 
     try:
         container = client.containers.get(container_name)
@@ -826,7 +826,7 @@ def test_pgedge_cleanup(container_name):
     """Full cleanup: remove all pgedge packages + leftover data"""
     container_name = container_name.strip()
     if not container_name:
-        pytest.skip("No container defined in .env")
+        pytest.skip("No container defined in env")
 
     try:
         container = client.containers.get(container_name)
@@ -846,7 +846,7 @@ def test_pgedge_cleanup(container_name):
         exit_code, output = container.exec_run("dnf remove -y 'pgedge-*'", user="root")
         assert exit_code == 0, f"Failed global cleanup: {output.decode()}"
 
-    # Step 2: Optionally clean data directory (if defined in .env)
+    # Step 2: Optionally clean data directory (if defined in env)
     if pgdata:
         print(f"Removing PGDATA directory {pgdata} in {container_name}")
         container.exec_run(f"rm -rf {pgdata}", user="root")

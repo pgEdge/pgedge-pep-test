@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+ #!/usr/bin/env python3
 """
 Generic repository configuration module for pgedge packages.
 Supports both RHEL-based and Debian-based distributions.

@@ -122,9 +122,76 @@ def uninstall_package(container, package_name):
     return True, platform, message
 
 
+def normalize_version(version_string, package_name=""):
+    """
+    Normalize a version string to handle beta versions with different formats.
+
+    Beta normalization is only applied if:
+    1. The version string contains "beta", OR
+    2. The package name contains keywords: vectorizer, anonymizer, rag, mcp, nla
+
+    Handles formats like:
+    - 1.0-beta2, 1.0.0-beta1 (hyphen separator)
+    - 1.0beta2, 1.0.0beta2 (no separator)
+    - 1.0, 1.0.0 (different precision)
+    - 16.11-1.bullseye (Debian packaging suffix)
+
+    Args:
+        version_string: Version string to normalize
+        package_name: Optional package name to determine if beta logic should apply
+
+    Returns:
+        str: Normalized version string in format "1.0.0.beta2" (dots as separators) or "1.0.0" for non-beta
+    """
+    import re
+
+    # Convert to lowercase for case-insensitive comparison
+    version = version_string.lower().strip()
+    package_lower = package_name.lower()
+
+    # Strip Debian/Ubuntu packaging suffixes like -1.bullseye, -2.jammy, etc.
+    # Pattern: -<digit>[.<distro>] at the end of version string
+    version = re.sub(r'-\d+\.[a-z]+$', '', version)
+    version = re.sub(r'-\d+$', '', version)
+
+    # Check if this is a beta package
+    beta_package_keywords = ['vectorizer', 'anonymizer', 'rag', 'mcp', 'nla']
+    is_beta_package = any(keyword in package_lower for keyword in beta_package_keywords)
+    has_beta_in_version = 'beta' in version
+
+    # Only apply beta normalization if it's a beta package or version contains 'beta'
+    beta_suffix = ""
+    if is_beta_package or has_beta_in_version:
+        # Handle beta versions with hyphen separator: 1.0-beta2 -> 1.0.beta2
+        version = re.sub(r'-beta', '.beta', version)
+
+        # Split into version parts and beta suffix
+        beta_match = re.search(r'\.?beta(\d*)', version)
+        if beta_match:
+            beta_suffix = f".beta{beta_match.group(1)}"
+            version = version[:beta_match.start()]
+
+    # Split version by dots
+    version_parts = version.split('.')
+
+    # Pad to 3 parts (major.minor.patch)
+    while len(version_parts) < 3:
+        version_parts.append('0')
+
+    # Reconstruct normalized version
+    normalized = '.'.join(version_parts[:3]) + beta_suffix
+
+    return normalized
+
+
 def verify_package_version(container, package_name, expected_version):
     """
     Verify the installed version of a package.
+
+    Supports beta versions with different formats:
+    - 1.0-beta2, 1.0.0-beta1 (hyphen separator)
+    - 1.0beta2, 1.0.0beta2 (no separator)
+    - Different version precision (1.0 vs 1.0.0)
 
     Args:
         container: Docker container object with exec_run method
@@ -165,12 +232,20 @@ def verify_package_version(container, package_name, expected_version):
     installed_version = output.decode().strip()
     print(f"Installed version: {installed_version}")
 
-    # Version comparison - check if expected version is contained in installed version
-    if expected_version not in installed_version:
+    # Normalize both versions for comparison to handle beta formats
+    # Pass package_name to determine if beta logic should apply
+    normalized_expected = normalize_version(expected_version, package_name)
+    normalized_installed = normalize_version(installed_version, package_name)
+
+    print(f"Normalized expected: {normalized_expected}")
+    print(f"Normalized installed: {normalized_installed}")
+
+    # Version comparison - check if normalized expected version is contained in normalized installed version
+    if normalized_expected not in normalized_installed:
         raise Exception(
             f"Version mismatch for {package_name} on {platform}\n"
-            f"Expected: {expected_version}\n"
-            f"Installed: {installed_version}"
+            f"Expected: {expected_version} (normalized: {normalized_expected})\n"
+            f"Installed: {installed_version} (normalized: {normalized_installed})"
         )
 
     message = f"Version verified: {package_name} {installed_version} on {platform}"

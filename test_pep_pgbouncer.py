@@ -608,7 +608,7 @@ def test_pgbouncer_show_databases(container_name):
 
 
 @pytest.mark.parametrize("container_name", containers)
-def pgbouncer_stop_service(container_name):
+def test_pgbouncer_stop_service(container_name):
     """Stop PgBouncer service for cleanup"""
     container_name = container_name.strip()
     if not container_name:
@@ -640,7 +640,7 @@ def pgbouncer_stop_service(container_name):
 
 
 @pytest.mark.parametrize("container_name", containers)
-def pgbouncer_uninstall(container_name):
+def test_pgbouncer_uninstall(container_name):
     """Uninstall pgbouncer package"""
     container_name = container_name.strip()
     if not container_name:
@@ -686,7 +686,7 @@ def pgbouncer_uninstall(container_name):
 
 
 @pytest.mark.parametrize("container_name", containers)
-def pgbouncer_cleanup(container_name):
+def test_pgbouncer_cleanup(container_name):
     """Full cleanup: remove config files and pgbouncer user"""
     container_name = container_name.strip()
     if not container_name:

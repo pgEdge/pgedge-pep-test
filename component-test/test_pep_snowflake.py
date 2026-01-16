@@ -44,6 +44,7 @@ deb_pguser = os.getenv("DEB_PG_USER", "postgres")
 # RHEL-specific configuration
 rhel_pgbin = os.getenv("PG_BIN_PATH", f"/usr/pgsql-{pg_major_version}/bin")
 rhel_snowflake_package = os.getenv("SNOWFLAKE_PACKAGE", f"pgedge-snowflake_{pg_major_version}")
+rhel_snowflake_lib = os.getenv("RHEL_SNOWFLAKE_LIB", f"/usr/pgsql-{pg_major_version}/lib")
 rhel_bundled_files = os.getenv(
     "SNOWFLAKE_BUNDLED_FILES",
     f"/usr/pgsql-{pg_major_version}/lib/snowflake.so,/usr/pgsql-{pg_major_version}/sbom/snowflake-sbom.json,/usr/pgsql-{pg_major_version}/sbom/snowflake-sbom.json.asc,/usr/pgsql-{pg_major_version}/share/extension/snowflake--1.0--1.1.sql,/usr/pgsql-{pg_major_version}/share/extension/snowflake--1.0.sql,/usr/pgsql-{pg_major_version}/share/extension/snowflake--1.1--1.2.sql,/usr/pgsql-{pg_major_version}/share/extension/snowflake--1.1.sql,/usr/pgsql-{pg_major_version}/share/extension/snowflake--1.2--2.0.sql,/usr/pgsql-{pg_major_version}/share/extension/snowflake--1.2.sql,/usr/pgsql-{pg_major_version}/share/extension/snowflake--2.0--2.2.sql,/usr/pgsql-{pg_major_version}/share/extension/snowflake--2.0.sql,/usr/pgsql-{pg_major_version}/share/extension/snowflake--2.2.sql,/usr/pgsql-{pg_major_version}/share/extension/snowflake.control,/usr/share/doc/pgedge-snowflake_{pg_major_version}/README.md,/usr/share/licenses/pgedge-snowflake_{pg_major_version}/LICENSE.md"
@@ -54,10 +55,14 @@ deb_pgbin = os.getenv("DEB_PG_BIN_PATH", f"/usr/lib/postgresql/{pg_major_version
 deb_pg_path = os.getenv("DEB_PG_PATH", f"/usr/lib/postgresql/{pg_major_version}")
 deb_pg_share_path = os.getenv("DEB_PG_SHARE_PATH", f"/usr/share/postgresql/{pg_major_version}")
 deb_snowflake_package = os.getenv("DEB_SNOWFLAKE_PACKAGE", f"pgedge-postgresql-{pg_major_version}-snowflake")
+deb_snowflake_lib = os.getenv("DEB_SNOWFLAKE_LIB", f"/usr/lib/postgresql/{pg_major_version}/lib")
 deb_bundled_files = os.getenv(
     "DEB_SNOWFLAKE_BUNDLED_FILES",
     f"{deb_pg_path}/lib/snowflake.so,{deb_pg_share_path}/extension/snowflake--1.0--1.1.sql,{deb_pg_share_path}/extension/snowflake--1.0.sql,{deb_pg_share_path}/extension/snowflake--1.1--1.2.sql,{deb_pg_share_path}/extension/snowflake--1.1.sql,{deb_pg_share_path}/extension/snowflake--1.2--2.0.sql,{deb_pg_share_path}/extension/snowflake--1.2.sql,{deb_pg_share_path}/extension/snowflake--2.0--2.2.sql,{deb_pg_share_path}/extension/snowflake--2.0.sql,{deb_pg_share_path}/extension/snowflake--2.2.sql,{deb_pg_share_path}/extension/snowflake.control"
 ).split(",")
+
+# Snowflake stripped library names (comma-separated list)
+snowflake_stripped_lib = os.getenv("SNOWFLAKE_STRIPPED_LIB", "snowflake.so")
 
 
 def get_container_config(container_type):
@@ -67,6 +72,7 @@ def get_container_config(container_type):
             "pgbin": rhel_pgbin.rstrip('/'),
             "pguser": rhel_pguser,
             "snowflake_package": rhel_snowflake_package,
+            "snowflake_lib": rhel_snowflake_lib,
             "bundled_files": rhel_bundled_files
         }
     else:  # deb
@@ -74,6 +80,7 @@ def get_container_config(container_type):
             "pgbin": deb_pgbin.rstrip('/'),
             "pguser": deb_pguser,
             "snowflake_package": deb_snowflake_package,
+            "snowflake_lib": deb_snowflake_lib,
             "bundled_files": deb_bundled_files
         }
 
@@ -199,6 +206,50 @@ def test_component_package_version(container_name, container_type):
 
 
 @pytest.mark.parametrize("container_name,container_type", all_containers)
+def test_verify_binaries_stripped(container_name, container_type):
+    """Step 4: Verify that Snowflake libraries are stripped using file_management module"""
+    container_name = container_name.strip()
+    if not container_name:
+        pytest.skip("No container defined in env")
+
+    try:
+        container = client.containers.get(container_name)
+    except docker.errors.NotFound:
+        pytest.skip(f"Container {container_name} not found or not running.")
+
+    assert container.status == "running"
+
+    # Get container-specific configuration
+    config = get_container_config(container_type)
+    snowflake_lib_dir = config.get("snowflake_lib", "")
+
+    if not snowflake_lib_dir:
+        pytest.skip(f"No snowflake library directory configured for {container_type}")
+
+    print(f"\n--- Verifying Snowflake libraries are stripped in {snowflake_lib_dir} on {container_name} ({container_type}) ---")
+
+    # Use file_management module to verify binaries are stripped
+    try:
+        success, details, message = file_management.verify_binaries_stripped(
+            container=container,
+            binary_path=snowflake_lib_dir.rstrip('/'),
+            container_name=container_name,
+            binary_names=snowflake_stripped_lib
+        )
+
+        # If verification failed, fail the test with details
+        if not success:
+            pytest.fail(f"Failed: {message}\n{details}")
+
+        print(f"✅ {message}")
+        if details:
+            print(f"   Details: {details}")
+
+    except Exception as e:
+        pytest.fail(f"Failed to verify binaries are stripped: {str(e)}")
+
+
+@pytest.mark.parametrize("container_name,container_type", all_containers)
 def test_verify_bundled_files(container_name, container_type):
     """Verify bundled files for the snowflake component match expected files
 
@@ -237,7 +288,18 @@ def test_verify_bundled_files(container_name, container_type):
 
         # If verification failed, fail the test with details
         if not success:
-            pytest.fail(f"{message}\nSee output above for details.")
+            # Format details for display
+            details_str = ""
+            if details:
+                if "missing" in details and details["missing"]:
+                    details_str += f"\n\nMissing files ({len(details['missing'])}):\n"
+                    for file in details["missing"]:
+                        details_str += f"  - {file}\n"
+                if "extra" in details and details["extra"]:
+                    details_str += f"\nExtra files ({len(details['extra'])}):\n"
+                    for file in details["extra"]:
+                        details_str += f"  + {file}\n"
+            pytest.fail(f"{message}{details_str}")
 
     except Exception as e:
         # Handle cases like missing expected files

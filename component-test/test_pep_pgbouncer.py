@@ -51,6 +51,7 @@ rhel_pgbouncer_user = os.getenv("PGBOUNCER_USER", "pgbouncer")
 deb_pgbouncer_user = os.getenv("DEB_PGBOUNCER_USER", "postgres")
 pgbouncer_port = os.getenv("PGBOUNCER_PORT", "6432")
 pgbouncer_config_dir = os.getenv("PGBOUNCER_CONFIG_DIR", "/etc/pgbouncer")
+pgbouncer_stripped_bin = os.getenv("PGBOUNCER_STRIPPED_BIN", "pgbouncer")
 
 # RHEL-specific configuration
 rhel_pgbin = os.getenv("PG_BIN_PATH", f"/usr/pgsql-{pg_major_version}/bin")
@@ -91,6 +92,7 @@ def get_container_config(container_type):
             "pguser": deb_pguser,
             "server_package": deb_server_package,
             "pgbouncer_package": deb_pgbouncer_package,
+            "pgbouncer_bin": deb_pgbouncer_bin,
             "pgbouncer_user": deb_pgbouncer_user
         }
 
@@ -214,19 +216,64 @@ def test_component_package_version(container_name, container_type):
     except Exception as e:
         pytest.fail(f"Failed to verify {pgbouncer_package} version: {str(e)}")
 
+
 @pytest.mark.parametrize("container_name,container_type", all_containers)
-@pytest.mark.parametrize("component", components)
-def test_verify_bundled_files(container_name, container_type, component):
+def test_verify_binaries_stripped(container_name, container_type):
+    """Step 4: Verify that PgBouncer binaries are stripped using file_management module"""
+    container_name = container_name.strip()
+    if not container_name:
+        pytest.skip("No container defined in env")
+
+    # Get container-specific configuration
+    config = get_container_config(container_type)
+    pgbouncer_bin_dir = config.get("pgbouncer_bin", rhel_pgbouncer_bin if container_type == "rhel" else deb_pgbouncer_bin)
+
+    try:
+        container = client.containers.get(container_name)
+    except docker.errors.NotFound:
+        pytest.skip(f"Container {container_name} not found or not running.")
+
+    assert container.status == "running"
+
+    print(f"\n--- Verifying PgBouncer binaries are stripped on {container_name} ({container_type}) ---")
+    print(f"Binary directory: {pgbouncer_bin_dir}")
+    print(f"Binaries to check: {pgbouncer_stripped_bin}")
+
+    # Use the file_management module to verify specific binaries are stripped
+    try:
+        success, details, message = file_management.verify_binaries_stripped(
+            container=container,
+            binary_path=pgbouncer_bin_dir,
+            container_name=container_name,
+            binary_names=pgbouncer_stripped_bin  # Check specific binary from env
+        )
+
+        # Display results
+        print(f"Total binaries checked: {details['total_binaries']}")
+        print(f"Stripped binaries: {details['stripped_binaries']}")
+
+        if not success:
+            print(f"⚠️ Unstripped binaries found: {len(details['unstripped_binaries'])}")
+            for binary in details['unstripped_binaries'][:5]:
+                print(f"  - {binary}")
+
+        assert success, f"Binary stripping verification failed: {message}"
+        print(f"✅ {message}")
+    except Exception as e:
+        pytest.fail(f"Failed to verify binaries are stripped: {str(e)}")
+
+
+@pytest.mark.parametrize("container_name,container_type", all_containers)
+def test_verify_bundled_files(container_name, container_type):
     """Verify bundled files for each component match expected files
 
     This compares the installed files from rpm/deb with expected files
     in expected-output/rpm/ or expected-output/deb/ directory
     """
     container_name = container_name.strip()
-    component = component.strip()
 
-    if not container_name or not component:
-        pytest.skip("Invalid container or component")
+    if not container_name:
+        pytest.skip("Invalid container")
 
     try:
         container = client.containers.get(container_name)
@@ -244,18 +291,31 @@ def test_verify_bundled_files(container_name, container_type, component):
 
     try:
         # Call reusable verification function
+        # Use actual_package for both component and package_name to ensure
+        # correct expected file lookup based on the platform
         success, details, message = file_management.verify_bundled_files(
             container=container,
             container_name=container_name,
             container_type=container_type,
-            component=component,
+            component=actual_package,
             package_name=actual_package,
             project_root=project_root
         )
 
         # If verification failed, fail the test with details
         if not success:
-            pytest.fail(f"{message}\nSee output above for details.")
+            # Format details for display
+            details_str = ""
+            if details:
+                if "missing" in details and details["missing"]:
+                    details_str += f"\n\nMissing files ({len(details['missing'])}):\n"
+                    for file in details["missing"]:
+                        details_str += f"  - {file}\n"
+                if "extra" in details and details["extra"]:
+                    details_str += f"\nExtra files ({len(details['extra'])}):\n"
+                    for file in details["extra"]:
+                        details_str += f"  + {file}\n"
+            pytest.fail(f"{message}{details_str}")
 
     except Exception as e:
         # Handle cases like missing expected files

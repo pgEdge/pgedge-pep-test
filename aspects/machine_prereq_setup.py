@@ -58,6 +58,7 @@ def setup_debian():
     run("apt-get install -y sudo")
     run("apt-get install -y gnupg2")
     run("apt-get install -y lsb-release")
+    run("apt-get install -y file")
 
     # Add pgEdge repo
     cmd = (
@@ -73,48 +74,62 @@ def setup_rhel9():
     print("\n=== RHEL 9 Prerequisites ===")
     run("sudo dnf -y install https://dl.fedoraproject.org/pub/epel/epel-release-latest-9.noarch.rpm")
     run("sudo dnf config-manager --set-enabled codeready-builder-for-rhel-9-rhui-rpms")
+    run("sudo dnf install -y file")
 
 
 def setup_rhel10():
     print("\n=== RHEL 10 Prerequisites ===")
     run("sudo dnf -y install https://dl.fedoraproject.org/pub/epel/epel-release-latest-10.noarch.rpm")
     run("sudo subscription-manager repos --enable codeready-builder-for-rhel-10-x86_64-rpms")
+    run("sudo dnf install -y file")
 
 
 def setup_rocky9():
     print("\n=== Rocky Linux 9 Prerequisites ===")
+    run("dnf install -y sudo")
     run("sudo dnf install -y epel-release")
     run("sudo dnf config-manager --set-enabled crb")
+    run("sudo dnf install -y file")
 
 
 def setup_rocky10():
     print("\n=== Rocky Linux 10 Prerequisites ===")
+    run("dnf install -y sudo")
     run("sudo dnf install -y epel-release")
     run("sudo dnf config-manager --set-enabled crb")
+    run("sudo dnf install -y file")
 
 
 def setup_oracle9():
     print("\n=== Oracle Linux 9 Prerequisites ===")
+    run("dnf install -y sudo")
     run("sudo dnf -y install https://dl.fedoraproject.org/pub/epel/epel-release-latest-9.noarch.rpm")
     run("sudo dnf config-manager --set-enabled ol9_codeready_builder")
+    run("sudo dnf install -y file")
 
 
 def setup_oracle10():
     print("\n=== Oracle Linux 10 Prerequisites ===")
+    run("dnf install -y sudo")
     run("sudo dnf -y install https://dl.fedoraproject.org/pub/epel/epel-release-latest-10.noarch.rpm")
     run("sudo dnf config-manager --set-enabled ol10_codeready_builder")
+    run("sudo dnf install -y file")
 
 
 def setup_alma9():
     print("\n=== AlmaLinux 9 Prerequisites ===")
+    run("dnf install -y sudo")
     run("sudo dnf install -y epel-release")
     run("sudo dnf config-manager --set-enabled crb")
+    run("sudo dnf install -y file")
 
 
 def setup_alma10():
     print("\n=== AlmaLinux 10 Prerequisites ===")
+    run("dnf install -y sudo")
     run("sudo dnf install -y epel-release")
     run("sudo dnf config-manager --set-enabled crb")
+    run("sudo dnf install -y file")
 
 
 def install_prerequisites_on_container(container):

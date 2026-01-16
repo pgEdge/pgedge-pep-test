@@ -205,18 +205,16 @@ def test_component_package_version(container_name, container_type):
         pytest.fail(f"Failed to verify {lolor_package} version: {str(e)}")
 
 @pytest.mark.parametrize("container_name,container_type", all_containers)
-@pytest.mark.parametrize("component", components)
-def test_verify_bundled_files(container_name, container_type, component):
+def test_verify_bundled_files(container_name, container_type):
     """Verify bundled files for each component match expected files
 
     This compares the installed files from rpm/deb with expected files
     in expected-output/rpm/ or expected-output/deb/ directory
     """
     container_name = container_name.strip()
-    component = component.strip()
 
-    if not container_name or not component:
-        pytest.skip("Invalid container or component")
+    if not container_name:
+        pytest.skip("Invalid container")
 
     try:
         container = client.containers.get(container_name)
@@ -234,18 +232,31 @@ def test_verify_bundled_files(container_name, container_type, component):
 
     try:
         # Call reusable verification function
+        # Use actual_package for both component and package_name to ensure
+        # correct expected file lookup based on the platform
         success, details, message = file_management.verify_bundled_files(
             container=container,
             container_name=container_name,
             container_type=container_type,
-            component=component,
+            component=actual_package,
             package_name=actual_package,
             project_root=project_root
         )
 
         # If verification failed, fail the test with details
         if not success:
-            pytest.fail(f"{message}\nSee output above for details.")
+            # Format details for display
+            details_str = ""
+            if details:
+                if "missing" in details and details["missing"]:
+                    details_str += f"\n\nMissing files ({len(details['missing'])}):\n"
+                    for file in details["missing"]:
+                        details_str += f"  - {file}\n"
+                if "extra" in details and details["extra"]:
+                    details_str += f"\nExtra files ({len(details['extra'])}):\n"
+                    for file in details["extra"]:
+                        details_str += f"  + {file}\n"
+            pytest.fail(f"{message}{details_str}")
 
     except Exception as e:
         # Handle cases like missing expected files

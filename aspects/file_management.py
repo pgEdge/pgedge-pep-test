@@ -238,15 +238,27 @@ def verify_bundled_files(
     # Extract base component name by removing 'pgedge-' prefix and version suffix
     # Example: pgedge-lolor_18 -> lolor (RHEL)
     # Example: pgedge-postgresql-18-lolor -> lolor (Debian)
+    # Example: pgedge-postgresql-18-system-stats -> system_stats (Debian multi-word)
+    import re
+
     if container_type == "rhel":
         base_name = component.replace("pgedge-", "").rsplit('_', 1)[0]
     else:  # deb
         # For Debian packages, handle both formats:
         # - pgedge-postgresql-18-lolor -> lolor (proper Debian format)
+        # - pgedge-postgresql-18-system-stats -> system_stats (multi-word component)
         # - pgedge-lolor_18 -> lolor (RHEL format used with Debian container)
         if "postgresql" in component:
-            # Debian format: pgedge-postgresql-18-lolor
-            base_name = component.split('-')[-1]
+            # Debian format: pgedge-postgresql-{version}-{component}
+            # Remove the prefix pattern and extract the component name
+            match = re.match(r'pgedge-postgresql-\d+-(.+)', component)
+            if match:
+                # Get component name and replace hyphens with underscores
+                # This handles multi-word components like system-stats -> system_stats
+                base_name = match.group(1).replace('-', '_')
+            else:
+                # Fallback to old logic
+                base_name = component.split('-')[-1]
         else:
             # RHEL format used on Debian: pgedge-lolor_18
             base_name = component.replace("pgedge-", "").rsplit('_', 1)[0]
@@ -335,3 +347,251 @@ def verify_bundled_files(
         print(f"✅ {message}")
 
     return True, details, message
+
+
+def verify_binaries_stripped(container, binary_path, container_name=None, binary_names=None):
+    """
+    Verify that binaries or libraries are stripped (debugging symbols removed).
+
+    This checks executable files or libraries to ensure they have debugging symbols removed (stripped).
+    Can check either all files in a directory or specific files.
+
+    Args:
+        container: Docker container object with exec_run method
+        binary_path: Path to directory containing binaries (e.g., "/usr/bin") or base path for specific files
+        container_name: Optional name of container for logging purposes
+        binary_names: Optional comma-separated string or list of specific binary/library names to check
+                     (e.g., "pgbouncer" or "postgis-3.so,address_standardizer-3.so")
+                     If not provided, checks all files in binary_path directory
+
+    Returns:
+        tuple: (success: bool, details: dict, message: str)
+            details contains:
+                - total_binaries: total number of ELF binaries found
+                - stripped_binaries: number of stripped binaries
+                - unstripped_binaries: list of unstripped binary paths
+
+    Raises:
+        Exception: If command execution fails
+    """
+
+    display_name = container_name if container_name else "container"
+
+    # Check if 'file' command is available using command -v (more reliable than which)
+    check_exit_code, check_output = container.exec_run(
+        ["/bin/sh", "-c", "command -v file"],
+        user="root"
+    )
+
+    if check_exit_code != 0:
+        raise Exception(
+            f"'file' command not found in container. Please install it first.\n"
+            f"For RHEL/RPM: yum install -y file\n"
+            f"For Debian/DEB: apt-get install -y file"
+        )
+
+    # Parse binary_names if it's a comma-separated string
+    if binary_names:
+        if isinstance(binary_names, str):
+            binary_list = [b.strip() for b in binary_names.split(',') if b.strip()]
+        else:
+            binary_list = binary_names
+
+        print(f"\n--- Verifying {len(binary_list)} specific binaries are stripped on {display_name} ---")
+        print(f"Checking: {', '.join(binary_list)}")
+
+        # Build list of full paths
+        full_paths = [f"{binary_path.rstrip('/')}/{binary}" for binary in binary_list]
+    else:
+        print(f"\n--- Verifying all binaries are stripped in {binary_path} on {display_name} ---")
+        full_paths = None
+
+    # Build the file command based on whether we're checking specific files or a directory
+    if full_paths:
+        # Check specific files
+        files_to_check = ' '.join(f'"{path}"' for path in full_paths)
+
+        # Check which files are NOT stripped
+        check_cmd = f"file {files_to_check} | grep ELF | grep -v stripped || true"
+        count_cmd = f"file {files_to_check} | grep ELF | wc -l"
+    else:
+        # Check all files in directory
+        check_cmd = f"find {binary_path} -type f -exec file {{}} \\; | grep ELF | grep -v stripped || true"
+        count_cmd = f"find {binary_path} -type f -exec file {{}} \\; | grep ELF | wc -l"
+
+    # Execute commands with /bin/sh to handle pipes correctly
+    exit_code, output = container.exec_run(
+        ["/bin/sh", "-c", check_cmd],
+        user="root"
+    )
+
+    output_text = output.decode().strip()
+
+    # Get total count of ELF binaries
+    exit_code_total, output_total = container.exec_run(
+        ["/bin/sh", "-c", count_cmd],
+        user="root"
+    )
+
+    if exit_code_total != 0:
+        raise Exception(f"Failed to count binaries: {output_total.decode()}")
+
+    total_binaries = int(output_total.decode().strip())
+
+    # Parse unstripped binaries
+    unstripped_binaries = []
+    if output_text:
+        # Each line format: "/path/to/binary: ELF 64-bit LSB executable..."
+        for line in output_text.splitlines():
+            if line.strip():
+                # Extract just the path (before the first colon)
+                binary_path = line.split(':')[0].strip()
+                unstripped_binaries.append(binary_path)
+
+    stripped_count = total_binaries - len(unstripped_binaries)
+
+    # Prepare details
+    details = {
+        "total_binaries": total_binaries,
+        "stripped_binaries": stripped_count,
+        "unstripped_binaries": unstripped_binaries
+    }
+
+    print(f"Total ELF binaries found: {total_binaries}")
+    print(f"Stripped binaries: {stripped_count}")
+    print(f"Unstripped binaries: {len(unstripped_binaries)}")
+
+    # Check if verification passed
+    if unstripped_binaries:
+        # Unstripped binaries found
+        print(f"\n⚠️ Found {len(unstripped_binaries)} unstripped binaries:")
+        for binary in unstripped_binaries[:10]:  # Show first 10
+            print(f"  - {binary}")
+        if len(unstripped_binaries) > 10:
+            print(f"  ... and {len(unstripped_binaries) - 10} more")
+
+        location = f"specified files" if binary_names else binary_path
+        message = f"Binary stripping verification failed: {len(unstripped_binaries)} unstripped binaries found in {location}"
+        return False, details, message
+
+    # All binaries are stripped
+    location = f"specified files" if binary_names else binary_path
+    message = f"All {total_binaries} binaries/libraries are properly stripped ({location})"
+    print(f"✅ {message}")
+
+    return True, details, message
+
+
+def copy_file_to_container(
+    container,
+    local_file_path,
+    container_file_path,
+    permissions="600",
+    owner="root"
+):
+    """
+    Copy a file from local filesystem to container with specified permissions.
+
+    This function reads content from a local file and writes it to a container
+    using heredoc to avoid issues with special characters.
+
+    Args:
+        container: Docker container object with exec_run method
+        local_file_path: Path to local file (e.g., "keys/open_api_key")
+        container_file_path: Destination path in container (e.g., "/tmp/api_key_file")
+        permissions: File permissions in octal string format (default: "600")
+        owner: Owner for the file (default: "root")
+
+    Returns:
+        tuple: (success: bool, message: str)
+            success: True if file was copied successfully
+            message: Success or error message
+
+    Raises:
+        Exception: If file read, write, or permission setting fails
+    """
+
+    print(f"\n--- Copying file to container ---")
+    print(f"Source: {local_file_path}")
+    print(f"Destination: {container_file_path}")
+
+    # Check if local file exists
+    if not os.path.exists(local_file_path):
+        message = f"Local file not found: {local_file_path}"
+        print(f"❌ {message}")
+        return False, message
+
+    # Read the file content from local filesystem
+    try:
+        with open(local_file_path, 'r') as f:
+            file_content = f.read().strip()
+        print(f"✓ Read {len(file_content)} bytes from local file")
+    except Exception as e:
+        message = f"Failed to read local file: {str(e)}"
+        print(f"❌ {message}")
+        return False, message
+
+    # Create parent directory in container if needed
+    parent_dir = os.path.dirname(container_file_path)
+    if parent_dir:
+        exit_code, output = container.exec_run(
+            f"mkdir -p {parent_dir}",
+            user="root"
+        )
+        if exit_code != 0:
+            message = f"Failed to create parent directory: {output.decode()}"
+            print(f"❌ {message}")
+            return False, message
+
+    # Copy file content to container using heredoc
+    try:
+        exit_code, output = container.exec_run(
+            f"bash -c \"cat > {container_file_path} << 'EOFILE'\n{file_content}\nEOFILE\"",
+            user="root"
+        )
+        if exit_code != 0:
+            message = f"Failed to write file to container: {output.decode()}"
+            print(f"❌ {message}")
+            return False, message
+        print(f"✓ File written to container")
+    except Exception as e:
+        message = f"Failed to copy file to container: {str(e)}"
+        print(f"❌ {message}")
+        return False, message
+
+    # Set file permissions
+    try:
+        exit_code, output = container.exec_run(
+            f"chmod {permissions} {container_file_path}",
+            user="root"
+        )
+        if exit_code != 0:
+            message = f"Failed to set file permissions: {output.decode()}"
+            print(f"❌ {message}")
+            return False, message
+        print(f"✓ Permissions set to {permissions}")
+    except Exception as e:
+        message = f"Failed to set file permissions: {str(e)}"
+        print(f"❌ {message}")
+        return False, message
+
+    # Set file ownership if not root
+    if owner != "root":
+        try:
+            exit_code, output = container.exec_run(
+                f"chown {owner}:{owner} {container_file_path}",
+                user="root"
+            )
+            if exit_code != 0:
+                message = f"Failed to set file ownership: {output.decode()}"
+                print(f"❌ {message}")
+                return False, message
+            print(f"✓ Ownership set to {owner}")
+        except Exception as e:
+            message = f"Failed to set file ownership: {str(e)}"
+            print(f"❌ {message}")
+            return False, message
+
+    message = f"File successfully copied to {container_file_path} with {permissions} permissions"
+    print(f"✅ {message}")
+    return True, message

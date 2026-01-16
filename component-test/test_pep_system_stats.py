@@ -10,10 +10,57 @@ from dotenv import load_dotenv
 
 # Add the parent directory to sys.path to import from aspects
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
-from aspects import configure_repository, package_management, pg_server_management, machine_cleanup, machine_prereq_setup, file_management
+from aspects import configure_repository, package_management, pg_server_management, machine_cleanup, machine_prereq_setup, file_management, container_management
 
 load_dotenv()
 client = docker.from_env()
+
+# ============================================================================
+# CONFIGURATION SECTION - Modify these lines for different components
+# ============================================================================
+
+# Component name (used in messages and file paths)
+COMPONENT_NAME = "system_stats"  # Change this: e.g., "lolor", "snowflake", "postgis"
+COMPONENT_NAME_UPPER = "SYSTEM_STATS"  # Uppercase version for env variables
+
+# Environment variable keys (customize based on your component)
+# Format: PGEDGE_<COMPONENT>_<PG_VERSION>_VERSION
+VERSION_ENV_KEY = f"PGEDGE_SYSTEM_STATS_{{pg_version}}_VERSION"  # e.g., PGEDGE_LOLOR_16_VERSION
+VERSION_DEFAULT = "3.2.1"  # Default version if not set in env
+
+# Package names
+RHEL_PACKAGE_ENV = "SYSTEM_STATS_PACKAGE"  # Env variable name for RHEL package
+RHEL_PACKAGE_DEFAULT = "pgedge-system_stats_{{pg_version}}"  # Default RHEL package name template
+
+DEB_PACKAGE_ENV = "DEB_SYSTEM_STATS_PACKAGE"  # Env variable name for Debian package
+DEB_PACKAGE_DEFAULT = "pgedge-postgresql-{{pg_version}}-system-stats"  # Default Debian package name template
+
+# Library paths (for binary stripping verification)
+RHEL_LIB_ENV = "RHEL_SYSTEM_STATS_LIB"  # Env variable for RHEL library path
+RHEL_LIB_DEFAULT = "/usr/pgsql-{{pg_version}}/lib"  # Default RHEL library path
+
+DEB_LIB_ENV = "DEB_SYSTEM_STATS_LIB"  # Env variable for Debian library path
+DEB_LIB_DEFAULT = "/usr/lib/postgresql/{{pg_version}}/lib"  # Default Debian library path
+
+# Stripped library names (comma-separated list of .so files to check)
+STRIPPED_LIB_ENV = "SYSTEM_STATS_STRIPPED_LIB"
+STRIPPED_LIB_DEFAULT = "system_stats.so"  # e.g., "lolor.so" or "snowflake.so,other.so"
+
+# GUC parameters for PostgreSQL initialization (optional)
+# Set to None or {} if no special GUC parameters are needed
+GUC_PARAMETERS = None  # Example: {"shared_preload_libraries": "'system_stats'", "wal_level": "logical"}
+
+# Base extensions for testing (comma-separated in env)
+BASE_EXTENSIONS_ENV = "BASE_EXTENSIONS"
+BASE_EXTENSIONS_DEFAULT = COMPONENT_NAME  # Default to component name
+
+# Components for parametrized tests (comma-separated in env)
+COMPONENTS_ENV = "COMPONENTS"
+COMPONENTS_DEFAULT = "pgedge-system_stats_{{pg_version}}"  # Default component list
+
+# ============================================================================
+# END OF CONFIGURATION SECTION
+# ============================================================================
 
 # Load values from env
 rhel_containers = [c.strip() for c in os.getenv("CONTAINERS", "").split(",") if c.strip()]
@@ -35,7 +82,10 @@ repo = os.getenv("REPO", "release")
 pgport = os.getenv("PG_PORT", "5432")
 pgdata = os.getenv("PG_DATA_DIR", "/tmp/n1")
 pg_major_version = os.getenv("PG_MAJOR_VERSION", "16")
-lolor_version = os.getenv(f"PGEDGE_LOLOR_{pg_major_version}_VERSION", "1.2.2")
+
+# Component version
+version_key = VERSION_ENV_KEY.replace("{{pg_version}}", pg_major_version)
+component_version = os.getenv(version_key, VERSION_DEFAULT)
 
 # User configuration
 rhel_pguser = os.getenv("PG_USER", "postgres")
@@ -43,31 +93,28 @@ deb_pguser = os.getenv("DEB_PG_USER", "postgres")
 
 # RHEL-specific configuration
 rhel_pgbin = os.getenv("PG_BIN_PATH", f"/usr/pgsql-{pg_major_version}/bin")
-rhel_lolor_package = os.getenv("LOLOR_PACKAGE", f"pgedge-lolor_{pg_major_version}")
-rhel_lolor_lib = os.getenv("RHEL_LOLOR_LIB", f"/usr/pgsql-{pg_major_version}/lib")
-rhel_bundled_files = os.getenv(
-    "LOLOR_BUNDLED_FILES",
-    f"/usr/pgsql-{pg_major_version}/lib/lolor.so,/usr/pgsql-{pg_major_version}/share/extension/lolor--1.0--1.1.sql,/usr/pgsql-{pg_major_version}/share/extension/lolor--1.0.sql,/usr/pgsql-{pg_major_version}/share/extension/lolor--1.1--1.2.sql,/usr/pgsql-{pg_major_version}/share/extension/lolor--1.1.sql,/usr/pgsql-{pg_major_version}/share/extension/lolor--1.2.sql,/usr/pgsql-{pg_major_version}/share/extension/lolor.control"
-).split(",")
+rhel_package_template = RHEL_PACKAGE_DEFAULT.replace("{{pg_version}}", pg_major_version)
+rhel_package = os.getenv(RHEL_PACKAGE_ENV, rhel_package_template)
+rhel_lib_template = RHEL_LIB_DEFAULT.replace("{{pg_version}}", pg_major_version)
+rhel_component_lib = os.getenv(RHEL_LIB_ENV, rhel_lib_template)
 
 # Debian-specific configuration
 deb_pgbin = os.getenv("DEB_PG_BIN_PATH", f"/usr/lib/postgresql/{pg_major_version}/bin")
 deb_pg_path = os.getenv("DEB_PG_PATH", f"/usr/lib/postgresql/{pg_major_version}")
 deb_pg_share_path = os.getenv("DEB_PG_SHARE_PATH", f"/usr/share/postgresql/{pg_major_version}")
-deb_lolor_package = os.getenv("DEB_LOLOR_PACKAGE", f"pgedge-postgresql-{pg_major_version}-lolor")
-deb_lolor_lib = os.getenv("DEB_LOLOR_LIB", f"/usr/lib/postgresql/{pg_major_version}/lib")
-deb_bundled_files = os.getenv(
-    "DEB_LOLOR_BUNDLED_FILES",
-    f"{deb_pg_path}/lib/lolor.so,{deb_pg_share_path}/extension/lolor--1.0--1.1.sql,{deb_pg_share_path}/extension/lolor--1.0.sql,{deb_pg_share_path}/extension/lolor--1.1--1.2.sql,{deb_pg_share_path}/extension/lolor--1.1.sql,{deb_pg_share_path}/extension/lolor--1.2.sql,{deb_pg_share_path}/extension/lolor.control"
-).split(",")
+deb_package_template = DEB_PACKAGE_DEFAULT.replace("{{pg_version}}", pg_major_version)
+deb_package = os.getenv(DEB_PACKAGE_ENV, deb_package_template)
+deb_lib_template = DEB_LIB_DEFAULT.replace("{{pg_version}}", pg_major_version)
+deb_component_lib = os.getenv(DEB_LIB_ENV, deb_lib_template)
 
-# LOLOR stripped library names (comma-separated list)
-lolor_stripped_lib = os.getenv("LOLOR_STRIPPED_LIB", "lolor.so")
+# Stripped library names (comma-separated list)
+component_stripped_lib = os.getenv(STRIPPED_LIB_ENV, STRIPPED_LIB_DEFAULT)
 
 # Additional configuration for extension tests
 check_extensions = os.getenv("CHECK_EXTENSIONS", "true").lower() == "true"
-base_extensions = [ext.strip() for ext in os.getenv("BASE_EXTENSIONS", "lolor").split(",") if ext.strip()]
-components = [comp.strip() for comp in os.getenv("COMPONENTS", f"pgedge-lolor_{pg_major_version}").split(",") if comp.strip()]
+base_extensions = [ext.strip() for ext in os.getenv(BASE_EXTENSIONS_ENV, BASE_EXTENSIONS_DEFAULT).split(",") if ext.strip()]
+components_template = COMPONENTS_DEFAULT.replace("{{pg_version}}", pg_major_version)
+components = [comp.strip() for comp in os.getenv(COMPONENTS_ENV, components_template).split(",") if comp.strip()]
 
 
 def get_container_config(container_type):
@@ -76,17 +123,15 @@ def get_container_config(container_type):
         return {
             "pgbin": rhel_pgbin.rstrip('/'),
             "pguser": rhel_pguser,
-            "lolor_package": rhel_lolor_package,
-            "lolor_lib": rhel_lolor_lib,
-            "bundled_files": rhel_bundled_files
+            "package": rhel_package,
+            "lib": rhel_component_lib,
         }
     else:  # deb
         return {
             "pgbin": deb_pgbin.rstrip('/'),
             "pguser": deb_pguser,
-            "lolor_package": deb_lolor_package,
-            "lolor_lib": deb_lolor_lib,
-            "bundled_files": deb_bundled_files
+            "package": deb_package,
+            "lib": deb_component_lib,
         }
 
 
@@ -101,14 +146,22 @@ def test_install_prerequisites(container_name, container_type):
     if not container_name:
         pytest.skip("No container defined in env")
 
-    try:
-        container = client.containers.get(container_name)
-    except docker.errors.NotFound:
-        pytest.skip(f"Container {container_name} not found or not running.")
-
-    assert container.status == "running"
-
     print(f"\n--- Installing prerequisites on {container_name} ({container_type}) ---")
+
+    # Ensure container is running (create if needed)
+    try:
+        container, created, status_message = container_management.ensure_container_running(
+            client, container_name, container_type
+        )
+        print(f"✓ {status_message}")
+
+        if created:
+            print(f"  New container created - waiting for initialization...")
+    except Exception as e:
+        pytest.fail(f"Failed to ensure container is running: {str(e)}")
+
+    # Verify container is running
+    assert container.status == "running", f"Container {container_name} is not running (status: {container.status})"
 
     # Use the machine_prereq_setup module
     try:
@@ -147,14 +200,14 @@ def test_configure_repository(container_name, container_type):
 
 @pytest.mark.parametrize("container_name,container_type", all_containers)
 def test_component_install(container_name, container_type):
-    """Step 2: Install pgedge-lolor using package_management module"""
+    """Step 2: Install component package using package_management module"""
     container_name = container_name.strip()
     if not container_name:
         pytest.skip("No container defined in env")
 
     # Get container-specific configuration
     config = get_container_config(container_type)
-    lolor_package = config["lolor_package"]
+    package = config["package"]
 
     try:
         container = client.containers.get(container_name)
@@ -163,16 +216,16 @@ def test_component_install(container_name, container_type):
 
     assert container.status == "running"
 
-    print(f"\n--- Installing {lolor_package} on {container_name} ({container_type}) ---")
+    print(f"\n--- Installing {package} on {container_name} ({container_type}) ---")
 
     # Use the package_management module to install the package
     try:
-        success, platform, message = package_management.install_package(container, lolor_package)
+        success, platform, message = package_management.install_package(container, package)
         assert success, f"Package installation failed: {message}"
         print(f"✅ {message}")
         print(f"✅ Platform detected: {platform}")
     except Exception as e:
-        pytest.fail(f"Failed to install {lolor_package}: {str(e)}")
+        pytest.fail(f"Failed to install {package}: {str(e)}")
 
 
 @pytest.mark.parametrize("container_name,container_type", all_containers)
@@ -182,12 +235,12 @@ def test_component_package_version(container_name, container_type):
     if not container_name:
         pytest.skip("No container defined in env")
 
-    if not lolor_version:
-        pytest.skip("No LOLOR_VERSION defined in env, skipping version check")
+    if not component_version:
+        pytest.skip(f"No {COMPONENT_NAME_UPPER}_VERSION defined in env, skipping version check")
 
     # Get container-specific configuration
     config = get_container_config(container_type)
-    lolor_package = config["lolor_package"]
+    package = config["package"]
 
     try:
         container = client.containers.get(container_name)
@@ -196,22 +249,23 @@ def test_component_package_version(container_name, container_type):
 
     assert container.status == "running"
 
-    print(f"\n--- Verifying {lolor_package} version on {container_name} ({container_type}) ---")
+    print(f"\n--- Verifying {package} version on {container_name} ({container_type}) ---")
 
     # Use the package_management module to verify the package version
     try:
         success, platform, installed_version, message = package_management.verify_package_version(
-            container, lolor_package, lolor_version
+            container, package, component_version
         )
         assert success, f"Version verification failed: {message}"
         print(f"✅ {message}")
         print(f"✅ Platform detected: {platform}")
     except Exception as e:
-        pytest.fail(f"Failed to verify {lolor_package} version: {str(e)}")
+        pytest.fail(f"Failed to verify {package} version: {str(e)}")
+
 
 @pytest.mark.parametrize("container_name,container_type", all_containers)
 def test_verify_binaries_stripped(container_name, container_type):
-    """Step 4: Verify that LOLOR libraries are stripped using file_management module"""
+    """Step 4: Verify that component libraries are stripped using file_management module"""
     container_name = container_name.strip()
     if not container_name:
         pytest.skip("No container defined in env")
@@ -225,20 +279,20 @@ def test_verify_binaries_stripped(container_name, container_type):
 
     # Get container-specific configuration
     config = get_container_config(container_type)
-    lolor_lib_dir = config.get("lolor_lib", "")
+    component_lib_dir = config.get("lib", "")
 
-    if not lolor_lib_dir:
-        pytest.skip(f"No LOLOR library directory configured for {container_type}")
+    if not component_lib_dir:
+        pytest.skip(f"No {COMPONENT_NAME} library directory configured for {container_type}")
 
-    print(f"\n--- Verifying LOLOR libraries are stripped in {lolor_lib_dir} on {container_name} ({container_type}) ---")
+    print(f"\n--- Verifying {COMPONENT_NAME} libraries are stripped in {component_lib_dir} on {container_name} ({container_type}) ---")
 
     # Use file_management module to verify binaries are stripped
     try:
         success, details, message = file_management.verify_binaries_stripped(
             container=container,
-            binary_path=lolor_lib_dir.rstrip('/'),
+            binary_path=component_lib_dir.rstrip('/'),
             container_name=container_name,
-            binary_names=lolor_stripped_lib
+            binary_names=component_stripped_lib
         )
 
         # If verification failed, fail the test with details
@@ -251,6 +305,7 @@ def test_verify_binaries_stripped(container_name, container_type):
 
     except Exception as e:
         pytest.fail(f"Failed to verify binaries are stripped: {str(e)}")
+
 
 @pytest.mark.parametrize("container_name,container_type", all_containers)
 def test_verify_bundled_files(container_name, container_type):
@@ -273,7 +328,7 @@ def test_verify_bundled_files(container_name, container_type):
 
     # Get the actual package name for the platform
     config = get_container_config(container_type)
-    actual_package = config["lolor_package"]
+    actual_package = config["package"]
 
     # Get project root directory (parent of component-test/)
     project_root = Path(__file__).parent.parent
@@ -318,7 +373,7 @@ def test_verify_bundled_files(container_name, container_type):
 
 @pytest.mark.parametrize("container_name,container_type", all_containers)
 def test_init_cluster(container_name, container_type):
-    """Initialize PostgreSQL cluster with LOLOR-specific GUC parameters using pg_server_management module"""
+    """Initialize PostgreSQL cluster using pg_server_management module"""
     container_name = container_name.strip()
     if not container_name:
         pytest.skip("No container defined in env")
@@ -337,13 +392,8 @@ def test_init_cluster(container_name, container_type):
 
     print(f"\n--- Initializing cluster on {container_name} ---")
 
-    # Define LOLOR-specific GUC parameters
-    guc_parameters = {
-        "shared_preload_libraries": "'lolor'",
-        "wal_level": "logical",
-        "max_replication_slots": "10",
-        "max_wal_senders": "10"
-    }
+    # Use GUC parameters from configuration (if defined)
+    guc_parameters = GUC_PARAMETERS if GUC_PARAMETERS else {}
 
     # Use the pg_server_management module to initialize cluster
     try:
@@ -417,48 +467,6 @@ def test_check_connection(container_name, container_type):
     except Exception as e:
         pytest.fail(f"Failed to check PostgreSQL connection: {str(e)}")
 
-@pytest.mark.parametrize("container_name,container_type", all_containers)
-@pytest.mark.parametrize("extension", base_extensions)
-def test_create_extensions(container_name, container_type, extension):
-    """Create each extension individually with separate test results
-
-    This creates a separate test for each container-extension combination
-    """
-    if not check_extensions:
-        pytest.skip("Extension check disabled via env")
-
-    container_name = container_name.strip()
-    extension = extension.strip()
-
-    if not container_name or not extension:
-        pytest.skip("Invalid container or extension")
-
-    try:
-        container = client.containers.get(container_name)
-    except docker.errors.NotFound:
-        pytest.skip(f"Container {container_name} not found or not running.")
-
-    assert container.status == "running"
-
-    # Get container-specific configuration
-    config = get_container_config(container_type)
-    pgbin = config["pgbin"]
-    pguser = config["pguser"]
-
-    # Normalize extension (quote if it contains a dash)
-    normalized_ext = f'"{extension}"' if "-" in extension else extension
-
-    print(f"\n--- Creating extension {normalized_ext} in {container_name} ---")
-
-    # Create the extension
-    exit_code, output = container.exec_run(
-        f"{pgbin}/psql -p {pgport} -U {pguser} -d postgres "
-        f"-c 'CREATE EXTENSION IF NOT EXISTS {normalized_ext} CASCADE;'",
-        user=pguser,
-    )
-
-    assert exit_code == 0, f"Failed to create {normalized_ext}: {output.decode()}"
-    print(f"✅ Successfully created extension {normalized_ext}")
 
 
 @pytest.mark.parametrize("container_name,container_type", all_containers)
@@ -491,7 +499,7 @@ def test_component_functional_smoke(container_name, container_type, component):
     pguser = config["pguser"]
 
     # Extract base component name by removing 'pgedge-' prefix and version suffix
-    # Example: pgedge-pg-search_17 -> pg-search
+    # Example: pgedge-system_stats_17 -> system_stats
     base_name = component.replace("pgedge-", "")
     # Remove version suffix (_17, _16, etc.)
     base_name = base_name.rsplit('_', 1)[0]
@@ -522,7 +530,7 @@ def test_component_functional_smoke(container_name, container_type, component):
     if exit_code != 0:
         pytest.fail(f"Failed to create SQL file in container: {output.decode()}")
 
-    # Execute the SQL file
+    # Execute the SQL file (without ON_ERROR_STOP so all statements run)
     exit_code, output = container.exec_run(
         f"{pgbin}/psql -p {pgport} -U {pguser} -d postgres -f {temp_sql_path}",
         user=pguser
@@ -530,6 +538,9 @@ def test_component_functional_smoke(container_name, container_type, component):
 
     # Clean up temp file
     container.exec_run(f"rm -f {temp_sql_path}", user=pguser)
+
+    # Decode output for analysis
+    output_text = output.decode()
 
     # Create output directory structure
     date_part = datetime.now().strftime("%d%m%y")  # ddmmyy format
@@ -553,13 +564,16 @@ def test_component_functional_smoke(container_name, container_type, component):
         f.write(f"# Date: {date_part} Time: {time_part}\n")
         f.write(f"# SQL File: {sql_file_path}\n")
         f.write("=" * 80 + "\n\n")
-        f.write(output.decode())
+        f.write(output_text)
 
     print(f"Output saved to: {output_file}")
 
-    if exit_code != 0:
+    # Check for errors in output
+    has_errors = "ERROR:" in output_text or exit_code != 0
+
+    if has_errors:
         print(f"⚠️ SQL execution had errors (exit code: {exit_code})")
-        print(f"Output:\n{output.decode()}")
+        print(f"Output:\n{output_text}")
         pytest.fail(f"SQL test failed for {component}: See {output_file} for details")
 
     print(f"✅ Functional smoke test passed: {component}")
@@ -602,14 +616,14 @@ def test_stop_server(container_name, container_type):
 
 @pytest.mark.parametrize("container_name,container_type", all_containers)
 def test_package_uninstall(container_name, container_type):
-    """Uninstall lolor package using package_management module"""
+    """Uninstall component package using package_management module"""
     container_name = container_name.strip()
     if not container_name:
         pytest.skip("No container defined in env")
 
     # Get container-specific configuration
     config = get_container_config(container_type)
-    lolor_package = config["lolor_package"]
+    package = config["package"]
 
     try:
         container = client.containers.get(container_name)
@@ -618,16 +632,16 @@ def test_package_uninstall(container_name, container_type):
 
     assert container.status == "running"
 
-    print(f"\n--- Uninstalling {lolor_package} on {container_name} ({container_type}) ---")
+    print(f"\n--- Uninstalling {package} on {container_name} ({container_type}) ---")
 
     # Use the package_management module to uninstall the package
     try:
-        success, platform, message = package_management.uninstall_package(container, lolor_package)
+        success, platform, message = package_management.uninstall_package(container, package)
         assert success, f"Package uninstallation failed: {message}"
         print(f"✅ {message}")
         print(f"✅ Platform detected: {platform}")
     except Exception as e:
-        pytest.fail(f"Failed to uninstall {lolor_package}: {str(e)}")
+        pytest.fail(f"Failed to uninstall {package}: {str(e)}")
 
 
 @pytest.mark.parametrize("container_name,container_type", all_containers)

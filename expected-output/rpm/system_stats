@@ -1,0 +1,14 @@
+/usr/pgsql-18/include/server/extension/system_stats/misc.h
+/usr/pgsql-18/include/server/extension/system_stats/system_stats.h
+/usr/pgsql-18/lib/system_stats.so
+/usr/pgsql-18/sbom/system_stats-sbom.json
+/usr/pgsql-18/sbom/system_stats-sbom.json.asc
+/usr/pgsql-18/share/extension/system_stats--1.0--2.0.sql
+/usr/pgsql-18/share/extension/system_stats--1.0.sql
+/usr/pgsql-18/share/extension/system_stats--2.0--3.0.sql
+/usr/pgsql-18/share/extension/system_stats--2.0.sql
+/usr/pgsql-18/share/extension/system_stats--3.0.sql
+/usr/pgsql-18/share/extension/system_stats.control
+/usr/pgsql-18/share/extension/uninstall_system_stats.sql
+/usr/share/doc/pgedge-system_stats_18/README.md
+/usr/share/licenses/pgedge-system_stats_18/LICENSE

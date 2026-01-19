@@ -1,6 +1,6 @@
 #!/bin/bash
 
-# Directory containing your .env files
+# Directory containing your env files
 ENV_DIR="./configuration"
 
 mkdir -p test-logs
@@ -24,9 +24,10 @@ read -p "Enter your choice (RPM/DEB/all): " platform_choice
 echo "Select test type(s) to run:"
 echo "1) server - PostgreSQL server tests"
 echo "2) snowflake - Snowflake extension tests"
-echo "3) pgbouncer - PgBouncer tests"
-echo "4) all - All tests"
-read -p "Enter your choice (server/snowflake/pgbouncer/all): " test_type_choice
+echo "3) lolor - lolor extension tests"
+echo "4) pgbouncer - PgBouncer tests"
+echo "5) all - All tests"
+read -p "Enter your choice (server/snowflake/pgbouncer/lolor/all): " test_type_choice
 
 # Determine environments to run
 if [[ "$env_choice" == "all" || "$env_choice" == "All" ]]; then
@@ -44,7 +45,7 @@ fi
 
 # Determine test types to run
 if [[ "$test_type_choice" == "all" || "$test_type_choice" == "All" ]]; then
-  test_type_list=(server snowflake pgbouncer)
+  test_type_list=(server snowflake pgbouncer lolor)
 else
   test_type_list=("$test_type_choice")
 fi
@@ -84,6 +85,12 @@ for env in "${env_list[@]}"; do
                 --html="${report_dir}/report-rpm-snowflake-${env}.html" \
                 --self-contained-html
               ;;
+            lolor)
+              echo "▶️ Running RPM snowflake tests for env ${env}"
+              pytest -v -s test_pep_lolor_rhel.py \
+                --html="${report_dir}/report-rpm-lolor-${env}.html" \
+                --self-contained-html
+              ;;
             pgbouncer)
               echo "▶️ Running RPM pgbouncer tests for env ${env}"
               pytest -v -s test_pep_pgbouncer.py \
@@ -107,6 +114,12 @@ for env in "${env_list[@]}"; do
               echo "▶️ Running DEB snowflake tests for env ${env}"
               pytest -v -s test_pep_snowflake_deb.py \
                 --html="${report_dir}/report-deb-snowflake-${env}.html" \
+                --self-contained-html
+              ;;
+            lolor)
+              echo "▶️ Running DEB snowflake tests for env ${env}"
+              pytest -v -s test_pep_lolor_deb.py \
+                --html="${report_dir}/report-deb-lolor-${env}.html" \
                 --self-contained-html
               ;;
             pgbouncer)

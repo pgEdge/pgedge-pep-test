@@ -265,13 +265,16 @@ for test_type in "${test_type_list[@]}"; do
       if [[ $report_count -gt 0 ]]; then
         echo "   Creating index for ${test_type}/${env}"
 
+        # Capitalize first letter of test_type (portable for bash 3.x)
+        test_type_cap=$(echo "$test_type" | awk '{print toupper(substr($0,1,1)) substr($0,2)}')
+
         # Create index.html for this component/version
         cat > "${component_dir}/index.html" <<EOF
 <!DOCTYPE html>
 <html>
 <head>
     <meta charset="utf-8">
-    <title>${test_type^} Test Reports - PostgreSQL ${env}</title>
+    <title>${test_type_cap} Test Reports - PostgreSQL ${env}</title>
     <style>
         body {
             font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
@@ -331,7 +334,7 @@ for test_type in "${test_type_list[@]}"; do
         <a href="../../../${CONSOLIDATED_REPORT_DIR}/index.html">← Back to Consolidated Report</a>
     </div>
 
-    <h1>${test_type^} Test Reports - PostgreSQL ${env}</h1>
+    <h1>${test_type_cap} Test Reports - PostgreSQL ${env}</h1>
 
     <div class="info">
         <p><strong>Component:</strong> ${test_type}</p>
@@ -349,7 +352,9 @@ EOF
             report_basename=$(basename "$report")
             # Extract platform from filename (report-{platform}-{component}-{env}.html)
             platform_name=$(echo "$report_basename" | sed 's/report-\([^-]*\)-.*/\1/')
-            echo "        <li><a href=\"${report_basename}\">${platform_name^^} - ${report_basename}</a></li>" >> "${component_dir}/index.html"
+            # Convert to uppercase (portable for bash 3.x)
+            platform_name_upper=$(echo "$platform_name" | tr '[:lower:]' '[:upper:]')
+            echo "        <li><a href=\"${report_basename}\">${platform_name_upper} - ${report_basename}</a></li>" >> "${component_dir}/index.html"
           fi
         done
 

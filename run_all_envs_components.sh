@@ -331,7 +331,8 @@ for test_type in "${test_type_list[@]}"; do
 </head>
 <body>
     <div class="breadcrumb">
-        <a href="../../../${CONSOLIDATED_REPORT_DIR}/index.html">← Back to Consolidated Report</a>
+        <a href="../index.html">← Back to ${test_type_cap} Component</a> |
+        <a href="../../index.html">All Components</a>
     </div>
 
     <h1>${test_type_cap} Test Reports - PostgreSQL ${env}</h1>
@@ -369,6 +370,553 @@ EOF
     fi
   done
 done
+
+echo ""
+echo "=========================================="
+echo "📊 Generating Component-Level Index Pages"
+echo "=========================================="
+
+# Helper function to parse JUnit XML and extract stats
+get_test_stats() {
+  local xml_file=$1
+  if [[ -f "$xml_file" ]]; then
+    # Extract attributes from testsuite element using grep/sed (portable)
+    local tests=$(grep -o 'tests="[0-9]*"' "$xml_file" | head -1 | sed 's/tests="\([0-9]*\)"/\1/')
+    local failures=$(grep -o 'failures="[0-9]*"' "$xml_file" | head -1 | sed 's/failures="\([0-9]*\)"/\1/')
+    local errors=$(grep -o 'errors="[0-9]*"' "$xml_file" | head -1 | sed 's/errors="\([0-9]*\)"/\1/')
+    local skipped=$(grep -o 'skipped="[0-9]*"' "$xml_file" | head -1 | sed 's/skipped="\([0-9]*\)"/\1/')
+
+    tests=${tests:-0}
+    failures=${failures:-0}
+    errors=${errors:-0}
+    skipped=${skipped:-0}
+
+    local passed=$((tests - failures - errors - skipped))
+    local failed=$((failures + errors))
+
+    echo "${passed}|${failed}|${skipped}"
+  else
+    echo "0|0|0"
+  fi
+}
+
+# Create component-level index.html that aggregates all PG versions and platforms
+for test_type in "${test_type_list[@]}"; do
+  component_base_dir="test-logs/${test_type}"
+  if [[ -d "$component_base_dir" ]]; then
+    # Check if there are any version subdirectories with reports
+    version_dirs=$(find "$component_base_dir" -mindepth 1 -maxdepth 1 -type d 2>/dev/null)
+    if [[ -n "$version_dirs" ]]; then
+      echo "   Creating component index for ${test_type}"
+
+      # Capitalize first letter of test_type (portable for bash 3.x)
+      test_type_cap=$(echo "$test_type" | awk '{print toupper(substr($0,1,1)) substr($0,2)}')
+
+      # Create component-level index.html
+      cat > "${component_base_dir}/index.html" <<EOF
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <title>${test_type_cap} Test Reports - All Versions</title>
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+            max-width: 1400px;
+            margin: 40px auto;
+            padding: 20px;
+            background: #f5f5f5;
+        }
+        .header {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 30px;
+            border-radius: 8px;
+            margin-bottom: 20px;
+        }
+        .header h1 {
+            margin: 0 0 10px 0;
+        }
+        .header .subtitle {
+            opacity: 0.9;
+            font-size: 14px;
+        }
+        .breadcrumb {
+            color: #666;
+            margin-bottom: 20px;
+        }
+        .breadcrumb a {
+            color: #2196F3;
+            text-decoration: none;
+        }
+        .breadcrumb a:hover {
+            text-decoration: underline;
+        }
+        .version-section {
+            background: white;
+            border-radius: 8px;
+            margin: 20px 0;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+            overflow: hidden;
+        }
+        .version-header {
+            background: #f8f9fa;
+            padding: 15px 20px;
+            border-bottom: 2px solid #dee2e6;
+            font-weight: 600;
+            color: #333;
+        }
+        .version-header .pg-badge {
+            background: #667eea;
+            color: white;
+            padding: 4px 12px;
+            border-radius: 12px;
+            font-size: 12px;
+            margin-left: 10px;
+        }
+        table {
+            width: 100%;
+            border-collapse: collapse;
+        }
+        th {
+            background: #f8f9fa;
+            padding: 12px;
+            text-align: left;
+            font-weight: 600;
+            color: #666;
+            font-size: 12px;
+            text-transform: uppercase;
+        }
+        td {
+            padding: 12px;
+            border-bottom: 1px solid #eee;
+        }
+        tr:hover {
+            background-color: #f8f9fa;
+        }
+        .platform-badge {
+            padding: 4px 12px;
+            border-radius: 12px;
+            font-size: 12px;
+            font-weight: 600;
+        }
+        .platform-badge.rpm {
+            background-color: #fee2e2;
+            color: #991b1b;
+        }
+        .platform-badge.deb {
+            background-color: #dbeafe;
+            color: #1e40af;
+        }
+        .report-link {
+            color: #667eea;
+            text-decoration: none;
+            font-weight: 500;
+        }
+        .report-link:hover {
+            text-decoration: underline;
+        }
+        .no-reports {
+            padding: 20px;
+            text-align: center;
+            color: #666;
+        }
+        .stats {
+            display: flex;
+            gap: 8px;
+            font-size: 12px;
+        }
+        .stat {
+            padding: 2px 8px;
+            border-radius: 4px;
+            font-weight: 600;
+        }
+        .stat.passed {
+            background: #d1fae5;
+            color: #065f46;
+        }
+        .stat.failed {
+            background: #fee2e2;
+            color: #991b1b;
+        }
+        .stat.skipped {
+            background: #fef3c7;
+            color: #92400e;
+        }
+    </style>
+</head>
+<body>
+    <div class="breadcrumb">
+        <a href="../index.html">← Back to All Components</a>
+    </div>
+
+    <div class="header">
+        <h1>🧪 ${test_type_cap} Test Reports</h1>
+        <div class="subtitle">All PostgreSQL versions and platforms</div>
+    </div>
+EOF
+
+      # Iterate through each version directory (16, 17, 18)
+      for version_dir in $(ls -d "$component_base_dir"/*/ 2>/dev/null | sort); do
+        version=$(basename "$version_dir")
+        report_count=$(find "$version_dir" -name "report-*.html" 2>/dev/null | wc -l | tr -d ' ')
+
+        if [[ $report_count -gt 0 ]]; then
+          cat >> "${component_base_dir}/index.html" <<EOF
+    <div class="version-section">
+        <div class="version-header">
+            PostgreSQL <span class="pg-badge">${version}</span>
+        </div>
+        <table>
+            <thead>
+                <tr>
+                    <th>Platform</th>
+                    <th>Results</th>
+                    <th>Report File</th>
+                    <th>Action</th>
+                </tr>
+            </thead>
+            <tbody>
+EOF
+
+          # Add rows for each report
+          for report in "$version_dir"/report-*.html; do
+            if [[ -f "$report" ]]; then
+              report_basename=$(basename "$report")
+              # Extract platform from filename
+              platform_name=$(echo "$report_basename" | sed 's/report-\([^-]*\)-.*/\1/')
+              platform_upper=$(echo "$platform_name" | tr '[:lower:]' '[:upper:]')
+              platform_lower=$(echo "$platform_name" | tr '[:upper:]' '[:lower:]')
+
+              # Get corresponding XML file for stats
+              xml_file="${report%.html}.xml"
+              if [[ -f "$xml_file" ]]; then
+                stats=$(get_test_stats "$xml_file")
+                passed=$(echo "$stats" | cut -d'|' -f1)
+                failed=$(echo "$stats" | cut -d'|' -f2)
+                skipped=$(echo "$stats" | cut -d'|' -f3)
+                stats_html="<span class=\"stats\"><span class=\"stat passed\">✓ ${passed}</span><span class=\"stat failed\">✗ ${failed}</span><span class=\"stat skipped\">○ ${skipped}</span></span>"
+              else
+                stats_html="-"
+              fi
+
+              cat >> "${component_base_dir}/index.html" <<EOF
+                <tr>
+                    <td><span class="platform-badge ${platform_lower}">${platform_upper}</span></td>
+                    <td>${stats_html}</td>
+                    <td>${report_basename}</td>
+                    <td><a href="${version}/${report_basename}" class="report-link">View Report →</a></td>
+                </tr>
+EOF
+            fi
+          done
+
+          cat >> "${component_base_dir}/index.html" <<EOF
+            </tbody>
+        </table>
+    </div>
+EOF
+        fi
+      done
+
+      # Close HTML
+      cat >> "${component_base_dir}/index.html" <<EOF
+</body>
+</html>
+EOF
+    fi
+  fi
+done
+
+echo ""
+echo "=========================================="
+echo "📊 Generating Master Index Page"
+echo "=========================================="
+
+# Get relative path for consolidated report (strip 'test-logs/' prefix)
+CONSOLIDATED_RELATIVE=$(echo "$CONSOLIDATED_REPORT_DIR" | sed 's|^test-logs/||')
+
+# Create master index.html at test-logs/index.html
+cat > "test-logs/index.html" <<EOF
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <title>pgEdge Test Reports - All Components</title>
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+            max-width: 1400px;
+            margin: 40px auto;
+            padding: 20px;
+            background: #f5f5f5;
+        }
+        .header {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 40px;
+            border-radius: 8px;
+            margin-bottom: 30px;
+            text-align: center;
+        }
+        .header h1 {
+            margin: 0 0 10px 0;
+            font-size: 32px;
+        }
+        .header .subtitle {
+            opacity: 0.9;
+            font-size: 16px;
+        }
+        .header .timestamp {
+            opacity: 0.7;
+            font-size: 12px;
+            margin-top: 15px;
+        }
+        .components-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(380px, 1fr));
+            gap: 20px;
+            margin-top: 20px;
+        }
+        .component-card {
+            background: white;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+            overflow: hidden;
+            transition: transform 0.2s, box-shadow 0.2s;
+        }
+        .component-card:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+        }
+        .component-card-header {
+            background: #f8f9fa;
+            padding: 20px;
+            border-bottom: 1px solid #eee;
+        }
+        .component-card-header h2 {
+            margin: 0;
+            font-size: 18px;
+            color: #333;
+        }
+        .component-card-body {
+            padding: 15px 20px;
+        }
+        .version-table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 13px;
+        }
+        .version-table th {
+            text-align: left;
+            padding: 8px 5px;
+            border-bottom: 2px solid #eee;
+            color: #666;
+            font-size: 11px;
+            text-transform: uppercase;
+        }
+        .version-table td {
+            padding: 8px 5px;
+            border-bottom: 1px solid #eee;
+        }
+        .version-table tr:last-child td {
+            border-bottom: none;
+        }
+        .version-badge {
+            background: #667eea;
+            color: white;
+            padding: 2px 8px;
+            border-radius: 10px;
+            font-size: 11px;
+            font-weight: 600;
+        }
+        .platform-badge {
+            padding: 2px 8px;
+            border-radius: 4px;
+            font-size: 10px;
+            font-weight: 600;
+        }
+        .platform-badge.rpm {
+            background: #fee2e2;
+            color: #991b1b;
+        }
+        .platform-badge.deb {
+            background: #dbeafe;
+            color: #1e40af;
+        }
+        .stats {
+            display: flex;
+            gap: 8px;
+            font-size: 11px;
+        }
+        .stat {
+            padding: 2px 6px;
+            border-radius: 4px;
+            font-weight: 600;
+        }
+        .stat.passed {
+            background: #d1fae5;
+            color: #065f46;
+        }
+        .stat.failed {
+            background: #fee2e2;
+            color: #991b1b;
+        }
+        .stat.skipped {
+            background: #fef3c7;
+            color: #92400e;
+        }
+        .component-card-footer {
+            background: #f8f9fa;
+            padding: 15px 20px;
+            text-align: center;
+        }
+        .view-all-link {
+            color: #667eea;
+            text-decoration: none;
+            font-weight: 600;
+            font-size: 14px;
+        }
+        .view-all-link:hover {
+            text-decoration: underline;
+        }
+        .consolidated-link {
+            background: white;
+            padding: 20px;
+            border-radius: 8px;
+            margin-bottom: 30px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+            text-align: center;
+        }
+        .consolidated-link a {
+            color: #667eea;
+            text-decoration: none;
+            font-weight: 600;
+        }
+        .consolidated-link a:hover {
+            text-decoration: underline;
+        }
+        .no-reports {
+            text-align: center;
+            padding: 40px;
+            color: #666;
+        }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <h1>🧪 pgEdge Test Reports</h1>
+        <div class="subtitle">Comprehensive test results for all components</div>
+        <div class="timestamp">Generated: $(date '+%Y-%m-%d %H:%M:%S')</div>
+    </div>
+
+    <div class="consolidated-link">
+        📊 <a href="${CONSOLIDATED_RELATIVE}/index.html">View Latest Consolidated Report →</a>
+    </div>
+
+    <h2>Components</h2>
+    <div class="components-grid">
+EOF
+
+# Add card for each component that has reports
+for test_type in server snowflake pgbouncer lolor postgis system_stats vectorizer zerodowntime; do
+  component_dir="test-logs/${test_type}"
+  if [[ -d "$component_dir" ]]; then
+    # Check for any HTML reports
+    total_reports=$(find "$component_dir" -name "report-*.html" 2>/dev/null | wc -l | tr -d ' ')
+    if [[ $total_reports -gt 0 ]]; then
+      # Capitalize component name
+      test_type_cap=$(echo "$test_type" | awk '{print toupper(substr($0,1,1)) substr($0,2)}')
+
+      cat >> "test-logs/index.html" <<EOF
+        <div class="component-card">
+            <div class="component-card-header">
+                <h2>${test_type_cap}</h2>
+            </div>
+            <div class="component-card-body">
+                <table class="version-table">
+                    <thead>
+                        <tr>
+                            <th>Version</th>
+                            <th>Platform</th>
+                            <th>Results</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+EOF
+
+      # List versions with their platforms and stats
+      for version_dir in $(ls -d "$component_dir"/*/ 2>/dev/null | sort); do
+        version=$(basename "$version_dir")
+
+        # Check RPM report
+        rpm_xml=$(find "$version_dir" -name "report-rpm-*.xml" 2>/dev/null | head -1)
+        if [[ -n "$rpm_xml" && -f "$rpm_xml" ]]; then
+          stats=$(get_test_stats "$rpm_xml")
+          passed=$(echo "$stats" | cut -d'|' -f1)
+          failed=$(echo "$stats" | cut -d'|' -f2)
+          skipped=$(echo "$stats" | cut -d'|' -f3)
+
+          cat >> "test-logs/index.html" <<EOF
+                        <tr>
+                            <td><span class="version-badge">PG ${version}</span></td>
+                            <td><span class="platform-badge rpm">RPM</span></td>
+                            <td>
+                                <span class="stats">
+                                    <span class="stat passed">✓ ${passed}</span>
+                                    <span class="stat failed">✗ ${failed}</span>
+                                    <span class="stat skipped">○ ${skipped}</span>
+                                </span>
+                            </td>
+                        </tr>
+EOF
+        fi
+
+        # Check DEB report
+        deb_xml=$(find "$version_dir" -name "report-deb-*.xml" 2>/dev/null | head -1)
+        if [[ -n "$deb_xml" && -f "$deb_xml" ]]; then
+          stats=$(get_test_stats "$deb_xml")
+          passed=$(echo "$stats" | cut -d'|' -f1)
+          failed=$(echo "$stats" | cut -d'|' -f2)
+          skipped=$(echo "$stats" | cut -d'|' -f3)
+
+          cat >> "test-logs/index.html" <<EOF
+                        <tr>
+                            <td><span class="version-badge">PG ${version}</span></td>
+                            <td><span class="platform-badge deb">DEB</span></td>
+                            <td>
+                                <span class="stats">
+                                    <span class="stat passed">✓ ${passed}</span>
+                                    <span class="stat failed">✗ ${failed}</span>
+                                    <span class="stat skipped">○ ${skipped}</span>
+                                </span>
+                            </td>
+                        </tr>
+EOF
+        fi
+      done
+
+      cat >> "test-logs/index.html" <<EOF
+                    </tbody>
+                </table>
+            </div>
+            <div class="component-card-footer">
+                <a href="${test_type}/index.html" class="view-all-link">View All Reports →</a>
+            </div>
+        </div>
+EOF
+    fi
+  fi
+done
+
+# Close the master index HTML
+cat >> "test-logs/index.html" <<EOF
+    </div>
+</body>
+</html>
+EOF
+
+echo "   ✅ Master index created: test-logs/index.html"
 
 echo ""
 echo "=========================================="

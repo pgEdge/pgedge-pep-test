@@ -101,12 +101,13 @@ def test_install_prerequisites(container_name, container_type):
     if not container_name:
         pytest.skip("No container defined in env")
 
-    try:
-        container = client.containers.get(container_name)
-    except docker.errors.NotFound:
-        pytest.skip(f"Container {container_name} not found or not running.")
+    # Ensure container exists and is running - create if not available
+    container, created, message = container_management.ensure_container_running(
+        client, container_name, container_type
+    )
+    print(f"{'🆕 ' if created else ''}{message}")
 
-    assert container.status == "running"
+    assert container.status == "running", f"Container {container_name} is not running (status: {container.status})"
 
     print(f"\n--- Installing prerequisites on {container_name} ({container_type}) ---")
 

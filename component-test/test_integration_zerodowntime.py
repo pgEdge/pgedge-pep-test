@@ -11,7 +11,7 @@ from dotenv import load_dotenv
 
 # Add the parent directory to sys.path to import from aspects
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
-from aspects import configure_repository, package_management, pg_server_management, machine_cleanup, machine_prereq_setup, file_management
+from aspects import configure_repository, package_management, pg_server_management, machine_cleanup, machine_prereq_setup, file_management, container_management
 
 load_dotenv()
 client = docker.from_env()
@@ -91,12 +91,13 @@ def test_install_prerequisites(container_name, container_type):
     if not container_name:
         pytest.skip("No container defined in env")
 
-    try:
-        container = client.containers.get(container_name)
-    except docker.errors.NotFound:
-        pytest.skip(f"Container {container_name} not found or not running.")
+    # Ensure container exists and is running - create if not available
+    container, created, message = container_management.ensure_container_running(
+        client, container_name, container_type
+    )
+    print(f"{'🆕 ' if created else ''}{message}")
 
-    assert container.status == "running"
+    assert container.status == "running", f"Container {container_name} is not running (status: {container.status})"
 
     # Install prerequisites
     success, os_info, message = machine_prereq_setup.install_prerequisites_on_container(container)

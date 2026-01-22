@@ -4,7 +4,6 @@ Generic file management module for copying files to containers.
 Handles file copying, ownership, and permissions.
 """
 import os
-import re
 import subprocess
 from pathlib import Path
 
@@ -42,6 +41,18 @@ def copy_config_files_to_container(
 
     print(f"\n--- Copying config files to {container_name} ---")
 
+    # Normalize and resolve local_config_dir: allow passing relative paths (e.g. "./config/pgbouncer")
+    # Resolve relative paths against the repository root (two levels up from this file: repo_root/)
+    from pathlib import Path as _Path
+    if not isinstance(local_config_dir, _Path):
+        local_config_dir = _Path(str(local_config_dir))
+
+    if not local_config_dir.is_absolute():
+        repo_root = _Path(__file__).resolve().parent.parent
+        local_config_dir = (repo_root / local_config_dir).resolve()
+
+    print(f"Using local config directory: {local_config_dir}")
+
     # Ensure destination directory exists
     exit_code, output = container.exec_run(
         f"mkdir -p {container_config_dir}",
@@ -56,12 +67,12 @@ def copy_config_files_to_container(
 
     # Copy each file
     for source_file, dest_file in file_mapping.items():
-        local_file = os.path.join(local_config_dir, source_file)
+        local_file = os.path.join(str(local_config_dir), source_file)
         container_dest = f"{container_name}:{container_config_dir}/{dest_file}"
 
         # Check if local config file exists
         if not os.path.exists(local_file):
-            raise Exception(f"Local config file not found: {local_file}")
+            raise Exception(f"Local config file not found: {local_file}. (Resolved from local_config_dir: {local_config_dir})")
 
         # Copy file from host to container using docker cp
         result = subprocess.run(
@@ -266,12 +277,22 @@ def verify_bundled_files(
     # Determine platform-specific path (rpm for RHEL, deb for Debian)
     platform_dir = "rpm" if container_type == "rhel" else "deb"
 
-    # Get expected file path
-    expected_file_path = Path(project_root) / "expected-output" / platform_dir / base_name
+    # Determine expected file path. Accept both underscore and hyphen naming
+    expected_dir = Path(project_root) / "expected-output" / platform_dir
 
-    # Check if expected file exists
-    if not expected_file_path.exists():
-        raise Exception(f"No expected file found for {base_name} at {expected_file_path}")
+    # Candidate names: current base_name (underscores) and hyphen variant
+    candidate_names = [base_name, base_name.replace('_', '-')]
+    expected_file_path = None
+    checked_paths = []
+    for name in candidate_names:
+        p = expected_dir / name
+        checked_paths.append(str(p))
+        if p.exists():
+            expected_file_path = p
+            break
+
+    if expected_file_path is None:
+        raise Exception(f"No expected file found for {base_name} at {expected_dir} (checked: {', '.join(checked_paths)})")
 
     # Read expected files
     with open(expected_file_path, 'r') as f:

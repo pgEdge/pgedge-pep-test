@@ -8,7 +8,7 @@ from dotenv import load_dotenv
 
 # Add the parent directory to sys.path to import from aspects
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
-from aspects import configure_repository, package_management, pg_server_management, machine_cleanup, machine_prereq_setup, file_management
+from aspects import configure_repository, package_management, pg_server_management, machine_cleanup, machine_prereq_setup, file_management, container_management
 
 load_dotenv()
 client = docker.from_env()

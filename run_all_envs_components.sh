@@ -53,6 +53,50 @@ echo "💡 You can specify multiple components separated by commas"
 echo "   Example: lolor,postgis,system_stats"
 read -p "Enter your choice: " test_type_choice
 
+# Prompt user for parallelism choice
+echo ""
+echo "Select execution mode:"
+echo "1) sequential - Run tests one by one (default)"
+echo "2) parallel - Run tests in parallel (faster)"
+read -p "Enter your choice [1]: " parallel_choice
+parallel_choice=${parallel_choice:-1}
+
+# Set parallelism variables
+PARALLEL_MODE=false
+PARALLEL_WORKERS=4
+
+if [[ "$parallel_choice" == "2" || "$parallel_choice" == "parallel" ]]; then
+  PARALLEL_MODE=true
+
+  # Check if pytest-xdist is installed
+  if ! python3 -c "import xdist" 2>/dev/null; then
+    echo ""
+    echo "⚠️  WARNING: pytest-xdist is not installed!"
+    echo "   Container-level parallelism requires pytest-xdist."
+    echo "   Install it with: pip install pytest-xdist"
+    echo ""
+    echo "   You can still use component-level parallelism (background jobs)."
+    echo ""
+  fi
+
+  echo ""
+  echo "Enter number of parallel workers:"
+  echo "  - For pytest-xdist (container-level parallelism): tests for different containers run simultaneously"
+  echo "  - Recommended: number of CPU cores or containers, whichever is smaller"
+  read -p "Number of workers [4]: " worker_count
+  PARALLEL_WORKERS=${worker_count:-4}
+
+  echo ""
+  echo "Enable component-level parallelism?"
+  echo "  - This runs different component tests (e.g., lolor, postgis) simultaneously"
+  echo "  - Requires more system resources but completes faster"
+  read -p "Enable component parallelism? [y/N]: " component_parallel
+  COMPONENT_PARALLEL=false
+  if [[ "$component_parallel" == "y" || "$component_parallel" == "Y" ]]; then
+    COMPONENT_PARALLEL=true
+  fi
+fi
+
 # Determine environments to run
 if [[ "$env_choice" == "all" || "$env_choice" == "All" ]]; then
   env_list=(16 17 18)
@@ -97,8 +141,16 @@ echo "=========================================="
 echo "Environments: ${env_list[*]}"
 echo "Platforms: ${platform_list[*]}"
 echo "Test types: ${test_type_list[*]}"
+echo "Execution mode: $(if $PARALLEL_MODE; then echo "Parallel (${PARALLEL_WORKERS} workers)"; else echo "Sequential"; fi)"
+if $PARALLEL_MODE; then
+  echo "Component parallelism: $(if $COMPONENT_PARALLEL; then echo "Enabled"; else echo "Disabled"; fi)"
+fi
 echo "=========================================="
 echo ""
+
+# Arrays to track background jobs
+declare -a BACKGROUND_PIDS=()
+declare -a BACKGROUND_JOBS=()
 
 # Function to run pytest and track results
 run_pytest_with_tracking() {
@@ -106,6 +158,7 @@ run_pytest_with_tracking() {
   local env=$2
   local platform=$3
   local component=$4
+  local run_in_background=${5:-false}
 
   # Create component-specific directory structure: test-logs/{component}/{pg_version}/
   local component_dir="test-logs/${component}/${env}"
@@ -121,6 +174,9 @@ run_pytest_with_tracking() {
   local consolidated_html_report="${CONSOLIDATED_REPORT_DIR}/${report_name}.html"
   local consolidated_junit_xml="${CONSOLIDATED_REPORT_DIR}/${report_name}.xml"
 
+  # Log file for background execution
+  local log_file="${component_dir}/${report_name}.log"
+
   echo "▶️  Running ${platform} ${component} tests for env ${env}"
   echo "   📁 Component report will be stored in: ${component_dir}"
 
@@ -129,8 +185,6 @@ run_pytest_with_tracking() {
 
   if [[ "${REQUIRE_PASS_TEST_LOGS}" == "true" ]]; then
     # Include detailed logs for all tests (passed, failed, skipped)
-    # -s: disable output capturing (show print statements)
-    # --capture=no: don't capture stdout/stderr
     pytest_opts="-v -s --capture=no"
     echo "   📝 Capturing logs for passed tests (REQUIRE_PASS_TEST_LOGS=true)"
   else
@@ -138,25 +192,78 @@ run_pytest_with_tracking() {
     pytest_opts="-v -s"
   fi
 
-  # Run pytest with both HTML and JUnit XML output
-  # Store in component-specific directory
-  # Use || true to continue even if tests fail
-  pytest $pytest_opts "$test_file" \
-    --html="$component_html_report" \
-    --self-contained-html \
-    --junit-xml="$component_junit_xml" || true
+  # Add parallel workers if in parallel mode and pytest-xdist is available
+  if [[ "$PARALLEL_MODE" == "true" && "$PARALLEL_WORKERS" -gt 1 ]]; then
+    # Check if pytest-xdist is installed
+    if python3 -c "import xdist" 2>/dev/null; then
+      pytest_opts="$pytest_opts -n $PARALLEL_WORKERS --dist=loadscope"
+      echo "   🚀 Running with ${PARALLEL_WORKERS} parallel workers (pytest-xdist)"
+    else
+      echo "   ⚠️  pytest-xdist not installed. Running sequentially. Install with: pip install pytest-xdist"
+    fi
+  fi
 
-  # Copy reports to consolidated directory for consolidated report generation
-  cp "$component_html_report" "$consolidated_html_report" 2>/dev/null || true
-  cp "$component_junit_xml" "$consolidated_junit_xml" 2>/dev/null || true
+  # Build the pytest command
+  local pytest_cmd="pytest $pytest_opts \"$test_file\" --html=\"$component_html_report\" --self-contained-html --junit-xml=\"$component_junit_xml\""
+
+  if [[ "$run_in_background" == "true" ]]; then
+    echo "   🔄 Running in background..."
+    # Run in background and capture PID
+    (
+      eval $pytest_cmd > "$log_file" 2>&1 || true
+      # Copy reports to consolidated directory
+      cp "$component_html_report" "$consolidated_html_report" 2>/dev/null || true
+      cp "$component_junit_xml" "$consolidated_junit_xml" 2>/dev/null || true
+    ) &
+    local pid=$!
+    BACKGROUND_PIDS+=($pid)
+    BACKGROUND_JOBS+=("${platform} ${component} PG${env} (PID: $pid)")
+    echo "   📋 Background job started: PID $pid"
+  else
+    # Run in foreground
+    eval $pytest_cmd || true
+
+    # Copy reports to consolidated directory for consolidated report generation
+    cp "$component_html_report" "$consolidated_html_report" 2>/dev/null || true
+    cp "$component_junit_xml" "$consolidated_junit_xml" 2>/dev/null || true
+
+    echo "   ✅ Reports saved:"
+    echo "      - Component: ${component_html_report}"
+    echo "      - Consolidated: ${consolidated_html_report}"
+  fi
 
   # Store report paths for consolidation
   ALL_REPORTS+=("$report_name.html")
   ALL_JUNIT_XMLS+=("$consolidated_junit_xml")
+}
 
-  echo "   ✅ Reports saved:"
-  echo "      - Component: ${component_html_report}"
-  echo "      - Consolidated: ${consolidated_html_report}"
+# Function to wait for all background jobs
+wait_for_background_jobs() {
+  if [[ ${#BACKGROUND_PIDS[@]} -eq 0 ]]; then
+    return
+  fi
+
+  echo ""
+  echo "=========================================="
+  echo "⏳ Waiting for ${#BACKGROUND_PIDS[@]} background jobs to complete..."
+  echo "=========================================="
+
+  for i in "${!BACKGROUND_PIDS[@]}"; do
+    local pid=${BACKGROUND_PIDS[$i]}
+    local job_info=${BACKGROUND_JOBS[$i]}
+    echo "   Waiting for: $job_info"
+    wait $pid 2>/dev/null || true
+    echo "   ✅ Completed: $job_info"
+  done
+
+  echo ""
+  echo "=========================================="
+  echo "✅ All background jobs completed!"
+  echo "=========================================="
+
+  # Clear the arrays
+  BACKGROUND_PIDS=()
+  BACKGROUND_JOBS=()
 }
 
 # Run tests for each combination
@@ -175,6 +282,12 @@ for env in "${env_list[@]}"; do
   source "$envfile"
   set +a
 
+  # Determine if we should run in background for this environment
+  run_bg="false"
+  if [[ "$PARALLEL_MODE" == "true" && "$COMPONENT_PARALLEL" == "true" ]]; then
+    run_bg="true"
+  fi
+
   for platform in "${platform_list[@]}"; do
     for test_type in "${test_type_list[@]}"; do
       case "$platform" in
@@ -182,28 +295,28 @@ for env in "${env_list[@]}"; do
           export PLATFORM_FILTER=rpm
           case "$test_type" in
             server)
-              run_pytest_with_tracking "test_pep_server_rhel.py" "$env" "rpm" "server"
+              run_pytest_with_tracking "test_pep_server_rhel.py" "$env" "rpm" "server" "$run_bg"
               ;;
             snowflake)
-              run_pytest_with_tracking "component-test/test_pep_snowflake.py" "$env" "rpm" "snowflake"
+              run_pytest_with_tracking "component-test/test_pep_snowflake.py" "$env" "rpm" "snowflake" "$run_bg"
               ;;
             lolor)
-              run_pytest_with_tracking "component-test/test_pep_lolor.py" "$env" "rpm" "lolor"
+              run_pytest_with_tracking "component-test/test_pep_lolor.py" "$env" "rpm" "lolor" "$run_bg"
               ;;
             pgbouncer)
-              run_pytest_with_tracking "component-test/test_pep_pgbouncer.py" "$env" "rpm" "pgbouncer"
+              run_pytest_with_tracking "component-test/test_pep_pgbouncer.py" "$env" "rpm" "pgbouncer" "$run_bg"
               ;;
             postgis)
-              run_pytest_with_tracking "component-test/test_pep_postgis.py" "$env" "rpm" "postgis"
+              run_pytest_with_tracking "component-test/test_pep_postgis.py" "$env" "rpm" "postgis" "$run_bg"
               ;;
             system_stats)
-              run_pytest_with_tracking "component-test/test_pep_system_stats.py" "$env" "rpm" "system_stats"
+              run_pytest_with_tracking "component-test/test_pep_system_stats.py" "$env" "rpm" "system_stats" "$run_bg"
               ;;
             vectorizer)
-              run_pytest_with_tracking "component-test/test_pep_vectorizer.py" "$env" "rpm" "vectorizer"
+              run_pytest_with_tracking "component-test/test_pep_vectorizer.py" "$env" "rpm" "vectorizer" "$run_bg"
               ;;
             zerodowntime)
-              run_pytest_with_tracking "component-test/test_integration_zerodowntime.py" "$env" "rpm" "zerodowntime"
+              run_pytest_with_tracking "component-test/test_integration_zerodowntime.py" "$env" "rpm" "zerodowntime" "$run_bg"
               ;;
             *)
               echo "⚠️ Unknown test type: $test_type"
@@ -214,28 +327,28 @@ for env in "${env_list[@]}"; do
           export PLATFORM_FILTER=deb
           case "$test_type" in
             server)
-              run_pytest_with_tracking "test_pep_server_deb.py" "$env" "deb" "server"
+              run_pytest_with_tracking "test_pep_server_deb.py" "$env" "deb" "server" "$run_bg"
               ;;
             snowflake)
-              run_pytest_with_tracking "component-test/test_pep_snowflake.py" "$env" "deb" "snowflake"
+              run_pytest_with_tracking "component-test/test_pep_snowflake.py" "$env" "deb" "snowflake" "$run_bg"
               ;;
             lolor)
-              run_pytest_with_tracking "component-test/test_pep_lolor.py" "$env" "deb" "lolor"
+              run_pytest_with_tracking "component-test/test_pep_lolor.py" "$env" "deb" "lolor" "$run_bg"
               ;;
             pgbouncer)
-              run_pytest_with_tracking "component-test/test_pep_pgbouncer.py" "$env" "deb" "pgbouncer"
+              run_pytest_with_tracking "component-test/test_pep_pgbouncer.py" "$env" "deb" "pgbouncer" "$run_bg"
               ;;
             postgis)
-              run_pytest_with_tracking "component-test/test_pep_postgis.py" "$env" "deb" "postgis"
+              run_pytest_with_tracking "component-test/test_pep_postgis.py" "$env" "deb" "postgis" "$run_bg"
               ;;
             system_stats)
-              run_pytest_with_tracking "component-test/test_pep_system_stats.py" "$env" "deb" "system_stats"
+              run_pytest_with_tracking "component-test/test_pep_system_stats.py" "$env" "deb" "system_stats" "$run_bg"
               ;;
             vectorizer)
-              run_pytest_with_tracking "component-test/test_pep_vectorizer.py" "$env" "deb" "vectorizer"
+              run_pytest_with_tracking "component-test/test_pep_vectorizer.py" "$env" "deb" "vectorizer" "$run_bg"
               ;;
             zerodowntime)
-              run_pytest_with_tracking "component-test/test_integration_zerodowntime.py" "$env" "deb" "zerodowntime"
+              run_pytest_with_tracking "component-test/test_integration_zerodowntime.py" "$env" "deb" "zerodowntime" "$run_bg"
               ;;
             *)
               echo "⚠️ Unknown test type: $test_type"
@@ -249,6 +362,9 @@ for env in "${env_list[@]}"; do
     done
   done
 done
+
+# Wait for all background jobs to complete before generating reports
+wait_for_background_jobs
 
 echo ""
 echo "=========================================="

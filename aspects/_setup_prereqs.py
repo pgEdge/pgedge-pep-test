@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-setup_prereqs.py
+_setup_prereqs.py
 =================
 Automatically sets up OS-level and Python dependencies
 for RHEL and Debian/Ubuntu-based systems.

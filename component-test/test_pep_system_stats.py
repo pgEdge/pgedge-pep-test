@@ -351,13 +351,13 @@ def test_verify_bundled_files(container_name, container_type):
             # Format details for display
             details_str = ""
             if details:
-                if "missing" in details and details["missing"]:
-                    details_str += f"\n\nMissing files ({len(details['missing'])}):\n"
-                    for file in details["missing"]:
+                if "missing_files" in details and details["missing_files"]:
+                    details_str += f"\n\nMissing files ({len(details['missing_files'])}):\n"
+                    for file in details["missing_files"]:
                         details_str += f"  - {file}\n"
-                if "extra" in details and details["extra"]:
-                    details_str += f"\nExtra files ({len(details['extra'])}):\n"
-                    for file in details["extra"]:
+                if "extra_files" in details and details["extra_files"]:
+                    details_str += f"\nExtra files ({len(details['extra_files'])}):\n"
+                    for file in details["extra_files"]:
                         details_str += f"  + {file}\n"
             pytest.fail(f"{message}{details_str}")
 

@@ -1,0 +1,10 @@
+# Test framework
+pytest>=7.0.0
+pytest-html>=3.0.0
+pytest-xdist>=3.0.0  # Required for parallel test execution
+
+# Docker SDK
+docker>=6.0.0
+
+# Environment management
+python-dotenv>=1.0.0

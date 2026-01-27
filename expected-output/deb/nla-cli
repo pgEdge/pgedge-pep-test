@@ -1,7 +1,14 @@
+/etc
+/etc/pgedge
 /etc/pgedge/nla-cli.yaml
+/etc/skel
 /etc/skel/.config
 /etc/skel/.config/pgedge
+/usr
+/usr/bin
 /usr/bin/pgedge-nla-cli
+/usr/share
+/usr/share/doc
 /usr/share/doc/pgedge-nla-cli
 /usr/share/doc/pgedge-nla-cli/LICENCE.md
 /usr/share/doc/pgedge-nla-cli/README.md.gz

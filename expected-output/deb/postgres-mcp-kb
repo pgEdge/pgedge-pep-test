@@ -1,7 +1,14 @@
+/usr
+/usr/share
+/usr/share/doc
+/usr/share/doc/pgedge-nla-kb
 /usr/share/doc/pgedge-nla-kb/LICENCE.md
 /usr/share/doc/pgedge-nla-kb/README.md.gz
 /usr/share/doc/pgedge-nla-kb/VERSION
+/usr/share/doc/pgedge-postgres-mcp-kb
 /usr/share/doc/pgedge-postgres-mcp-kb/changelog.Debian.gz
+/usr/share/pgedge
+/usr/share/pgedge/nla-kb
 /usr/share/pgedge/nla-kb/kb.db
 /usr/share/pgedge-postgres-mcp-kb-sbom.json
 /usr/share/pgedge-postgres-mcp-kb-sbom.json.asc

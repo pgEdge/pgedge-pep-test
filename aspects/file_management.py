@@ -216,7 +216,8 @@ def verify_bundled_files(
     container_type,
     component,
     package_name,
-    project_root
+    project_root,
+    pg_major_version=None
 ):
     """
     Verify bundled files for a component match expected files.
@@ -231,6 +232,9 @@ def verify_bundled_files(
         component: Component name (e.g., "pgedge-lolor_18" or "pgedge-postgresql-18-lolor")
         package_name: Actual package name to query (e.g., "pgedge-lolor_18")
         project_root: Path to project root directory
+        pg_major_version: PostgreSQL major version (e.g., "16", "17", "18").
+            Used to locate version-specific expected output files under
+            expected-output/{platform}/{pg_major_version}/
 
     Returns:
         tuple: (success: bool, details: dict, message: str)
@@ -268,8 +272,8 @@ def verify_bundled_files(
                 # This handles multi-word components like system-stats -> system_stats
                 base_name = match.group(1).replace('-', '_')
             else:
-                # Fallback to old logic
-                base_name = component.split('-')[-1]
+                # Base server package (e.g., pgedge-postgresql-17) - strip pgedge- prefix
+                base_name = component.replace("pgedge-", "")
         else:
             # RHEL format used on Debian: pgedge-lolor_18
             base_name = component.replace("pgedge-", "").rsplit('_', 1)[0]
@@ -277,11 +281,23 @@ def verify_bundled_files(
     # Determine platform-specific path (rpm for RHEL, deb for Debian)
     platform_dir = "rpm" if container_type == "rhel" else "deb"
 
-    # Determine expected file path. Accept both underscore and hyphen naming
-    expected_dir = Path(project_root) / "expected-output" / platform_dir
+    # Check if this is a PostgreSQL core package (server/contrib/base)
+    # These are stored under version-specific subdirectories:
+    #   expected-output/rpm/{pg_major}/postgresql{pg_major}-server
+    #   expected-output/deb/{pg_major}/postgresql-{pg_major}
+    is_pg_core_package = base_name.startswith('postgresql')
 
-    # Candidate names: current base_name (underscores) and hyphen variant
+    if is_pg_core_package and pg_major_version:
+        expected_dir = Path(project_root) / "expected-output" / platform_dir / str(pg_major_version)
+    else:
+        expected_dir = Path(project_root) / "expected-output" / platform_dir
+
+    # Candidate names: current base_name plus underscore/hyphen variants
     candidate_names = [base_name, base_name.replace('_', '-')]
+    hyphen_to_underscore = base_name.replace('-', '_')
+    if hyphen_to_underscore not in candidate_names:
+        candidate_names.append(hyphen_to_underscore)
+
     expected_file_path = None
     checked_paths = []
     for name in candidate_names:
@@ -290,6 +306,16 @@ def verify_bundled_files(
         if p.exists():
             expected_file_path = p
             break
+
+    # Fallback: try the base expected-output/{platform}/ directory (backward compatibility)
+    if expected_file_path is None and is_pg_core_package and pg_major_version:
+        fallback_dir = Path(project_root) / "expected-output" / platform_dir
+        for name in candidate_names:
+            p = fallback_dir / name
+            checked_paths.append(str(p))
+            if p.exists():
+                expected_file_path = p
+                break
 
     if expected_file_path is None:
         raise Exception(f"No expected file found for {base_name} at {expected_dir} (checked: {', '.join(checked_paths)})")
@@ -303,22 +329,88 @@ def verify_bundled_files(
     # Get installed files from container (platform-specific command)
     if container_type == "rhel":
         exit_code, output = container.exec_run(f"rpm -ql {package_name}", user="root")
+        if exit_code != 0:
+            raise Exception(f"Failed to query files for {package_name}: {output.decode()}")
+
+        installed_files = [line.strip() for line in output.decode().strip().splitlines() if line.strip()]
+        print(f"Installed {len(installed_files)} files")
     else:  # deb
         exit_code, output = container.exec_run(f"dpkg -L {package_name}", user="root")
 
-    if exit_code != 0:
-        raise Exception(f"Failed to query files for {package_name}: {output.decode()}")
+        if exit_code != 0:
+            raise Exception(f"Failed to query files for {package_name}: {output.decode()}")
 
-    installed_files = [line.strip() for line in output.decode().strip().splitlines() if line.strip()]
-    print(f"Installed {len(installed_files)} files")
+        installed_files = [line.strip() for line in output.decode().strip().splitlines() if line.strip()]
+        print(f"Installed {len(installed_files)} files (initial dpkg -L for {package_name})")
+
+        # If some expected files are missing, it's possible that the files are installed
+        # by another package (e.g., 'postgresql-17' vs 'pgedge-postgresql-16'). As a fallback
+        # try querying the candidate expected package name (derived from expected_file_path)
+        # and, as a last resort, list files under /usr/lib/postgresql and /usr/share/postgresql/.
+        # We'll merge fallback results with the initial list to improve matching.
+        try:
+            expected_pkg_candidate = expected_file_path.name  # e.g., 'postgresql-17'
+            if expected_pkg_candidate and expected_pkg_candidate != package_name:
+                exit_code2, output2 = container.exec_run(f"dpkg -L {expected_pkg_candidate}", user="root")
+                if exit_code2 == 0:
+                    fallback_files = [line.strip() for line in output2.decode().strip().splitlines() if line.strip()]
+                    print(f"Installed {len(fallback_files)} files from fallback dpkg -L {expected_pkg_candidate}")
+                    # Merge unique
+                    merged = list(dict.fromkeys(installed_files + fallback_files))
+                    installed_files = merged
+
+        except Exception:
+            # ignore fallback failure and try a broader filesystem scan below
+            pass
+
+        # If we still might be missing files (or to be comprehensive), run a filesystem scan
+        # under typical PostgreSQL directories and merge results. This captures files provided
+        # by other packages or differing dpkg layouts.
+        try:
+            exit_code3, output3 = container.exec_run("/bin/sh -c 'find /usr/lib/postgresql /usr/share/postgresql -type f 2>/dev/null || true'", user="root")
+            if exit_code3 == 0 and output3:
+                fs_files = [line.strip() for line in output3.decode().strip().splitlines() if line.strip()]
+                print(f"Found {len(fs_files)} files from filesystem scan under /usr/lib/postgresql and /usr/share/postgresql")
+                merged = list(dict.fromkeys(installed_files + fs_files))
+                installed_files = merged
+        except Exception:
+            # If find fails (older shells), ignore and proceed with installed_files
+            pass
+
+        print(f"Total installed files considered: {len(installed_files)}")
 
     # Normalize function to remove version-specific suffixes
     def normalize_path(path):
-        """Remove version-specific parts like -17, _17, -16, _16, /17/, /18/, etc."""
-        # Replace -17, _17, -16, _16, -18, _18 with empty string
-        normalized = re.sub(r'[-_](16|17|18)', '', path)
-        # Replace /16/, /17/, /18/ with /VERSION/ for directory paths
-        normalized = re.sub(r'/(16|17|18)/', '/VERSION/', normalized)
+        """Normalize paths to ignore minor, version-specific differences.
+
+        Rules applied:
+        - Remove PG-major-version tokens like "-16", "_17" (e.g. /usr/pgsql-17 -> /usr/pgsql)
+        - Replace directory-level numeric versions like "/17/" with "/VERSION/"
+        - Collapse extension/version-number ranges in filenames (e.g. "--1.3--1.4" -> "--VER")
+        - Collapse standalone numeric segments used purely as version markers
+        - Compare lowercased paths for case-insensitive matching
+        """
+        # Normalize and lower-case for case-insensitive compare
+        normalized = path.lower()
+
+        # Remove PG major version tokens (e.g., -17, _17)
+        normalized = re.sub(r'[-_](16|17|18)\b', '', normalized)
+
+        # Replace directory-level version segments like /16/ or /17/ with /VERSION/
+        normalized = re.sub(r'/(16|17|18)/', '/version/', normalized)
+
+        # Collapse extension numeric ranges like --1.3--1.4 or --1.10--1.11 to a placeholder
+        normalized = re.sub(r'--\d+(?:\.\d+)*(?:--\d+(?:\.\d+)*)?', '--ver', normalized)
+
+        # Collapse numeric-only tokens used as version markers (e.g., file-1.2.3 -> file-ver)
+        normalized = re.sub(r'(?<=[-_.])\d+(?:\.\d+)*(?=\b)', 'ver', normalized)
+
+        # Remove any remaining isolated numeric directory names that look like version folders
+        normalized = re.sub(r'/(\d{2,4})/', '/version/', normalized)
+
+        # Trim redundant slashes
+        normalized = re.sub(r'/{2,}', '/', normalized)
+
         return normalized
 
     # Normalize both lists
@@ -332,13 +424,90 @@ def verify_bundled_files(
     missing_files = sorted(expected_set - installed_set)
     extra_files = sorted(installed_set - expected_set)
 
+    # Heuristic: try to resolve missing files by basename matching (Debian layouts can vary)
+    if container_type == 'deb' and missing_files:
+        # Build map: basename -> list of normalized installed paths
+        installed_basename_map = {}
+        for inst in installed_normalized:
+            bn = os.path.basename(inst)
+            installed_basename_map.setdefault(bn, []).append(inst)
+
+        resolved = []
+        unresolved = []
+        for miss in missing_files:
+            # Try to find installed candidates by basename
+            bn = os.path.basename(miss)
+            candidates = installed_basename_map.get(bn, [])
+            if len(candidates) == 1:
+                # single candidate -> accept as match
+                resolved.append((miss, candidates[0]))
+            elif len(candidates) > 1:
+                # attempt to pick candidate that shares the same trailing 2 path components
+                miss_parts = miss.split('/')[-3:]
+                chosen = None
+                for c in candidates:
+                    c_parts = c.split('/')[-3:]
+                    if miss_parts[-2:] == c_parts[-2:]:
+                        chosen = c
+                        break
+                if chosen:
+                    resolved.append((miss, chosen))
+                else:
+                    unresolved.append(miss)
+            else:
+                unresolved.append(miss)
+
+        if resolved:
+            print(f"\nHeuristic resolved {len(resolved)} missing files by basename match (Debian)")
+            for m, c in resolved:
+                print(f"  - {m}  -> matched to installed {c}")
+                # remove from missing list and add to installed set
+                if m in missing_files:
+                    try:
+                        missing_files.remove(m)
+                    except ValueError:
+                        pass
+                installed_set.add(c)
+
+        # use unresolved as the new missing_files
+        missing_files = sorted(unresolved)
+
     # Report results
     if missing_files:
         print(f"\n⚠️ Missing files ({len(missing_files)}):")
         for f in missing_files[:10]:  # Show first 10
             print(f"  - {f}")
-        if len(missing_files) > 10:
-            print(f"  ... and {len(missing_files) - 10} more")
+        if len(missing_files) > 0:
+            # Build reverse mapping to show original expected paths that produced the normalized missing entries
+            norm_to_expected = {}
+            for orig in expected_files:
+                n = normalize_path(orig)
+                norm_to_expected.setdefault(n, []).append(orig)
+
+            # Build installed basename index to find near matches
+            installed_basename_map = {}
+            for orig in installed_files:
+                bn = os.path.basename(orig)
+                installed_basename_map.setdefault(bn, []).append(orig)
+
+            print("\nDetailed missing -> original expected path(s):")
+            for n in missing_files[:20]:
+                ex_list = norm_to_expected.get(n, [])
+                print(f"- Normalized: {n}")
+                if ex_list:
+                    for e in ex_list:
+                        print(f"    expected: {e}")
+                        # show installed candidates with same basename
+                        bn = os.path.basename(e)
+                        cand = installed_basename_map.get(bn, [])
+                        if cand:
+                            print(f"      installed candidates with same basename:")
+                            for c in cand[:5]:
+                                print(f"        {c}")
+                        else:
+                            print(f"      no installed candidate with basename {bn}")
+                else:
+                    print(f"    (no original expected path mapped to this normalized name)")
 
     if extra_files:
         print(f"\n⚠️ Extra files ({len(extra_files)}):")

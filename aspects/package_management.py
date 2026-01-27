@@ -22,7 +22,15 @@ def install_package(container, package_name, pg_major_version=None, install_pg_s
         Exception: If package installation fails
     """
 
-    print(f"\n--- Installing {package_name} on container ---")
+    # Allow package_name to be a comma-separated string or a list of package names
+    if isinstance(package_name, str):
+        packages = [p.strip() for p in package_name.split(',') if p.strip()]
+    elif isinstance(package_name, (list, tuple)):
+        packages = [str(p).strip() for p in package_name if str(p).strip()]
+    else:
+        raise Exception("package_name must be a string or list/tuple of package names")
+
+    print(f"\n--- Installing packages: {', '.join(packages)} on container ---")
 
     # Detect package manager inside the container
     exit_code, _ = container.exec_run("command -v dnf", user="root")
@@ -41,17 +49,18 @@ def install_package(container, package_name, pg_major_version=None, install_pg_s
 
     print(f"Detected platform: {platform}")
 
-    # Install the main package
-    print(f"Installing {package_name}...")
-    exit_code, output = container.exec_run(
-        f"{pkg_mgr} {package_name}",
-        user="root"
-    )
+    # Install the packages sequentially
+    for pkg in packages:
+        print(f"Installing {pkg}...")
+        exit_code, output = container.exec_run(
+            f"{pkg_mgr} {pkg}",
+            user="root"
+        )
 
-    if exit_code != 0:
-        raise Exception(f"Failed to install {package_name}: {output.decode()}")
+        if exit_code != 0:
+            raise Exception(f"Failed to install {pkg}: {output.decode()}")
 
-    print(f" Successfully installed {package_name}")
+        print(f"\x05 Successfully installed {pkg}")
 
     # Install PostgreSQL server package for Debian if requested
     if platform == "debian" and install_pg_server and pg_major_version:
@@ -64,11 +73,70 @@ def install_package(container, package_name, pg_major_version=None, install_pg_s
         if exit_code != 0:
             raise Exception(f"Failed to install {server_package}: {output.decode()}")
 
-        print(f" Successfully installed {server_package}")
-        message = f"Package {package_name} and {server_package} installed successfully on {platform}"
+        print(f"\x05 Successfully installed {server_package}")
+        message = f"Packages {', '.join(packages)} and {server_package} installed successfully on {platform}"
     else:
-        message = f"Package {package_name} installed successfully on {platform}"
+        message = f"Packages {', '.join(packages)} installed successfully on {platform}"
 
+    return True, platform, message
+
+
+def upgrade_package(container, package_name):
+    """
+    Upgrade a package on a Docker container.
+
+    Args:
+        container: Docker container object with exec_run method
+        package_name: Name of the package to upgrade
+
+    Returns:
+        tuple: (success: bool, platform: str, message: str)
+
+    Raises:
+        Exception: If package upgrade fails
+    """
+
+    # Allow package_name to be a comma-separated string or a list of package names
+    if isinstance(package_name, str):
+        packages = [p.strip() for p in package_name.split(',') if p.strip()]
+    elif isinstance(package_name, (list, tuple)):
+        packages = [str(p).strip() for p in package_name if str(p).strip()]
+    else:
+        raise Exception("package_name must be a string or list/tuple of package names")
+
+    # Detect package manager inside the container
+    exit_code, _ = container.exec_run("command -v dnf", user="root")
+    if exit_code == 0:
+        pkg_mgr = "dnf upgrade -y"
+        platform = "rhel"
+    else:
+        exit_code, _ = container.exec_run("/bin/bash -c 'command -v apt-get'", user="root")
+        if exit_code == 0:
+            # Run apt-get update for Debian/Ubuntu
+            container.exec_run("apt-get update", user="root")
+            pkg_mgr = "apt-get upgrade -y"
+            platform = "debian"
+        else:
+            raise Exception("No supported package manager found (dnf or apt-get)")
+
+    print(f"Detected platform: {platform}")
+
+    # Upgrade the packages sequentially
+    for pkg in packages:
+        print(f"Upgrading {pkg}...")
+        exit_code, output = container.exec_run(
+            f"{pkg_mgr} {pkg}",
+            user="root"
+        )
+
+        output_text = output.decode().lower()
+
+        if exit_code != 0:
+            raise Exception(f"Failed to upgrade {pkg}: {output.decode()}")
+
+    # If we reach here for all packages without exception, prepare message
+    message = f"Packages {', '.join(packages)} upgraded successfully on {platform}"
+    print(f"✅ {message}")
     return True, platform, message
 
 
@@ -134,6 +202,7 @@ def normalize_version(version_string, package_name=""):
     - 1.0-beta2, 1.0.0-beta1 (hyphen separator)
     - 1.0beta2, 1.0.0beta2 (no separator)
     - 1.0, 1.0.0 (different precision)
+    - 1.0.0-beta3.1.el9 (RPM VERSION-RELEASE with dist suffix)
     - 16.11-1.bullseye (Debian packaging suffix)
 
     Args:
@@ -148,6 +217,10 @@ def normalize_version(version_string, package_name=""):
     # Convert to lowercase for case-insensitive comparison
     version = version_string.lower().strip()
     package_lower = package_name.lower()
+
+    # Strip RPM dist suffixes (e.g., .el9, .el8, .rocky9, .alma9, .fc39, .oel9)
+    # These appear at the end of RPM VERSION-RELEASE strings
+    version = re.sub(r'\.(?:el|rhel|centos|rocky|alma|fc|oel)\w*$', '', version)
 
     # Strip Debian/Ubuntu packaging suffixes like -1.bullseye, -2.jammy, etc.
     # Pattern: -<digit>[.<distro>] at the end of version string
@@ -211,8 +284,8 @@ def verify_package_version(container, package_name, expected_version):
     # Detect package manager inside the container
     exit_code, _ = container.exec_run("command -v dnf", user="root")
     if exit_code == 0:
-        # RHEL-based: use rpm to query version
-        version_cmd = f"rpm -q --queryformat '%{{VERSION}}' {package_name}"
+        # RHEL-based: use rpm to query version (include RELEASE for beta info)
+        version_cmd = f"rpm -q --queryformat '%{{VERSION}}-%{{RELEASE}}' {package_name}"
         platform = "rhel"
     else:
         exit_code, _ = container.exec_run("/bin/bash -c 'command -v apt-get'", user="root")
@@ -296,3 +369,4 @@ def validate_bundled_file(container, file_path):
     print(f" {message}")
 
     return True, file_info, message
+

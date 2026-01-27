@@ -32,46 +32,51 @@ elif platform_filter == "deb":
 
 # Common configuration
 repo = os.getenv("REPO", "release")
+upgrade_repo = os.getenv("UPGRADE_REPO", "staging")
 pgport = os.getenv("PG_PORT", "5432")
 pgdata = os.getenv("PG_DATA_DIR", "/tmp/n1")
-pg_major_version = os.getenv("PG_MAJOR_VERSION", "16")
-lolor_version = os.getenv(f"PGEDGE_LOLOR_{pg_major_version}_VERSION", "1.2.2")
+pg_major_version = os.getenv("PG_MAJOR_VERSION", "17")
+server_version = os.getenv("PG_VERSION", "17.6")
 
 # User configuration
 rhel_pguser = os.getenv("PG_USER", "postgres")
 deb_pguser = os.getenv("DEB_PG_USER", "postgres")
 
-# Server package configuration (needed for initdb/pg_ctl)
-rhel_server_package = os.getenv("SERVER_PACKAGE", f"pgedge-postgresql{pg_major_version}-server")
-deb_server_package = os.getenv("DEB_SERVER_PACKAGE", f"pgedge-postgresql-{pg_major_version}")
+# Server package configuration - use SERVER_PACKAGE and DEB_SERVER_PACKAGE (comma separated)
+rhel_components = [c.strip() for c in os.getenv("SERVER_PACKAGE", f"pgedge-postgresql{pg_major_version}-server").split(",") if c.strip()]
+deb_components = [c.strip() for c in os.getenv("DEB_SERVER_PACKAGE", f"pgedge-postgresql-{pg_major_version}").split(",") if c.strip()]
+
+# Integration testing - when enabled, also install integration packages alongside server components
+server_integration_testing = os.getenv("SERVER_INTEGRATION_TESTING", "false").lower() == "true"
+if server_integration_testing:
+    rhel_integration_packages = [c.strip() for c in os.getenv("SERVER_INTEGRATION_PACKAGES", "").split(",") if c.strip()]
+    deb_integration_packages = [c.strip() for c in os.getenv("DEB_SERVER_INTEGRATION_PACKAGES", "").split(",") if c.strip()]
+    rhel_components.extend(rhel_integration_packages)
+    deb_components.extend(deb_integration_packages)
 
 # RHEL-specific configuration
 rhel_pgbin = os.getenv("PG_BIN_PATH", f"/usr/pgsql-{pg_major_version}/bin")
-rhel_lolor_package = os.getenv("LOLOR_PACKAGE", f"pgedge-lolor_{pg_major_version}")
-rhel_lolor_lib = os.getenv("RHEL_LOLOR_LIB", f"/usr/pgsql-{pg_major_version}/lib")
-rhel_bundled_files = os.getenv(
-    "LOLOR_BUNDLED_FILES",
-    f"/usr/pgsql-{pg_major_version}/lib/lolor.so,/usr/pgsql-{pg_major_version}/share/extension/lolor--1.0--1.1.sql,/usr/pgsql-{pg_major_version}/share/extension/lolor--1.0.sql,/usr/pgsql-{pg_major_version}/share/extension/lolor--1.1--1.2.sql,/usr/pgsql-{pg_major_version}/share/extension/lolor--1.1.sql,/usr/pgsql-{pg_major_version}/share/extension/lolor--1.2.sql,/usr/pgsql-{pg_major_version}/share/extension/lolor.control"
-).split(",")
 
 # Debian-specific configuration
 deb_pgbin = os.getenv("DEB_PG_BIN_PATH", f"/usr/lib/postgresql/{pg_major_version}/bin")
 deb_pg_path = os.getenv("DEB_PG_PATH", f"/usr/lib/postgresql/{pg_major_version}")
 deb_pg_share_path = os.getenv("DEB_PG_SHARE_PATH", f"/usr/share/postgresql/{pg_major_version}")
-deb_lolor_package = os.getenv("DEB_LOLOR_PACKAGE", f"pgedge-postgresql-{pg_major_version}-lolor")
-deb_lolor_lib = os.getenv("DEB_LOLOR_LIB", f"/usr/lib/postgresql/{pg_major_version}/lib")
-deb_bundled_files = os.getenv(
-    "DEB_LOLOR_BUNDLED_FILES",
-    f"{deb_pg_path}/lib/lolor.so,{deb_pg_share_path}/extension/lolor--1.0--1.1.sql,{deb_pg_share_path}/extension/lolor--1.0.sql,{deb_pg_share_path}/extension/lolor--1.1--1.2.sql,{deb_pg_share_path}/extension/lolor--1.1.sql,{deb_pg_share_path}/extension/lolor--1.2.sql,{deb_pg_share_path}/extension/lolor.control"
-).split(",")
 
-# LOLOR stripped library names (comma-separated list)
-lolor_stripped_lib = os.getenv("LOLOR_STRIPPED_LIB", "lolor.so")
+# Extension testing
+#check_extensions = os.getenv("TEST_EXTENSIONS", "false").lower() == "true"
+base_extensions = [ext.strip() for ext in os.getenv(
+    "PG_NATIVE_EXTENSIONS",
+    "bloom,bool_plperl,btree_gin,btree_gist,citext,cube,dblink,"
+    "dict_int,earthdistance,fuzzystrmatch,hstore,intagg,intarray,isn,"
+    "jsonb_plperl,lo,ltree,pg_buffercache,pg_prewarm,pg_stat_statements,"
+    "pg_trgm,pgcrypto,pgrowlocks,pgstattuple,plperl,plpgsql,postgres_fdw,"
+    "seg,sslinfo,tablefunc,tsm_system_rows,tsm_system_time,unaccent,uuid-ossp"
+).split(",") if ext.strip()]
 
-# Additional configuration for extension tests
-check_extensions = os.getenv("CHECK_EXTENSIONS", "true").lower() == "true"
-base_extensions = [ext.strip() for ext in os.getenv("BASE_EXTENSIONS", "lolor").split(",") if ext.strip()]
-components = [comp.strip() for comp in os.getenv("COMPONENTS", f"pgedge-lolor_{pg_major_version}").split(",") if comp.strip()]
+# PL packages and extensions
+pl_packages_rhel = [p.strip() for p in os.getenv("PL_PACKAGES", f"pgedge-postgresql{pg_major_version}-plperl,pgedge-postgresql{pg_major_version}-pltcl,pgedge-postgresql{pg_major_version}-plpython3").split(",") if p.strip()]
+pl_packages_deb = [p.strip() for p in os.getenv("DEB_PL_PACKAGES", f"pgedge-postgresql-plperl-{pg_major_version},pgedge-postgresql-pltcl-{pg_major_version},pgedge-postgresql-plpython3-{pg_major_version}").split(",") if p.strip()]
+pl_extensions = [e.strip() for e in os.getenv("PL_EXTENSIONS", "plperl,plpython3u,pltcl").split(",") if e.strip()]
 
 
 def get_container_config(container_type):
@@ -80,20 +85,36 @@ def get_container_config(container_type):
         return {
             "pgbin": rhel_pgbin.rstrip('/'),
             "pguser": rhel_pguser,
-            "lolor_package": rhel_lolor_package,
-            "lolor_lib": rhel_lolor_lib,
-            "bundled_files": rhel_bundled_files,
-            "server_package": rhel_server_package
+            "components": rhel_components,
+            "pl_packages": pl_packages_rhel
         }
     else:  # deb
         return {
             "pgbin": deb_pgbin.rstrip('/'),
             "pguser": deb_pguser,
-            "lolor_package": deb_lolor_package,
-            "lolor_lib": deb_lolor_lib,
-            "bundled_files": deb_bundled_files,
-            "server_package": deb_server_package
+            "components": deb_components,
+            "pl_packages": pl_packages_deb
         }
+
+
+def get_components_for_container(container_type):
+    """Get list of components for the container type"""
+    config = get_container_config(container_type)
+    return config["components"]
+
+
+# Generate all container-component combinations for parametrization
+def generate_container_component_combinations():
+    """Generate all combinations of containers and their components"""
+    combinations = []
+    for container_name, container_type in all_containers:
+        components = get_components_for_container(container_type)
+        for component in components:
+            combinations.append((container_name, container_type, component))
+    return combinations
+
+
+all_container_component_combinations = generate_container_component_combinations()
 
 
 # ============================================================================
@@ -126,6 +147,7 @@ def test_install_prerequisites(container_name, container_type):
     except Exception as e:
         pytest.fail(f"Failed to install prerequisites: {str(e)}")
 
+
 @pytest.mark.parametrize("container_name,container_type", all_containers)
 def test_configure_repository(container_name, container_type):
     """Step 1: Configure the repository file using configure_repository module"""
@@ -152,16 +174,14 @@ def test_configure_repository(container_name, container_type):
         pytest.fail(f"Failed to configure repository: {str(e)}")
 
 
-@pytest.mark.parametrize("container_name,container_type", all_containers)
-def test_component_install(container_name, container_type):
-    """Step 2: Install pgedge-lolor using package_management module"""
+@pytest.mark.parametrize("container_name,container_type,component", all_container_component_combinations)
+def test_component_install(container_name, container_type, component):
+    """Step 2: Install each server component using package_management module"""
     container_name = container_name.strip()
-    if not container_name:
-        pytest.skip("No container defined in env")
+    component = component.strip()
 
-    # Get container-specific configuration
-    config = get_container_config(container_type)
-    lolor_package = config["lolor_package"]
+    if not container_name or not component:
+        pytest.skip("No container or component defined")
 
     try:
         container = client.containers.get(container_name)
@@ -170,31 +190,29 @@ def test_component_install(container_name, container_type):
 
     assert container.status == "running"
 
-    print(f"\n--- Installing {lolor_package} on {container_name} ({container_type}) ---")
+    print(f"\n--- Installing {component} on {container_name} ({container_type}) ---")
 
     # Use the package_management module to install the package
     try:
-        success, platform, message = package_management.install_package(container, lolor_package)
+        success, platform, message = package_management.install_package(container, component)
         assert success, f"Package installation failed: {message}"
         print(f"✅ {message}")
         print(f"✅ Platform detected: {platform}")
     except Exception as e:
-        pytest.fail(f"Failed to install {lolor_package}: {str(e)}")
+        pytest.fail(f"Failed to install {component}: {str(e)}")
 
 
-@pytest.mark.parametrize("container_name,container_type", all_containers)
-def test_component_package_version(container_name, container_type):
-    """Step 3: Check the package version using package_management module"""
+@pytest.mark.parametrize("container_name,container_type,component", all_container_component_combinations)
+def test_component_upgrade(container_name, container_type, component):
+    """Step 3: Upgrade each component if UPGRADE=true"""
+    if os.getenv("UPGRADE", "false").lower() != "true":
+        pytest.skip("Skipping upgrade tests because UPGRADE=false in env")
+
     container_name = container_name.strip()
-    if not container_name:
-        pytest.skip("No container defined in env")
+    component = component.strip()
 
-    if not lolor_version:
-        pytest.skip("No LOLOR_VERSION defined in env, skipping version check")
-
-    # Get container-specific configuration
-    config = get_container_config(container_type)
-    lolor_package = config["lolor_package"]
+    if not container_name or not component:
+        pytest.skip("No container or component defined")
 
     try:
         container = client.containers.get(container_name)
@@ -203,73 +221,42 @@ def test_component_package_version(container_name, container_type):
 
     assert container.status == "running"
 
-    print(f"\n--- Verifying {lolor_package} version on {container_name} ({container_type}) ---")
+    print(f"\n--- Upgrading {component} on {container_name} ({container_type}) ---")
 
-    # Use the package_management module to verify the package version
+    # Switch to upgrade repo if needed
+    if upgrade_repo in ["staging", "daily"]:
+        try:
+            configure_repository.configure_pgedge_repository(container, upgrade_repo)
+        except Exception as e:
+            print(f"Warning: Could not switch to upgrade repo: {e}")
+
+    # Use the package_management module to upgrade the package
     try:
-        success, platform, installed_version, message = package_management.verify_package_version(
-            container, lolor_package, lolor_version
-        )
-        assert success, f"Version verification failed: {message}"
+        success, platform, message = package_management.upgrade_package(container, component)
+        if not success:
+            if "already" in message.lower() or "newest" in message.lower():
+                pytest.skip(f"{component} is already at newest version")
+        assert success, f"Package upgrade failed: {message}"
         print(f"✅ {message}")
         print(f"✅ Platform detected: {platform}")
     except Exception as e:
-        pytest.fail(f"Failed to verify {lolor_package} version: {str(e)}")
+        pytest.fail(f"Failed to upgrade {component}: {str(e)}")
 
-@pytest.mark.parametrize("container_name,container_type", all_containers)
-def test_verify_binaries_stripped(container_name, container_type):
-    """Step 4: Verify that LOLOR libraries are stripped using file_management module"""
-    container_name = container_name.strip()
-    if not container_name:
-        pytest.skip("No container defined in env")
 
-    try:
-        container = client.containers.get(container_name)
-    except docker.errors.NotFound:
-        pytest.skip(f"Container {container_name} not found or not running.")
-
-    assert container.status == "running"
-
-    # Get container-specific configuration
-    config = get_container_config(container_type)
-    lolor_lib_dir = config.get("lolor_lib", "")
-
-    if not lolor_lib_dir:
-        pytest.skip(f"No LOLOR library directory configured for {container_type}")
-
-    print(f"\n--- Verifying LOLOR libraries are stripped in {lolor_lib_dir} on {container_name} ({container_type}) ---")
-
-    # Use file_management module to verify binaries are stripped
-    try:
-        success, details, message = file_management.verify_binaries_stripped(
-            container=container,
-            binary_path=lolor_lib_dir.rstrip('/'),
-            container_name=container_name,
-            binary_names=lolor_stripped_lib
-        )
-
-        # If verification failed, fail the test with details
-        if not success:
-            pytest.fail(f"Failed: {message}\n{details}")
-
-        print(f"✅ {message}")
-        if details:
-            print(f"   Details: {details}")
-
-    except Exception as e:
-        pytest.fail(f"Failed to verify binaries are stripped: {str(e)}")
-
-@pytest.mark.parametrize("container_name,container_type", all_containers)
-def test_verify_bundled_files(container_name, container_type):
+@pytest.mark.parametrize("container_name,container_type,component", all_container_component_combinations)
+def test_verify_bundled_files(container_name, container_type, component):
     """Verify bundled files for each component match expected files
 
-    This compares the installed files from rpm/deb with expected files
-    in expected-output/rpm/ or expected-output/deb/ directory
+    This compares the installed files from rpm/deb with expected files.
+    PostgreSQL core packages (server/contrib) are looked up under
+    expected-output/{platform}/{pg_major_version}/ (e.g., expected-output/rpm/16/postgresql16-server).
+    Other component packages are looked up directly under expected-output/{platform}/.
     """
     container_name = container_name.strip()
+    component = component.strip()
 
-    if not container_name:
-        pytest.skip("Invalid container")
+    if not container_name or not component:
+        pytest.skip("Invalid container or component")
 
     try:
         container = client.containers.get(container_name)
@@ -277,25 +264,20 @@ def test_verify_bundled_files(container_name, container_type):
         pytest.skip(f"Container {container_name} not found or not running.")
 
     assert container.status == "running"
-
-    # Get the actual package name for the platform
-    config = get_container_config(container_type)
-    actual_package = config["lolor_package"]
 
     # Get project root directory (parent of component-test/)
     project_root = Path(__file__).parent.parent
 
     try:
         # Call reusable verification function
-        # Use actual_package for both component and package_name to ensure
-        # correct expected file lookup based on the platform
         success, details, message = file_management.verify_bundled_files(
             container=container,
             container_name=container_name,
             container_type=container_type,
-            component=actual_package,
-            package_name=actual_package,
-            project_root=project_root
+            component=component,
+            package_name=component,
+            project_root=project_root,
+            pg_major_version=pg_major_version
         )
 
         # If verification failed, fail the test with details
@@ -321,11 +303,9 @@ def test_verify_bundled_files(container_name, container_type):
             pytest.fail(f"Failed to verify bundled files: {str(e)}")
 
 
-
-
 @pytest.mark.parametrize("container_name,container_type", all_containers)
 def test_init_cluster(container_name, container_type):
-    """Initialize PostgreSQL cluster with LOLOR-specific GUC parameters using pg_server_management module"""
+    """Initialize PostgreSQL cluster using pg_server_management module"""
     container_name = container_name.strip()
     if not container_name:
         pytest.skip("No container defined in env")
@@ -344,23 +324,67 @@ def test_init_cluster(container_name, container_type):
 
     print(f"\n--- Initializing cluster on {container_name} ---")
 
-    # Define LOLOR-specific GUC parameters
-    guc_parameters = {
-        "shared_preload_libraries": "'lolor'",
-        "wal_level": "logical",
-        "max_replication_slots": "10",
-        "max_wal_senders": "10"
-    }
-
-    # Use the pg_server_management module to initialize cluster
+    # Use the pg_server_management module to initialize cluster (no custom GUC params for server test)
     try:
         success, config_content, message = pg_server_management.init_cluster(
-            container, pgbin, pgdata, pguser, guc_parameters
+            container, pgbin, pgdata, pguser, guc_parameters=None
         )
         assert success, f"Cluster initialization failed: {message}"
         print(f"✅ {message}")
     except Exception as e:
         pytest.fail(f"Failed to initialize cluster: {str(e)}")
+
+
+@pytest.mark.parametrize("container_name,container_type", all_containers)
+def test_copy_config_file(container_name, container_type):
+    """Copy postgresql config file with all extensions preloaded.
+
+    Only runs when SERVER_INTEGRATION_TESTING=true, since the _all.conf
+    config includes shared_preload_libraries for integration extensions.
+    """
+    if not server_integration_testing:
+        pytest.skip("Skipping config file copy because SERVER_INTEGRATION_TESTING is not enabled")
+
+    container_name = container_name.strip()
+    if not container_name:
+        pytest.skip("No container defined in env")
+
+    try:
+        container = client.containers.get(container_name)
+    except docker.errors.NotFound:
+        pytest.skip(f"Container {container_name} not found or not running.")
+
+    assert container.status == "running"
+
+    # Get container-specific configuration
+    config = get_container_config(container_type)
+    pguser = config["pguser"]
+
+    print(f"\n--- Copying PostgreSQL config file on {container_name} ---")
+
+    # Path to config file
+    local_file = Path(__file__).parent.parent / "config" / f"postgresql_{pg_major_version}_all.conf"
+
+    if not local_file.exists():
+        pytest.skip(f"Config file not found: {local_file}")
+
+    container_dest = f"{container_name}:{pgdata}/postgresql.conf"
+
+    # Ensure destination directory exists inside the container
+    container.exec_run(f"mkdir -p {pgdata}", user="root")
+
+    # Copy file from host to container
+    try:
+        subprocess.run(["docker", "cp", str(local_file), container_dest], check=True)
+        print(f"✅ Config file copied successfully from {local_file}")
+    except subprocess.CalledProcessError as e:
+        pytest.fail(f"Failed to copy config file: {e}")
+
+    # Verify the copy
+    exit_code, output = container.exec_run(f"ls -l {pgdata}/postgresql.conf", user=pguser)
+    if exit_code != 0:
+        pytest.fail(f"Config file not found after copy: {output.decode()}")
+
 
 @pytest.mark.parametrize("container_name,container_type", all_containers)
 def test_start_server(container_name, container_type):
@@ -393,6 +417,7 @@ def test_start_server(container_name, container_type):
     except Exception as e:
         pytest.fail(f"Failed to start PostgreSQL server: {str(e)}")
 
+
 @pytest.mark.parametrize("container_name,container_type", all_containers)
 def test_check_connection(container_name, container_type):
     """Check PostgreSQL connection using pg_server_management module"""
@@ -421,8 +446,120 @@ def test_check_connection(container_name, container_type):
         )
         assert success, f"Connection check failed: {message}"
         print(f"✅ {message}")
+        print(f"PostgreSQL version info:\n{version_output}")
     except Exception as e:
         pytest.fail(f"Failed to check PostgreSQL connection: {str(e)}")
+
+
+@pytest.mark.parametrize("container_name,container_type", all_containers)
+def test_binary_versions(container_name, container_type):
+    """Check postgres binary version matches expected"""
+    container_name = container_name.strip()
+    if not container_name:
+        pytest.skip("No container defined in env")
+
+    try:
+        container = client.containers.get(container_name)
+    except docker.errors.NotFound:
+        pytest.skip(f"Container {container_name} not found or not running.")
+
+    assert container.status == "running"
+
+    # Get container-specific configuration
+    config = get_container_config(container_type)
+    pgbin = config["pgbin"]
+    pguser = config["pguser"]
+
+    print(f"\n--- Checking binary version on {container_name} ---")
+
+    exit_code, output = container.exec_run(f"{pgbin}/postgres -V", user=pguser)
+    assert exit_code == 0, f"Failed to get postgres version: {output.decode()}"
+
+    version_str = output.decode().strip()
+    assert server_version in version_str, f"Version mismatch: expected {server_version} in {version_str}"
+    print(f"✅ Binary version verified: {version_str}")
+
+
+@pytest.mark.parametrize("container_name,container_type", all_containers)
+def test_binaries_stripped(container_name, container_type):
+    """Check all binaries in pgbin are stripped"""
+    container_name = container_name.strip()
+    if not container_name:
+        pytest.skip("No container defined in env")
+
+    try:
+        container = client.containers.get(container_name)
+    except docker.errors.NotFound:
+        pytest.skip(f"Container {container_name} not found or not running.")
+
+    assert container.status == "running"
+
+    # Get container-specific configuration
+    config = get_container_config(container_type)
+    pgbin = config["pgbin"]
+
+    print(f"\n--- Checking binaries are stripped in {pgbin} on {container_name} ---")
+
+    exit_code, output = container.exec_run(
+        f"find {pgbin} -type f -exec file {{}} \\; | grep ELF | grep -v stripped",
+        user="root",
+    )
+
+    # exit_code == 1 means grep found nothing (all binaries are stripped)
+    assert exit_code == 1, f"Unstripped binaries found:\n{output.decode()}"
+    print(f"✅ All binaries in {pgbin} are stripped")
+
+
+@pytest.mark.parametrize("container_name,container_type", all_containers)
+def test_create_pl_extensions(container_name, container_type):
+    """Install PL packages and create PL extensions"""
+
+    container_name = container_name.strip()
+    if not container_name:
+        pytest.skip("No container defined in env")
+
+    try:
+        container = client.containers.get(container_name)
+    except docker.errors.NotFound:
+        pytest.skip(f"Container {container_name} not found or not running.")
+
+    assert container.status == "running"
+
+    # Get container-specific configuration
+    config = get_container_config(container_type)
+    pgbin = config["pgbin"]
+    pguser = config["pguser"]
+    pl_packages = config["pl_packages"]
+
+    print(f"\n--- Installing PL packages and creating extensions on {container_name} ---")
+
+    # Install PL packages
+    for pkg in pl_packages:
+        pkg = pkg.strip()
+        if pkg:
+            print(f"Installing {pkg}...")
+            try:
+                success, platform, message = package_management.install_package(container, pkg)
+                if not success:
+                    print(f"Warning: {message}")
+                else:
+                    print(f"✅ Installed {pkg}")
+            except Exception as e:
+                print(f"Warning: Failed to install {pkg}: {e}")
+
+    # Create PL extensions
+    for ext in pl_extensions:
+        ext = ext.strip()
+        if ext:
+            print(f"Creating extension {ext}...")
+            exit_code, output = container.exec_run(
+                f"{pgbin}/psql -p {pgport} -U {pguser} -d postgres "
+                f"-c 'CREATE EXTENSION IF NOT EXISTS {ext};'",
+                user=pguser,
+            )
+            assert exit_code == 0, f"Failed to create {ext}: {output.decode()}"
+            print(f"✅ Created extension {ext}")
+
 
 @pytest.mark.parametrize("container_name,container_type", all_containers)
 @pytest.mark.parametrize("extension", base_extensions)
@@ -431,8 +568,6 @@ def test_create_extensions(container_name, container_type, extension):
 
     This creates a separate test for each container-extension combination
     """
-    if not check_extensions:
-        pytest.skip("Extension check disabled via env")
 
     container_name = container_name.strip()
     extension = extension.strip()
@@ -469,114 +604,6 @@ def test_create_extensions(container_name, container_type, extension):
 
 
 @pytest.mark.parametrize("container_name,container_type", all_containers)
-@pytest.mark.parametrize("component", components)
-def test_component_functional_smoke(container_name, container_type, component):
-    """Execute functional smoke tests for each component
-
-    This runs SQL test files from sql/<component-name>.sql
-    and stores output in actual-output/sql/<component-name>/<pg_major_version>/rpm/<timestamp>.txt
-    """
-    if not check_extensions:
-        pytest.skip("Extension check disabled via env")
-
-    container_name = container_name.strip()
-    component = component.strip()
-
-    if not container_name or not component:
-        pytest.skip("Invalid container or component")
-
-    try:
-        container = client.containers.get(container_name)
-    except docker.errors.NotFound:
-        pytest.skip(f"Container {container_name} not found or not running.")
-
-    assert container.status == "running"
-
-    # Get container-specific configuration
-    config = get_container_config(container_type)
-    pgbin = config["pgbin"]
-    pguser = config["pguser"]
-
-    # Extract base component name by removing 'pgedge-' prefix and version suffix
-    # Example: pgedge-pg-search_17 -> pg-search
-    base_name = component.replace("pgedge-", "")
-    # Remove version suffix (_17, _16, etc.)
-    base_name = base_name.rsplit('_', 1)[0]
-
-    # Path to SQL test file (sql directory is located one level up from component-test)
-    sql_file_path = Path(__file__).parent.parent / "sql" / f"{base_name}.sql"
-
-    # Check if SQL test file exists
-    if not sql_file_path.exists():
-        pytest.skip(f"No SQL test file found for {base_name} at {sql_file_path}")
-
-    print(f"\n--- Running functional smoke test for {component} on {container_name} ---")
-    print(f"Executing SQL file: {sql_file_path}")
-
-    # Read SQL file content
-    with open(str(sql_file_path), 'r') as f:
-        sql_content = f.read()
-
-    # Create temp SQL file in container
-    temp_sql_path = f"/tmp/{base_name}_test.sql"
-
-    # Write SQL content to container using heredoc
-    exit_code, output = container.exec_run(
-        f"bash -c \"cat > {temp_sql_path} << 'EOSQL'\n{sql_content}\nEOSQL\"",
-        user=pguser
-    )
-
-    if exit_code != 0:
-        pytest.fail(f"Failed to create SQL file in container: {output.decode()}")
-
-    # Execute the SQL file
-    exit_code, output = container.exec_run(
-        f"{pgbin}/psql -p {pgport} -U {pguser} -d postgres -f {temp_sql_path}",
-        user=pguser
-    )
-
-    # Clean up temp file
-    container.exec_run(f"rm -f {temp_sql_path}", user=pguser)
-
-    # Create output directory structure
-    date_part = datetime.now().strftime("%d%m%y")  # ddmmyy format
-    time_part = datetime.now().strftime("%H%M%S")  # hhmmss format
-    filename = f"{base_name}-{date_part}-{time_part}.txt"
-
-    # Determine platform-specific path (rpm for RHEL, deb for Debian)
-    platform_dir = "rpm" if container_type == "rhel" else "deb"
-    # Use project root (parent of component-test/) so outputs go to ../actual-output/
-    project_root = Path(__file__).parent.parent
-    output_dir = project_root / "actual-output" / "sql" / base_name / pg_major_version / platform_dir
-    output_dir.mkdir(parents=True, exist_ok=True)
-
-    # Save output to file
-    output_file = output_dir / filename
-    with open(output_file, 'w') as f:
-        f.write(f"# Functional Smoke Test for {component}\n")
-        f.write(f"# Container: {container_name}\n")
-        f.write(f"# Container Type: {container_type}\n")
-        f.write(f"# PostgreSQL Version: {pg_major_version}\n")
-        f.write(f"# Date: {date_part} Time: {time_part}\n")
-        f.write(f"# SQL File: {sql_file_path}\n")
-        f.write("=" * 80 + "\n\n")
-        f.write(output.decode())
-
-    print(f"Output saved to: {output_file}")
-
-    if exit_code != 0:
-        print(f"⚠️ SQL execution had errors (exit code: {exit_code})")
-        print(f"Output:\n{output.decode()}")
-        pytest.fail(f"SQL test failed for {component}: See {output_file} for details")
-
-    print(f"✅ Functional smoke test passed: {component}")
-    print(f"   Results: {output_file}")
-
-
-
-
-
-@pytest.mark.parametrize("container_name,container_type", all_containers)
 def test_stop_server(container_name, container_type):
     """Stop PostgreSQL server using pg_server_management module"""
     container_name = container_name.strip()
@@ -607,16 +634,15 @@ def test_stop_server(container_name, container_type):
     except Exception as e:
         pytest.fail(f"Failed to stop PostgreSQL server: {str(e)}")
 
-@pytest.mark.parametrize("container_name,container_type", all_containers)
-def test_package_uninstall(container_name, container_type):
-    """Uninstall lolor package using package_management module"""
-    container_name = container_name.strip()
-    if not container_name:
-        pytest.skip("No container defined in env")
 
-    # Get container-specific configuration
-    config = get_container_config(container_type)
-    lolor_package = config["lolor_package"]
+@pytest.mark.parametrize("container_name,container_type,component", all_container_component_combinations)
+def test_component_uninstall(container_name, container_type, component):
+    """Uninstall each component using package_management module"""
+    container_name = container_name.strip()
+    component = component.strip()
+
+    if not container_name or not component:
+        pytest.skip("No container or component defined")
 
     try:
         container = client.containers.get(container_name)
@@ -625,16 +651,16 @@ def test_package_uninstall(container_name, container_type):
 
     assert container.status == "running"
 
-    print(f"\n--- Uninstalling {lolor_package} on {container_name} ({container_type}) ---")
+    print(f"\n--- Uninstalling {component} on {container_name} ({container_type}) ---")
 
     # Use the package_management module to uninstall the package
     try:
-        success, platform, message = package_management.uninstall_package(container, lolor_package)
+        success, platform, message = package_management.uninstall_package(container, component)
         assert success, f"Package uninstallation failed: {message}"
         print(f"✅ {message}")
         print(f"✅ Platform detected: {platform}")
     except Exception as e:
-        pytest.fail(f"Failed to uninstall {lolor_package}: {str(e)}")
+        pytest.fail(f"Failed to uninstall {component}: {str(e)}")
 
 
 @pytest.mark.parametrize("container_name,container_type", all_containers)

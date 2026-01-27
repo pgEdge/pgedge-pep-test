@@ -1,15 +1,17 @@
-/etc/nginx/sites-available/pgedge-nla-web
-/usr/lib/systemd/system/pgedge-nla-web.service
+/etc/nginx/conf.d/pgedge-nla-web.conf
 /usr/share/doc/pgedge-nla-web/LICENCE.md
 /usr/share/doc/pgedge-nla-web/README.md
 /usr/share/pgedge-nla-web-sbom.json
 /usr/share/pgedge-nla-web-sbom.json.asc
+/usr/share/pgedge/nla-web
+/usr/share/pgedge/nla-web/assets
 /usr/share/pgedge/nla-web/assets/index-BwFBaaf0.js
 /usr/share/pgedge/nla-web/assets/index-BwFBaaf0.js.map
 /usr/share/pgedge/nla-web/assets/logo-dark-BAaEnOhp.png
 /usr/share/pgedge/nla-web/assets/logo-light-gaA4LRit.png
 /usr/share/pgedge/nla-web/favicon.ico
 /usr/share/pgedge/nla-web/index.html
+/var/log/pgedge
 /var/log/pgedge/nla-web
 
 

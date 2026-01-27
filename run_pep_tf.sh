@@ -3,6 +3,86 @@
 # Directory containing your env files
 ENV_DIR="./configuration"
 
+# ============================================================================
+# CLI argument parsing
+# ============================================================================
+CLI_MODE=false
+PGVER=""
+PLATFORMS=""
+COMPONENTS=""
+REPO_OVERRIDE=""
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --pgver)
+      PGVER="$2"
+      CLI_MODE=true
+      shift 2
+      ;;
+    --platforms)
+      PLATFORMS="$2"
+      CLI_MODE=true
+      shift 2
+      ;;
+    --components)
+      COMPONENTS="$2"
+      CLI_MODE=true
+      shift 2
+      ;;
+    --repo)
+      REPO_OVERRIDE="$2"
+      CLI_MODE=true
+      shift 2
+      ;;
+    --help|-h)
+      cat <<HELPTEXT
+Usage: $(basename "$0") [OPTIONS]
+
+Run pgEdge component tests across environments, platforms, and components.
+When no options are provided, the script runs in interactive menu mode.
+
+OPTIONS:
+  --pgver <versions>      PostgreSQL versions to test (default: all)
+                          Values: 16, 17, 18, all
+                          Comma-separated for multiple: 16,17
+
+  --platforms <platforms>  Target platforms (default: all)
+                          Values: rpm, deb, all
+                          Comma-separated for multiple: rpm,deb
+
+  --components <names>    Components to test (default: all)
+                          Values: server, snowflake, pgbouncer, lolor, postgis,
+                                  system_stats, vectorizer, zerodowntime, mcp, all
+                          Comma-separated for multiple: lolor,postgis
+
+  --repo <repository>     Repository to use (default: staging)
+                          Values: release, staging, daily
+
+  --help, -h              Show this help message and exit
+
+EXAMPLES:
+  # Interactive mode (no arguments)
+  ./$(basename "$0")
+
+  # Test PG 16 server on RPM with staging repo
+  ./$(basename "$0") --pgver 16 --platforms rpm --components server
+
+  # Test all versions, DEB only, lolor and postgis
+  ./$(basename "$0") --pgver all --platforms deb --components lolor,postgis
+
+  # Test everything with release repo
+  ./$(basename "$0") --pgver all --platforms all --components all --repo release
+HELPTEXT
+      exit 0
+      ;;
+    *)
+      echo "Unknown option: $1"
+      echo "Use --help for usage information"
+      exit 1
+      ;;
+  esac
+done
+
 mkdir -p test-logs
 
 # Generate timestamp for this test run
@@ -14,44 +94,54 @@ mkdir -p "$CONSOLIDATED_REPORT_DIR"
 declare -a ALL_REPORTS=()
 declare -a ALL_JUNIT_XMLS=()
 
-# Prompt user for environment choice
-echo "Select environment(s) to run:"
-echo "1) 16"
-echo "2) 17"
-echo "3) 18"
-echo "4) All"
-echo ""
-echo "💡 You can specify multiple environments separated by commas"
-echo "   Example: 16,17"
-read -p "Enter your choice: " env_choice
+if [[ "$CLI_MODE" == true ]]; then
+  # CLI mode: use argument values with defaults
+  env_choice="${PGVER:-all}"
+  platform_choice="${PLATFORMS:-all}"
+  test_type_choice="${COMPONENTS:-all}"
+  echo "Running in CLI mode"
+else
+  # Interactive mode: prompt user for choices
+  # Prompt user for environment choice
+  echo "Select environment(s) to run:"
+  echo "1) 16"
+  echo "2) 17"
+  echo "3) 18"
+  echo "4) All"
+  echo ""
+  echo "💡 You can specify multiple environments separated by commas"
+  echo "   Example: 16,17"
+  read -p "Enter your choice: " env_choice
 
-# Prompt user for platform choice
-echo ""
-echo "Select platform(s) to run:"
-echo "1) RPM"
-echo "2) DEB"
-echo "3) All"
-echo ""
-echo "💡 You can specify multiple platforms separated by commas"
-echo "   Example: RPM,DEB"
-read -p "Enter your choice: " platform_choice
-echo ""
+  # Prompt user for platform choice
+  echo ""
+  echo "Select platform(s) to run:"
+  echo "1) RPM"
+  echo "2) DEB"
+  echo "3) All"
+  echo ""
+  echo "💡 You can specify multiple platforms separated by commas"
+  echo "   Example: RPM,DEB"
+  read -p "Enter your choice: " platform_choice
+  echo ""
 
-# Prompt user for test type choice
-echo "Select test type(s) to run:"
-echo "1) server - PostgreSQL server tests"
-echo "2) snowflake - Snowflake extension tests"
-echo "3) pgbouncer - PgBouncer tests"
-echo "4) lolor - LOLOR tests"
-echo "5) postgis - PostGIS tests"
-echo "6) system_stats - System Stats tests"
-echo "7) vectorizer - Vectorizer tests"
-echo "8) zerodowntime - Zero Downtime Integration tests"
-echo "9) all - All tests"
-echo ""
-echo "💡 You can specify multiple components separated by commas"
-echo "   Example: lolor,postgis,system_stats"
-read -p "Enter your choice: " test_type_choice
+  # Prompt user for test type choice
+  echo "Select test type(s) to run:"
+  echo "1) server - PostgreSQL server tests"
+  echo "2) snowflake - Snowflake extension tests"
+  echo "3) pgbouncer - PgBouncer tests"
+  echo "4) lolor - LOLOR tests"
+  echo "5) postgis - PostGIS tests"
+  echo "6) system_stats - System Stats tests"
+  echo "7) vectorizer - Vectorizer tests"
+  echo "8) zerodowntime - Zero Downtime Integration tests"
+  echo "9) mcp - MCP (postgres-mcp, nla-cli, nla-web) tests"
+  echo "10) all - All tests"
+  echo ""
+  echo "💡 You can specify multiple components separated by commas"
+  echo "   Example: lolor,postgis,system_stats"
+  read -p "Enter your choice: " test_type_choice
+fi
 
 # Determine environments to run
 if [[ "$env_choice" == "all" || "$env_choice" == "All" ]]; then
@@ -79,7 +169,7 @@ fi
 
 # Determine test types to run
 if [[ "$test_type_choice" == "all" || "$test_type_choice" == "All" ]]; then
-  test_type_list=(server snowflake pgbouncer lolor postgis system_stats vectorizer zerodowntime)
+  test_type_list=(server snowflake pgbouncer lolor postgis system_stats vectorizer zerodowntime mcp)
 else
   # Split by comma and trim whitespace
   IFS=',' read -ra test_type_list <<< "$test_type_choice"
@@ -97,6 +187,9 @@ echo "=========================================="
 echo "Environments: ${env_list[*]}"
 echo "Platforms: ${platform_list[*]}"
 echo "Test types: ${test_type_list[*]}"
+if [[ -n "$REPO_OVERRIDE" ]]; then
+  echo "Repo override: $REPO_OVERRIDE"
+fi
 echo "=========================================="
 echo ""
 
@@ -175,6 +268,12 @@ for env in "${env_list[@]}"; do
   source "$envfile"
   set +a
 
+  # Apply repo override if specified via CLI
+  if [[ -n "$REPO_OVERRIDE" ]]; then
+    export REPO="$REPO_OVERRIDE"
+    echo "   Overriding REPO to: $REPO_OVERRIDE"
+  fi
+
   for platform in "${platform_list[@]}"; do
     for test_type in "${test_type_list[@]}"; do
       case "$platform" in
@@ -182,7 +281,7 @@ for env in "${env_list[@]}"; do
           export PLATFORM_FILTER=rpm
           case "$test_type" in
             server)
-              run_pytest_with_tracking "test_pep_server_rhel.py" "$env" "rpm" "server"
+              run_pytest_with_tracking "component-test/test_pep_server.py" "$env" "rpm" "server"
               ;;
             snowflake)
               run_pytest_with_tracking "component-test/test_pep_snowflake.py" "$env" "rpm" "snowflake"
@@ -205,6 +304,9 @@ for env in "${env_list[@]}"; do
             zerodowntime)
               run_pytest_with_tracking "component-test/test_integration_zerodowntime.py" "$env" "rpm" "zerodowntime"
               ;;
+            mcp)
+              run_pytest_with_tracking "component-test/test_pep_mcp.py" "$env" "rpm" "mcp"
+              ;;
             *)
               echo "⚠️ Unknown test type: $test_type"
               ;;
@@ -214,7 +316,7 @@ for env in "${env_list[@]}"; do
           export PLATFORM_FILTER=deb
           case "$test_type" in
             server)
-              run_pytest_with_tracking "test_pep_server_deb.py" "$env" "deb" "server"
+              run_pytest_with_tracking "component-test/test_pep_server.py" "$env" "deb" "server"
               ;;
             snowflake)
               run_pytest_with_tracking "component-test/test_pep_snowflake.py" "$env" "deb" "snowflake"
@@ -236,6 +338,9 @@ for env in "${env_list[@]}"; do
               ;;
             zerodowntime)
               run_pytest_with_tracking "component-test/test_integration_zerodowntime.py" "$env" "deb" "zerodowntime"
+              ;;
+            mcp)
+              run_pytest_with_tracking "component-test/test_pep_mcp.py" "$env" "deb" "mcp"
               ;;
             *)
               echo "⚠️ Unknown test type: $test_type"
@@ -819,7 +924,7 @@ cat > "test-logs/index.html" <<EOF
 EOF
 
 # Add card for each component that has reports
-for test_type in server snowflake pgbouncer lolor postgis system_stats vectorizer zerodowntime; do
+for test_type in server snowflake pgbouncer lolor postgis system_stats vectorizer zerodowntime mcp; do
   component_dir="test-logs/${test_type}"
   if [[ -d "$component_dir" ]]; then
     # Check for any HTML reports

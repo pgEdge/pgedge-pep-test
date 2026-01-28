@@ -3,7 +3,9 @@
 /usr/bin/pgedge-rag-server
 /usr/lib/systemd/system/pgedge-rag-server.service
 /usr/lib/tmpfiles.d/pgedge-rag-server.conf
-/usr/share/doc/pgedge-rag-server
 /usr/share/doc/pgedge-rag-server/README.md
+/usr/share/licenses/pgedge-rag-server/LICENCE.md
 /usr/share/pgedge-rag-server-sbom.json
 /usr/share/pgedge-rag-server-sbom.json.asc
+/var/lib/pgedge/rag-server
+/var/log/pgedge/rag-server

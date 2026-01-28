@@ -52,7 +52,7 @@ OPTIONS:
 
   --components <names>    Components to test (default: all)
                           Values: server, snowflake, pgbouncer, lolor, postgis,
-                                  system_stats, vectorizer, zerodowntime, mcp, all
+                                  system_stats, vectorizer, zerodowntime, mcp, rag, all
                           Comma-separated for multiple: lolor,postgis
 
   --repo <repository>     Repository to use (default: staging)
@@ -136,7 +136,8 @@ else
   echo "7) vectorizer - Vectorizer tests"
   echo "8) zerodowntime - Zero Downtime Integration tests"
   echo "9) mcp - MCP (postgres-mcp, nla-cli, nla-web) tests"
-  echo "10) all - All tests"
+  echo "10) rag - RAG server tests"
+  echo "11) all - All tests"
   echo ""
   echo "💡 You can specify multiple components separated by commas"
   echo "   Example: lolor,postgis,system_stats"
@@ -169,7 +170,7 @@ fi
 
 # Determine test types to run
 if [[ "$test_type_choice" == "all" || "$test_type_choice" == "All" ]]; then
-  test_type_list=(server snowflake pgbouncer lolor postgis system_stats vectorizer zerodowntime mcp)
+  test_type_list=(server snowflake pgbouncer lolor postgis system_stats vectorizer zerodowntime mcp rag)
 else
   # Split by comma and trim whitespace
   IFS=',' read -ra test_type_list <<< "$test_type_choice"
@@ -307,6 +308,9 @@ for env in "${env_list[@]}"; do
             mcp)
               run_pytest_with_tracking "component-test/test_pep_mcp.py" "$env" "rpm" "mcp"
               ;;
+            rag)
+              run_pytest_with_tracking "component-test/test_pep_rag.py" "$env" "rpm" "rag"
+              ;;
             *)
               echo "⚠️ Unknown test type: $test_type"
               ;;
@@ -341,6 +345,9 @@ for env in "${env_list[@]}"; do
               ;;
             mcp)
               run_pytest_with_tracking "component-test/test_pep_mcp.py" "$env" "deb" "mcp"
+              ;;
+            rag)
+              run_pytest_with_tracking "component-test/test_pep_rag.py" "$env" "deb" "rag"
               ;;
             *)
               echo "⚠️ Unknown test type: $test_type"
@@ -481,7 +488,7 @@ echo "=========================================="
 echo "📊 Generating Component-Level Index Pages"
 echo "=========================================="
 
-# Helper function to parse JUnit XML and extract stats
+# Helper function to parse JUnit XML and extract aggregate stats
 get_test_stats() {
   local xml_file=$1
   if [[ -f "$xml_file" ]]; then
@@ -502,6 +509,73 @@ get_test_stats() {
     echo "${passed}|${failed}|${skipped}"
   else
     echo "0|0|0"
+  fi
+}
+
+# Helper function to parse JUnit XML and extract per-container stats
+# Output format: one line per container: container_name|passed|failed|skipped
+get_per_container_stats() {
+  local xml_file=$1
+  if [[ -f "$xml_file" ]]; then
+    python3 - "$xml_file" <<'PYEOF'
+import xml.etree.ElementTree as ET
+import re, sys
+
+xml_file = sys.argv[1]
+try:
+    tree = ET.parse(xml_file)
+    root = tree.getroot()
+    ts = root if root.tag == 'testsuite' else root.find('testsuite')
+    if ts is None:
+        sys.exit(0)
+
+    def get_base_container(name):
+        """Extract base container from potentially prefixed names.
+        e.g. 'bloom-auto-alma10-arm' -> 'auto-alma10-arm'
+             'pgedge-lolor_16-auto' -> 'auto'
+             'auto-alma10-arm' -> 'auto-alma10-arm'
+             'my-rocky9-amd' -> 'my-rocky9-amd'
+        """
+        for prefix in ['auto-', 'my-']:
+            idx = name.find(prefix)
+            if idx >= 0:
+                return name[idx:]
+        if name == 'auto' or name.endswith('-auto'):
+            return 'auto'
+        return name
+
+    containers = {}
+    for tc in ts.findall('testcase'):
+        name = tc.get('name', '')
+        # Match container-type with lookahead: -deb/-rhel must be followed by ] or -
+        # This prevents false match on 'debian' in container names like auto-debian13-amd
+        m = re.search(r'\[(.+)-(rhel|deb)(?=[-\]])', name)
+        if m:
+            raw_container = m.group(1)
+        else:
+            # Fallback: tests without -rhel/-deb suffix (e.g. test_pgbouncer_show_help[auto-debian13-amd])
+            m2 = re.search(r'\[([^\]]+)\]', name)
+            if not m2:
+                continue
+            raw_container = m2.group(1)
+        container = get_base_container(raw_container)
+
+        if container not in containers:
+            containers[container] = {'passed': 0, 'failed': 0, 'skipped': 0}
+
+        if tc.find('failure') is not None or tc.find('error') is not None:
+            containers[container]['failed'] += 1
+        elif tc.find('skipped') is not None:
+            containers[container]['skipped'] += 1
+        else:
+            containers[container]['passed'] += 1
+
+    for container in sorted(containers.keys()):
+        s = containers[container]
+        print(f"{container}|{s['passed']}|{s['failed']}|{s['skipped']}")
+except Exception as e:
+    print(f"ERROR|0|0|0", file=sys.stderr)
+PYEOF
   fi
 }
 
@@ -676,6 +750,7 @@ EOF
             <thead>
                 <tr>
                     <th>Platform</th>
+                    <th>Container</th>
                     <th>Results</th>
                     <th>Report File</th>
                     <th>Action</th>
@@ -684,7 +759,7 @@ EOF
             <tbody>
 EOF
 
-          # Add rows for each report
+          # Add rows for each report, broken down by container
           for report in "$version_dir"/report-*.html; do
             if [[ -f "$report" ]]; then
               report_basename=$(basename "$report")
@@ -693,26 +768,35 @@ EOF
               platform_upper=$(echo "$platform_name" | tr '[:lower:]' '[:upper:]')
               platform_lower=$(echo "$platform_name" | tr '[:upper:]' '[:lower:]')
 
-              # Get corresponding XML file for stats
+              # Get corresponding XML file for per-container stats
               xml_file="${report%.html}.xml"
               if [[ -f "$xml_file" ]]; then
-                stats=$(get_test_stats "$xml_file")
-                passed=$(echo "$stats" | cut -d'|' -f1)
-                failed=$(echo "$stats" | cut -d'|' -f2)
-                skipped=$(echo "$stats" | cut -d'|' -f3)
-                stats_html="<span class=\"stats\"><span class=\"stat passed\">✓ ${passed}</span><span class=\"stat failed\">✗ ${failed}</span><span class=\"stat skipped\">○ ${skipped}</span></span>"
-              else
-                stats_html="-"
-              fi
-
-              cat >> "${component_base_dir}/index.html" <<EOF
+                container_stats=$(get_per_container_stats "$xml_file")
+                if [[ -n "$container_stats" ]]; then
+                  while IFS='|' read -r container_name c_passed c_failed c_skipped; do
+                    stats_html="<span class=\"stats\"><span class=\"stat passed\">✓ ${c_passed}</span><span class=\"stat failed\">✗ ${c_failed}</span><span class=\"stat skipped\">○ ${c_skipped}</span></span>"
+                    cat >> "${component_base_dir}/index.html" <<EOF
                 <tr>
                     <td><span class="platform-badge ${platform_lower}">${platform_upper}</span></td>
+                    <td>${container_name}</td>
                     <td>${stats_html}</td>
                     <td>${report_basename}</td>
                     <td><a href="${version}/${report_basename}" class="report-link">View Report →</a></td>
                 </tr>
 EOF
+                  done <<< "$container_stats"
+                fi
+              else
+                cat >> "${component_base_dir}/index.html" <<EOF
+                <tr>
+                    <td><span class="platform-badge ${platform_lower}">${platform_upper}</span></td>
+                    <td>-</td>
+                    <td>-</td>
+                    <td>${report_basename}</td>
+                    <td><a href="${version}/${report_basename}" class="report-link">View Report →</a></td>
+                </tr>
+EOF
+              fi
             fi
           done
 
@@ -924,7 +1008,7 @@ cat > "test-logs/index.html" <<EOF
 EOF
 
 # Add card for each component that has reports
-for test_type in server snowflake pgbouncer lolor postgis system_stats vectorizer zerodowntime mcp; do
+for test_type in server snowflake pgbouncer lolor postgis system_stats vectorizer zerodowntime mcp rag; do
   component_dir="test-logs/${test_type}"
   if [[ -d "$component_dir" ]]; then
     # Check for any HTML reports
@@ -944,60 +1028,63 @@ for test_type in server snowflake pgbouncer lolor postgis system_stats vectorize
                         <tr>
                             <th>Version</th>
                             <th>Platform</th>
+                            <th>Container</th>
                             <th>Results</th>
                         </tr>
                     </thead>
                     <tbody>
 EOF
 
-      # List versions with their platforms and stats
+      # List versions with their platforms, containers, and stats
       for version_dir in $(ls -d "$component_dir"/*/ 2>/dev/null | sort); do
         version=$(basename "$version_dir")
 
-        # Check RPM report
+        # Check RPM report — show per-container rows
         rpm_xml=$(find "$version_dir" -name "report-rpm-*.xml" 2>/dev/null | head -1)
         if [[ -n "$rpm_xml" && -f "$rpm_xml" ]]; then
-          stats=$(get_test_stats "$rpm_xml")
-          passed=$(echo "$stats" | cut -d'|' -f1)
-          failed=$(echo "$stats" | cut -d'|' -f2)
-          skipped=$(echo "$stats" | cut -d'|' -f3)
-
-          cat >> "test-logs/index.html" <<EOF
+          container_stats=$(get_per_container_stats "$rpm_xml")
+          if [[ -n "$container_stats" ]]; then
+            while IFS='|' read -r container_name c_passed c_failed c_skipped; do
+              cat >> "test-logs/index.html" <<EOF
                         <tr>
                             <td><span class="version-badge">PG ${version}</span></td>
                             <td><span class="platform-badge rpm">RPM</span></td>
+                            <td>${container_name}</td>
                             <td>
                                 <span class="stats">
-                                    <span class="stat passed">✓ ${passed}</span>
-                                    <span class="stat failed">✗ ${failed}</span>
-                                    <span class="stat skipped">○ ${skipped}</span>
+                                    <span class="stat passed">✓ ${c_passed}</span>
+                                    <span class="stat failed">✗ ${c_failed}</span>
+                                    <span class="stat skipped">○ ${c_skipped}</span>
                                 </span>
                             </td>
                         </tr>
 EOF
+            done <<< "$container_stats"
+          fi
         fi
 
-        # Check DEB report
+        # Check DEB report — show per-container rows
         deb_xml=$(find "$version_dir" -name "report-deb-*.xml" 2>/dev/null | head -1)
         if [[ -n "$deb_xml" && -f "$deb_xml" ]]; then
-          stats=$(get_test_stats "$deb_xml")
-          passed=$(echo "$stats" | cut -d'|' -f1)
-          failed=$(echo "$stats" | cut -d'|' -f2)
-          skipped=$(echo "$stats" | cut -d'|' -f3)
-
-          cat >> "test-logs/index.html" <<EOF
+          container_stats=$(get_per_container_stats "$deb_xml")
+          if [[ -n "$container_stats" ]]; then
+            while IFS='|' read -r container_name c_passed c_failed c_skipped; do
+              cat >> "test-logs/index.html" <<EOF
                         <tr>
                             <td><span class="version-badge">PG ${version}</span></td>
                             <td><span class="platform-badge deb">DEB</span></td>
+                            <td>${container_name}</td>
                             <td>
                                 <span class="stats">
-                                    <span class="stat passed">✓ ${passed}</span>
-                                    <span class="stat failed">✗ ${failed}</span>
-                                    <span class="stat skipped">○ ${skipped}</span>
+                                    <span class="stat passed">✓ ${c_passed}</span>
+                                    <span class="stat failed">✗ ${c_failed}</span>
+                                    <span class="stat skipped">○ ${c_skipped}</span>
                                 </span>
                             </td>
                         </tr>
 EOF
+            done <<< "$container_stats"
+          fi
         fi
       done
 
@@ -1046,7 +1133,9 @@ if not xml_files:
     print("⚠️  No test results found!")
     sys.exit(1)
 
-# Parse all XML files and collect statistics
+# Parse all XML files and collect per-container statistics
+import re
+
 total_tests = 0
 total_passed = 0
 total_failed = 0
@@ -1064,20 +1153,6 @@ for xml_file in xml_files:
         if testsuite is None:
             continue
 
-        tests = int(testsuite.get('tests', 0))
-        failures = int(testsuite.get('failures', 0))
-        errors = int(testsuite.get('errors', 0))
-        skipped = int(testsuite.get('skipped', 0))
-        time = float(testsuite.get('time', 0))
-
-        passed = tests - failures - errors - skipped
-
-        total_tests += tests
-        total_failed += failures
-        total_errors += errors
-        total_skipped += skipped
-        total_passed += passed
-
         # Extract platform, component, and env from filename
         # Format: report-{platform}-{component}-{env}.xml
         name_parts = xml_file.stem.replace('report-', '').split('-')
@@ -1088,38 +1163,86 @@ for xml_file in xml_files:
         else:
             platform = component = env = "unknown"
 
-        # Determine status
-        if failures > 0 or errors > 0:
-            status = "FAILED"
-            status_class = "failed"
-        elif skipped == tests:
-            status = "SKIPPED"
-            status_class = "skipped"
-        else:
-            status = "PASSED"
-            status_class = "passed"
+        # Parse individual testcase elements and group by base container
+        containers = {}
+        for tc in testsuite.findall('testcase'):
+            name = tc.get('name', '')
+            tc_time = float(tc.get('time', 0))
+            # Match container-type with lookahead: -deb/-rhel must be followed by ] or -
+            # This prevents false match on 'debian' in container names like auto-debian13-amd
+            m = re.search(r'\[(.+)-(rhel|deb)(?=[-\]])', name)
+            if m:
+                raw_container = m.group(1)
+            else:
+                # Fallback: tests without -rhel/-deb suffix (e.g. test_pgbouncer_show_help[auto-debian13-amd])
+                m2 = re.search(r'\[([^\]]+)\]', name)
+                if not m2:
+                    continue
+                raw_container = m2.group(1)
+            # Strip extension prefix (e.g. 'bloom-auto-alma10-arm' -> 'auto-alma10-arm')
+            container = raw_container
+            for pfx in ['auto-', 'my-']:
+                idx = raw_container.find(pfx)
+                if idx >= 0:
+                    container = raw_container[idx:]
+                    break
+            else:
+                if raw_container == 'auto' or raw_container.endswith('-auto'):
+                    container = 'auto'
 
-        test_results.append({
-            'platform': platform.upper(),
-            'component': component,
-            'env': env,
-            'tests': tests,
-            'passed': passed,
-            'failed': failures,
-            'errors': errors,
-            'skipped': skipped,
-            'time': time,
-            'status': status,
-            'status_class': status_class,
-            'html_report': xml_file.stem + '.html'
-        })
+            if container not in containers:
+                containers[container] = {'passed': 0, 'failed': 0, 'skipped': 0, 'tests': 0, 'time': 0.0}
+
+            containers[container]['tests'] += 1
+            containers[container]['time'] += tc_time
+
+            if tc.find('failure') is not None or tc.find('error') is not None:
+                containers[container]['failed'] += 1
+            elif tc.find('skipped') is not None:
+                containers[container]['skipped'] += 1
+            else:
+                containers[container]['passed'] += 1
+
+        # Create a result entry per container
+        for container_name in sorted(containers.keys()):
+            stats = containers[container_name]
+            total_tests += stats['tests']
+            total_passed += stats['passed']
+            total_failed += stats['failed']
+            total_skipped += stats['skipped']
+
+            if stats['failed'] > 0:
+                status = "FAILED"
+                status_class = "failed"
+            elif stats['skipped'] == stats['tests']:
+                status = "SKIPPED"
+                status_class = "skipped"
+            else:
+                status = "PASSED"
+                status_class = "passed"
+
+            test_results.append({
+                'platform': platform.upper(),
+                'component': component,
+                'container': container_name,
+                'env': env,
+                'tests': stats['tests'],
+                'passed': stats['passed'],
+                'failed': stats['failed'],
+                'errors': 0,
+                'skipped': stats['skipped'],
+                'time': stats['time'],
+                'status': status,
+                'status_class': status_class,
+                'html_report': xml_file.stem + '.html'
+            })
 
     except Exception as e:
         print(f"⚠️  Error parsing {xml_file}: {e}")
         continue
 
-# Sort results by environment, platform, component
-test_results.sort(key=lambda x: (x['env'], x['platform'], x['component']))
+# Sort results by environment, platform, component, container
+test_results.sort(key=lambda x: (x['env'], x['platform'], x['component'], x['container']))
 
 # Generate HTML report
 html_content = f'''<!DOCTYPE html>
@@ -1266,6 +1389,7 @@ html_content = f'''<!DOCTYPE html>
                 <th>Environment</th>
                 <th>Platform</th>
                 <th>Component</th>
+                <th>Container</th>
                 <th>Status</th>
                 <th>Tests</th>
                 <th>Passed</th>
@@ -1284,6 +1408,7 @@ for result in test_results:
                 <td><strong>PG {result['env']}</strong></td>
                 <td>{result['platform']}</td>
                 <td>{result['component']}</td>
+                <td>{result['container']}</td>
                 <td><span class="status-badge {result['status_class']}">{result['status']}</span></td>
                 <td class="stats-cell">{result['tests']}</td>
                 <td class="stats-cell">{result['passed']}</td>

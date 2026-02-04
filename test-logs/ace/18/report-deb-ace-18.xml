@@ -1,0 +1,1307 @@
+<?xml version="1.0" encoding="utf-8"?><testsuites name="pytest tests"><testsuite name="pytest" errors="0" failures="2" skipped="0" tests="16" time="28.793" timestamp="2026-02-04T17:02:02.524513+05:00" hostname="PGEDGE-ML-ZShabbir.local"><testcase classname="component-test.test_pep_ace" name="test_install_prerequisites[auto-debian13-amd-deb]" time="6.014" /><testcase classname="component-test.test_pep_ace" name="test_install_prerequisites[auto-ubuntu2204-arm-deb]" time="5.565" /><testcase classname="component-test.test_pep_ace" name="test_configure_repository[auto-debian13-amd-deb]" time="2.677" /><testcase classname="component-test.test_pep_ace" name="test_configure_repository[auto-ubuntu2204-arm-deb]" time="3.129" /><testcase classname="component-test.test_pep_ace" name="test_component_install[auto-debian13-amd-deb]" time="4.129" /><testcase classname="component-test.test_pep_ace" name="test_component_install[auto-ubuntu2204-arm-deb]" time="3.389" /><testcase classname="component-test.test_pep_ace" name="test_component_package_version[auto-debian13-amd-deb]" time="0.111" /><testcase classname="component-test.test_pep_ace" name="test_component_package_version[auto-ubuntu2204-arm-deb]" time="0.062" /><testcase classname="component-test.test_pep_ace" name="test_verify_bundled_files[auto-debian13-amd-deb]" time="0.207" /><testcase classname="component-test.test_pep_ace" name="test_verify_bundled_files[auto-ubuntu2204-arm-deb]" time="0.072" /><testcase classname="component-test.test_pep_ace" name="test_ace_help[auto-debian13-amd-deb]" time="0.066" /><testcase classname="component-test.test_pep_ace" name="test_ace_help[auto-ubuntu2204-arm-deb]" time="0.044" /><testcase classname="component-test.test_pep_ace" name="test_package_uninstall[auto-debian13-amd-deb]" time="2.133"><failure message="Failed: Failed to uninstall pgedge-ace: Failed to uninstall pgedge-ace: Reading package lists...&#10;Building dependency tree...&#10;Reading state information...&#10;Package 'pgedge-postgresql-doc-18' is not installed, so not removed&#10;Package 'pgedge-anonymizer' is not installed, so not removed&#10;Package 'pgedge-docloader' is not installed, so not removed&#10;Package 'pgedge-enterprise-all-16' is not installed, so not removed&#10;Package 'pgedge-postgresql-16' is not installed, so not removed&#10;Package 'pgedge-postgresql-16-spock50' is not installed, so not removed&#10;Package 'pgedge-postgresql-16-snowflake' is not installed, so not removed&#10;Package 'pgedge-postgresql-16-lolor' is not installed, so not removed&#10;Package 'pgedge-postgresql-16-pgaudit' is not installed, so not removed&#10;Package 'pgedge-postgresql-16-pgvector' is not installed, so not removed&#10;Package 'pgedge-postgresql-16-postgis-3' is not installed, so not removed&#10;Package 'pgedge-pgadmin4' is not installed, so not removed&#10;Package 'pgedge-pgbackrest' is not installed, so not removed&#10;Package 'pgedge-pgbouncer' is not installed, so not removed&#10;Package 'pgedge-postgresql-16-pgmq' is not installed, so not removed&#10;Package 'pgedge-postgresql-16-cron' is not installed, so not removed&#10;Package 'pgedge-postgresql-16-pg-tokenizer' is not installed, so not removed&#10;Package 'pgedge-postgresql-16-pg-vectorize' is not installed, so not removed&#10;Package 'pgedge-postgresql-16-pg-stat-monitor' is not installed, so not removed&#10;Package 'pgedge-postgresql-16-vchord-bm25' is not installed, so not removed&#10;Package 'pgedge-postgresql-16-vectorizer' is not installed, so not removed&#10;Package 'pgedge-rag-server' is not installed, so not removed&#10;Package 'pgedge-postgres-mcp' is not installed, so not removed&#10;Package 'pgedge-nla-cli' is not installed, so not removed&#10;Package 'pgedge-postgres-mcp-kb' is not installed, so not removed&#10;Package 'pgedge-nla-web' is not installed, so not removed&#10;Package 'pgedge-enterprise-all-17' is not installed, so not removed&#10;Package 'pgedge-postgresql-17' is not installed, so not removed&#10;Package 'pgedge-postgresql-17-spock50' is not installed, so not removed&#10;Package 'pgedge-postgresql-17-snowflake' is not installed, so not removed&#10;Package 'pgedge-postgresql-17-lolor' is not installed, so not removed&#10;Package 'pgedge-postgresql-17-pgaudit' is not installed, so not removed&#10;Package 'pgedge-postgresql-17-pgvector' is not installed, so not removed&#10;Package 'pgedge-postgresql-17-postgis-3' is not installed, so not removed&#10;Package 'pgedge-postgresql-17-pgmq' is not installed, so not removed&#10;Package 'pgedge-postgresql-17-cron' is not installed, so not removed&#10;Package 'pgedge-postgresql-17-pg-tokenizer' is not installed, so not removed&#10;Package 'pgedge-postgresql-17-pg-vectorize' is not installed, so not removed&#10;Package 'pgedge-postgresql-17-pg-stat-monitor' is not installed, so not removed&#10;Package 'pgedge-postgresql-17-vchord-bm25' is not installed, so not removed&#10;Package 'pgedge-postgresql-17-vectorizer' is not installed, so not removed&#10;Package 'pgedge-enterprise-all-18' is not installed, so not removed&#10;Package 'pgedge-postgresql-18-spock50' is not installed, so not removed&#10;Package 'pgedge-postgresql-18-snowflake' is not installed, so not removed&#10;Package 'pgedge-postgresql-18-lolor' is not installed, so not removed&#10;Package 'pgedge-postgresql-18-pgaudit' is not installed, so not removed&#10;Package 'pgedge-postgresql-18-pgvector' is not installed, so not removed&#10;Package 'pgedge-postgresql-18-postgis-3' is not installed, so not removed&#10;Package 'pgedge-postgresql-18-pgmq' is not installed, so not removed&#10;Package 'pgedge-postgresql-18-cron' is not installed, so not removed&#10;Package 'pgedge-postgresql-18-pg-tokenizer' is not installed, so not removed&#10;Package 'pgedge-postgresql-18-pg-vectorize' is not installed, so not removed&#10;Package 'pgedge-postgresql-18-pg-stat-monitor' is not installed, so not removed&#10;Package 'pgedge-postgresql-18-vchord-bm25' is not installed, so not removed&#10;Package 'pgedge-postgresql-18-vectorizer' is not installed, so not removed&#10;Package 'pgedge-enterprise-postgres-16' is not installed, so not removed&#10;Package 'pgedge-enterprise-postgres-17' is not installed, so not removed&#10;Package 'pgedge-enterprise-postgres-18' is not installed, so not removed&#10;Package 'pgedge-pgadmin4-server' is not installed, so not removed&#10;Package 'pgedge-pgadmin4-desktop' is not installed, so not removed&#10;Package 'pgedge-pgadmin4-web' is not installed, so not removed&#10;Package 'pgedge-postgresql-client' is not installed, so not removed&#10;Package 'pgedge-pgbackrest-doc' is not installed, so not removed&#10;Package 'pgedge-pgbackrest-dbgsym' is not installed, so not removed&#10;Package 'pgedge-python3-psycopg2' is not installed, so not removed&#10;Package 'pgedge-postgresql' is not installed, so not removed&#10;Package 'pgedge-pgbouncer-dbgsym' is not installed, so not removed&#10;Package 'pgedge-postgis' is not installed, so not removed&#10;Package 'pgedge-postgresql-postgis' is not installed, so not removed&#10;Package 'pgedge-postgis-doc' is not installed, so not removed&#10;Package 'pgedge-postgis-dbgsym' is not installed, so not removed&#10;Package 'pgedge-postgresql-doc' is not installed, so not removed&#10;Package 'pgedge-postgresql-client-16' is not installed, so not removed&#10;Package 'pgedge-postgresql-16-cron-dbgsym' is not installed, so not removed&#10;Package 'pgedge-postgresql-16-dbgsym' is not installed, so not removed&#10;Package 'pgedge-postgresql-16-lolor-dbgsym' is not installed, so not removed&#10;Package 'pgedge-postgresql-16-pg-search' is not installed, so not removed&#10;Package 'pgedge-postgresql-16-pg-search-dbgsym' is not installed, so not removed&#10;Package 'pgedge-postgresql-16-pg-stat-monitor-dbgsym' is not installed, so not removed&#10;Package 'pgedge-postgresql-16-pg-tokenizer-dbgsym' is not installed, so not removed&#10;Package 'pgedge-postgresql-16-pg-vectorize-dbgsym' is not installed, so not removed&#10;Package 'pgedge-postgresql-16-pgaudit-dbgsym' is not installed, so not removed&#10;Package 'pgedge-postgresql-16-pgvector-dbgsym' is not installed, so not removed&#10;Package 'pgedge-postgresql-16-pldebugger' is not installed, so not removed&#10;Package 'pgedge-postgresql-16-pldebugger-dbgsym' is not installed, so not removed&#10;Package 'pgedge-postgresql-16-postgis-3-scripts' is not installed, so not removed&#10;Package 'pgedge-postgresql-16-postgis-3-dbgsym' is not installed, so not removed&#10;Package 'pgedge-postgresql-16-snowflake-dbgsym' is not installed, so not removed&#10;Package 'pgedge-postgresql-16-spock50-dbgsym' is not installed, so not removed&#10;Package 'pgedge-postgresql-16-system-stats' is not installed, so not removed&#10;Package 'pgedge-postgresql-16-system-stats-dbgsym' is not installed, so not removed&#10;Package 'pgedge-postgresql-16-vchord-bm25-dbgsym' is not installed, so not removed&#10;Package 'pgedge-postgresql-16-vectorizer-dbgsym' is not installed, so not removed&#10;Package 'pgedge-postgresql-client-17' is not installed, so not removed&#10;Package 'pgedge-postgresql-17-cron-dbgsym' is not installed, so not removed&#10;Package 'pgedge-postgresql-17-dbgsym' is not installed, so not removed&#10;Package 'pgedge-postgresql-17-lolor-dbgsym' is not installed, so not removed&#10;Package 'pgedge-postgresql-17-pg-search' is not installed, so not removed&#10;Package 'pgedge-postgresql-17-pg-search-dbgsym' is not installed, so not removed&#10;Package 'pgedge-postgresql-17-pg-stat-monitor-dbgsym' is not installed, so not removed&#10;Package 'pgedge-postgresql-17-pg-tokenizer-dbgsym' is not installed, so not removed&#10;Package 'pgedge-postgresql-17-pg-vectorize-dbgsym' is not installed, so not removed&#10;Package 'pgedge-postgresql-17-pgaudit-dbgsym' is not installed, so not removed&#10;Package 'pgedge-postgresql-17-pgvector-dbgsym' is not installed, so not removed&#10;Package 'pgedge-postgresql-17-pldebugger' is not installed, so not removed&#10;Package 'pgedge-postgresql-17-pldebugger-dbgsym' is not installed, so not removed&#10;Package 'pgedge-postgresql-17-postgis-3-scripts' is not installed, so not removed&#10;Package 'pgedge-postgresql-17-postgis-3-dbgsym' is not installed, so not removed&#10;Package 'pgedge-postgresql-17-snowflake-dbgsym' is not installed, so not removed&#10;Package 'pgedge-postgresql-17-spock50-dbgsym' is not installed, so not removed&#10;Package 'pgedge-postgresql-17-system-stats' is not installed, so not removed&#10;Package 'pgedge-postgresql-17-system-stats-dbgsym' is not installed, so not removed&#10;Package 'pgedge-postgresql-17-vchord-bm25-dbgsym' is not installed, so not removed&#10;Package 'pgedge-postgresql-17-vectorizer-dbgsym' is not installed, so not removed&#10;Package 'pgedge-postgresql-client-18' is not installed, so not removed&#10;Package 'pgedge-postgresql-18-jit' is not installed, so not removed&#10;Package 'pgedge-postgresql-18-cron-dbgsym' is not installed, so not removed&#10;Package 'pgedge-postgresql-18-dbgsym' is not installed, so not removed&#10;Package 'pgedge-postgresql-18-jit-dbgsym' is not installed, so not removed&#10;Package 'pgedge-postgresql-18-lolor-dbgsym' is not installed, so not removed&#10;Package 'pgedge-postgresql-18-pg-stat-monitor-dbgsym' is not installed, so not removed&#10;Package 'pgedge-postgresql-18-pg-tokenizer-dbgsym' is not installed, so not removed&#10;Package 'pgedge-postgresql-18-pg-vectorize-dbgsym' is not installed, so not removed&#10;Package 'pgedge-postgresql-18-pgaudit-dbgsym' is not installed, so not removed&#10;Package 'pgedge-postgresql-18-pgvector-dbgsym' is not installed, so not removed&#10;Package 'pgedge-postgresql-18-pldebugger' is not installed, so not removed&#10;Package 'pgedge-postgresql-18-pldebugger-dbgsym' is not installed, so not removed&#10;Package 'pgedge-postgresql-18-postgis-3-scripts' is not installed, so not removed&#10;Package 'pgedge-postgresql-18-postgis-3-dbgsym' is not installed, so not removed&#10;Package 'pgedge-postgresql-18-snowflake-dbgsym' is not installed, so not removed&#10;Package 'pgedge-postgresql-18-spock50-dbgsym' is not installed, so not removed&#10;Package 'pgedge-postgresql-18-system-stats' is not installed, so not removed&#10;Package 'pgedge-postgresql-18-system-stats-dbgsym' is not installed, so not removed&#10;Package 'pgedge-postgresql-18-vchord-bm25-dbgsym' is not installed, so not removed&#10;Package 'pgedge-postgresql-18-vectorizer-dbgsym' is not installed, so not removed&#10;Package 'pgedge-postgresql-all' is not installed, so not removed&#10;Package 'pgedge-postgresql-server-dev-all' is not installed, so not removed&#10;Package 'pgedge-postgresql-plperl-18' is not installed, so not removed&#10;Package 'pgedge-postgresql-plpython3-18' is not installed, so not removed&#10;Package 'pgedge-postgresql-pltcl-18' is not installed, so not removed&#10;Package 'pgedge-postgresql-client-common' is not installed, so not removed&#10;Package 'pgedge-postgresql-doc-16' is not installed, so not removed&#10;Package 'pgedge-postgresql-client-16-dbgsym' is not installed, so not removed&#10;Package 'pgedge-postgresql-doc-17' is not installed, so not removed&#10;Package 'pgedge-postgresql-client-17-dbgsym' is not installed, so not removed&#10;Package 'pgedge-postgresql-client-18-dbgsym' is not installed, so not removed&#10;Package 'pgedge-postgresql-common-dev' is not installed, so not removed&#10;Package 'pgedge-postgresql-plperl-16' is not installed, so not removed&#10;Package 'pgedge-postgresql-plperl-16-dbgsym' is not installed, so not removed&#10;Package 'pgedge-postgresql-plperl-17' is not installed, so not removed&#10;Package 'pgedge-postgresql-plperl-17-dbgsym' is not installed, so not removed&#10;Package 'pgedge-postgresql-plperl-18-dbgsym' is not installed, so not removed&#10;Package 'pgedge-postgresql-plpython3-16' is not installed, so not removed&#10;Package 'pgedge-postgresql-plpython3-16-dbgsym' is not installed, so not removed&#10;Package 'pgedge-postgresql-plpython3-17' is not installed, so not removed&#10;Package 'pgedge-postgresql-plpython3-17-dbgsym' is not installed, so not removed&#10;Package 'pgedge-postgresql-plpython3-18-dbgsym' is not installed, so not removed&#10;Package 'pgedge-postgresql-pltcl-16' is not installed, so not removed&#10;Package 'pgedge-postgresql-pltcl-16-dbgsym' is not installed, so not removed&#10;Package 'pgedge-postgresql-pltcl-17' is not installed, so not removed&#10;Package 'pgedge-postgresql-pltcl-17-dbgsym' is not installed, so not removed&#10;Package 'pgedge-postgresql-pltcl-18-dbgsym' is not installed, so not removed&#10;Package 'pgedge-postgresql-postgis-scripts' is not installed, so not removed&#10;Package 'pgedge-postgresql-server-dev-16' is not installed, so not removed&#10;Package 'pgedge-postgresql-server-dev-17' is not installed, so not removed&#10;Package 'pgedge-postgresql-server-dev-17-dbgsym' is not installed, so not removed&#10;Package 'pgedge-postgresql-server-dev-18' is not installed, so not removed&#10;Package 'pgedge-postgresql-server-dev-18-dbgsym' is not installed, so not removed&#10;Package 'pgedge-python-psycopg2-doc' is not installed, so not removed&#10;Package 'pgedge-python3-psycopg2-dbgsym' is not installed, so not removed&#10;Package 'pgedge-sql-exporter' is not installed, so not removed&#10;The following packages were automatically installed and are no longer required:&#10;  apache2 apache2-bin apache2-data apache2-utils bsd-mailx cpp cpp-14&#10;  cpp-14-x86-64-linux-gnu cpp-x86-64-linux-gnu cron cron-daemon-common dbus&#10;  dbus-bin dbus-daemon dbus-session-bus-common dbus-system-bus-common dmsetup&#10;  exim4-base exim4-config exim4-daemon-light fontconfig-config&#10;  fonts-dejavu-core fonts-dejavu-mono gdal-data gdal-plugins&#10;  gir1.2-girepository-2.0 gir1.2-glib-2.0 guile-3.0-libs iproute2&#10;  libabsl20240722 libaec0 libaom3 libapache2-mod-wsgi-py3 libapr1t64&#10;  libaprutil1-dbd-sqlite3 libaprutil1-ldap libaprutil1t64 libarmadillo14&#10;  libarpack2t64 libatomic1 libauthen-sasl-perl libavif16 libblas3 libblosc1&#10;  libboost-serialization1.83.0 libbpf1 libc-l10n libcap2-bin libcares2&#10;  libcfitsio10t64 libclone-perl libcommon-sense-perl libcryptsetup12&#10;  libcurl3t64-gnutls libdata-dump-perl libdav1d7 libdbus-1-3 libde265-0&#10;  libdeflate0 libdevmapper1.02.1 libdrm-amdgpu1 libdrm-common libdrm-intel1&#10;  libdrm2 libedit2 libegl-mesa0 libegl1 libelf1t64 libencode-locale-perl&#10;  libevent-2.1-7t64 libfile-basedir-perl libfile-desktopentry-perl&#10;  libfile-fcntllock-perl libfile-listing-perl libfile-mimeinfo-perl&#10;  libfont-afm-perl libfontconfig1 libfreetype6 libfreexl1 libfyba0t64&#10;  libgav1-1 libgbm1 libgc1 libgdal36 libgdbm-compat4t64 libgdbm6t64&#10;  libgeos-c1t64 libgeos3.13.1 libgeotiff5 libgfortran5 libgif7&#10;  libgirepository-1.0-1 libgl1 libgl1-mesa-dri libgles2 libglib2.0-0t64&#10;  libglib2.0-data libglvnd0 libglx-mesa0 libglx0 libgmpxx4ldbl&#10;  libgnutls-dane0t64 libgpgme11t64 libgpgmepp6t64 libhdf4-0-alt libhdf5-310&#10;  libhdf5-hl-310 libheif-plugin-aomenc libheif-plugin-dav1d&#10;  libheif-plugin-libde265 libheif-plugin-x265 libheif1 libhtml-form-perl&#10;  libhtml-format-perl libhtml-parser-perl libhtml-tagset-perl&#10;  libhtml-tree-perl libhttp-cookies-perl libhttp-daemon-perl libhttp-date-perl&#10;  libhttp-message-perl libhttp-negotiate-perl libice6 libicu76 libidn12&#10;  libio-compress-brotli-perl libio-html-perl libio-pty-perl&#10;  libio-socket-ssl-perl libio-stringy-perl libipc-run-perl&#10;  libipc-system-simple-perl libisl23 libjansson4 libjbig0 libjpeg62-turbo&#10;  libjson-c5 libjson-perl libjson-xs-perl libkmlbase1t64 libkmldom1t64&#10;  libkmlengine1t64 libkmod2 liblapack3 liblcms2-2 liblerc4 libllvm19&#10;  liblockfile-bin liblockfile1 libltdl7 liblua5.4-0 liblwp-mediatypes-perl&#10;  liblwp-protocol-https-perl libmailtools-perl libmariadb3 libminizip1t64&#10;  libmnl0 libmpc3 libmpfr6 libnet-dbus-perl libnet-http-perl&#10;  libnet-smtp-ssl-perl libnet-ssleay-perl libnetcdf22 libngtcp2-16&#10;  libngtcp2-crypto-gnutls8 libnsl2 libnspr4 libnss3 libnuma1 libodbc2&#10;  libodbccr2 libodbcinst2 libogdi4.1 libopenjp2-7 libpam-cap libpciaccess0&#10;  libperl5.40 libpng16-16t64 libpoppler147 libpopt0 libpq5 libproc2-0&#10;  libproj25 libprotobuf-c1 libpython3.13 libqhull-r8.0 librav1e0.7 librttopo1&#10;  libsensors-config libsensors5 libsfcgal2 libsharpyuv0 libsm6 libsnappy1v5&#10;  libspatialite8t64 libsvtav1enc2 libsystemd-shared libsz2 libtcl8.6&#10;  libtext-charwidth-perl libtext-iconv-perl libtext-wrapi18n-perl&#10;  libtie-ixhash-perl libtiff6 libtimedate-perl libtirpc-common libtirpc3t64&#10;  libtry-tiny-perl libtypes-serialiser-perl libunbound8 liburi-perl liburing2&#10;  liburiparser1 libvulkan1 libwayland-client0 libwayland-server0 libwebp7&#10;  libwww-perl libwww-robotrules-perl libx11-6 libx11-data libx11-protocol-perl&#10;  libx11-xcb1 libx265-215 libxau6 libxaw7 libxcb-dri3-0 libxcb-glx0&#10;  libxcb-present0 libxcb-randr0 libxcb-shape0 libxcb-shm0 libxcb-sync1&#10;  libxcb-xfixes0 libxcb1 libxcomposite1 libxcursor1 libxdmcp6&#10;  libxerces-c3.2t64 libxext6 libxfixes3 libxft2 libxi6 libxinerama1&#10;  libxkbfile1 libxml-parser-perl libxml-twig-perl libxml-xpathengine-perl&#10;  libxml2 libxmu6 libxmuu1 libxpm4 libxrandr2 libxrender1 libxshmfence1&#10;  libxslt1.1 libxt6t64 libxtables12 libxtst6 libxv1 libxxf86dga1 libxxf86vm1&#10;  libyuv0 libz3-4 linux-sysctl-defaults locales logrotate luit make-guile&#10;  mariadb-common mesa-libgallium mesa-vulkan-drivers mysql-common nginx&#10;  nginx-common perl perl-modules-5.40 perl-openssl-defaults poppler-data&#10;  procps proj-bin proj-data psmisc python3-dbus python3-gi shared-mime-info&#10;  ssl-cert sysstat systemd systemd-cryptsetup systemd-timesyncd ucf&#10;  unixodbc-common x11-common x11-utils x11-xserver-utils xdg-user-dirs&#10;  xdg-utils xz-utils zutty&#10;Use 'apt autoremove' to remove them.&#10;The following packages will be REMOVED:&#10;  pgedge-ace* pgedge-postgresql-18* pgedge-postgresql-common* pgedge-release*&#10;0 upgraded, 0 newly installed, 4 to remove and 27 not upgraded.&#10;After this operation, 19.4 MB disk space will be freed.&#10;(Reading database ... &#13;(Reading database ... 5%&#13;(Reading database ... 10%&#13;(Reading database ... 15%&#13;(Reading database ... 20%&#13;(Reading database ... 25%&#13;(Reading database ... 30%&#13;(Reading database ... 35%&#13;(Reading database ... 40%&#13;(Reading database ... 45%&#13;(Reading database ... 50%&#13;(Reading database ... 55%&#13;(Reading database ... 60%&#13;(Reading database ... 65%&#13;(Reading database ... 70%&#13;(Reading database ... 75%&#13;(Reading database ... 80%&#13;(Reading database ... 85%&#13;(Reading database ... 90%&#13;(Reading database ... 95%&#13;(Reading database ... 100%&#13;(Reading database ... 22401 files and directories currently installed.)&#13;&#10;Removing pgedge-ace (1.5.4-1.trixie) ...&#13;&#10;Removing pgedge-release (1.0-1) ...&#13;&#10;(Reading database ... &#13;(Reading database ... 5%&#13;(Reading database ... 10%&#13;(Reading database ... 15%&#13;(Reading database ... 20%&#13;(Reading database ... 25%&#13;(Reading database ... 30%&#13;(Reading database ... 35%&#13;(Reading database ... 40%&#13;(Reading database ... 45%&#13;(Reading database ... 50%&#13;(Reading database ... 55%&#13;(Reading database ... 60%&#13;(Reading database ... 65%&#13;(Reading database ... 70%&#13;(Reading database ... 75%&#13;(Reading database ... 80%&#13;(Reading database ... 85%&#13;(Reading database ... 90%&#13;(Reading database ... 95%&#13;(Reading database ... 100%&#13;(Reading database ... 22390 files and directories currently installed.)&#13;&#10;Purging configuration files for pgedge-ace (1.5.4-1.trixie) ...&#13;&#10;Purging configuration files for pgedge-postgresql-18 (18.1-1.trixie) ...&#13;&#10;debconf: unable to initialize frontend: Dialog&#13;&#10;debconf: (TERM is not set, so the dialog frontend is not usable.)&#13;&#10;debconf: falling back to frontend: Readline&#13;&#10;debconf: unable to initialize frontend: Readline&#13;&#10;debconf: (This frontend requires a controlling tty.)&#13;&#10;debconf: falling back to frontend: Teletype&#13;&#10;debconf: unable to initialize frontend: Teletype&#13;&#10;debconf: (This frontend requires a controlling tty.)&#13;&#10;debconf: falling back to frontend: Noninteractive&#13;&#10;dpkg: error processing package pgedge-postgresql-18 (--purge):&#13;&#10; installed pgedge-postgresql-18 package post-removal script subprocess returned error exit status 10&#13;&#10;Purging configuration files for pgedge-postgresql-common (284-1.trixie) ...&#13;&#10;ucfr: Association belongs to postgresql-common, not pgedge-postgresql-common&#13;&#10;ucfr: Aborting&#13;&#10;dpkg: error processing package pgedge-postgresql-common (--purge):&#13;&#10; installed pgedge-postgresql-common package post-removal script subprocess returned error exit status 5&#13;&#10;Errors were encountered while processing:&#13;&#10; pgedge-postgresql-18&#13;&#10; pgedge-postgresql-common&#13;&#10;E: Sub-process /usr/bin/dpkg returned an error code (1)">container_name = 'auto-debian13-amd', container_type = 'deb'
+
+    @pytest.mark.parametrize("container_name,container_type", all_containers)
+    def test_package_uninstall(container_name, container_type):
+        """Uninstall ace package using package_management module"""
+        container_name = container_name.strip()
+        if not container_name:
+            pytest.skip("No container defined in env")
+    
+        # Get container-specific configuration
+        config = get_container_config(container_type)
+        ace_package = config["ace_package"]
+    
+        try:
+            container = client.containers.get(container_name)
+        except docker.errors.NotFound:
+            pytest.skip(f"Container {container_name} not found or not running.")
+    
+        assert container.status == "running"
+    
+        print(f"\n--- Uninstalling {ace_package} on {container_name} ({container_type}) ---")
+    
+        # Use the package_management module to uninstall the package
+        try:
+&gt;           success, platform, message = package_management.uninstall_package(container, ace_package)
+                                         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+component-test/test_pep_ace.py:302: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+container = &lt;Container: 4b3dae350fc6&gt;, package_name = 'pgedge-ace'
+
+    def uninstall_package(container, package_name):
+        """
+        Uninstall a package from a Docker container.
+    
+        Args:
+            container: Docker container object with exec_run method
+            package_name: Name of the package to uninstall
+    
+        Returns:
+            tuple: (success: bool, platform: str, message: str)
+    
+        Raises:
+            Exception: If package uninstallation fails
+        """
+    
+        print(f"\n--- Uninstalling {package_name} from container ---")
+    
+        # Detect package manager
+        exit_code, _ = container.exec_run("command -v dnf", user="root")
+        if exit_code == 0:
+            pkg_mgr = "dnf remove -y"
+            platform = "rhel"
+        else:
+            exit_code, _ = container.exec_run("/bin/bash -c 'command -v apt-get'", user="root")
+            if exit_code == 0:
+                pkg_mgr = "apt-get purge -y"
+                platform = "debian"
+            else:
+                raise Exception("No supported package manager found (dnf or apt-get)")
+    
+        print(f"Detected platform: {platform}")
+    
+        # Uninstall the package
+        print(f"Uninstalling {package_name}...")
+        exit_code, output = container.exec_run(
+            ## Comment out the line due to not working on Debian-based systems. User not properly removed.
+            #f"{pkg_mgr} {package_name}",
+            f"{pkg_mgr} pgedge-*",
+            user="root"
+        )
+    
+        if exit_code != 0:
+&gt;           raise Exception(f"Failed to uninstall {package_name}: {output.decode()}")
+E           Exception: Failed to uninstall pgedge-ace: Reading package lists...
+E           Building dependency tree...
+E           Reading state information...
+E           Package 'pgedge-postgresql-doc-18' is not installed, so not removed
+E           Package 'pgedge-anonymizer' is not installed, so not removed
+E           Package 'pgedge-docloader' is not installed, so not removed
+E           Package 'pgedge-enterprise-all-16' is not installed, so not removed
+E           Package 'pgedge-postgresql-16' is not installed, so not removed
+E           Package 'pgedge-postgresql-16-spock50' is not installed, so not removed
+E           Package 'pgedge-postgresql-16-snowflake' is not installed, so not removed
+E           Package 'pgedge-postgresql-16-lolor' is not installed, so not removed
+E           Package 'pgedge-postgresql-16-pgaudit' is not installed, so not removed
+E           Package 'pgedge-postgresql-16-pgvector' is not installed, so not removed
+E           Package 'pgedge-postgresql-16-postgis-3' is not installed, so not removed
+E           Package 'pgedge-pgadmin4' is not installed, so not removed
+E           Package 'pgedge-pgbackrest' is not installed, so not removed
+E           Package 'pgedge-pgbouncer' is not installed, so not removed
+E           Package 'pgedge-postgresql-16-pgmq' is not installed, so not removed
+E           Package 'pgedge-postgresql-16-cron' is not installed, so not removed
+E           Package 'pgedge-postgresql-16-pg-tokenizer' is not installed, so not removed
+E           Package 'pgedge-postgresql-16-pg-vectorize' is not installed, so not removed
+E           Package 'pgedge-postgresql-16-pg-stat-monitor' is not installed, so not removed
+E           Package 'pgedge-postgresql-16-vchord-bm25' is not installed, so not removed
+E           Package 'pgedge-postgresql-16-vectorizer' is not installed, so not removed
+E           Package 'pgedge-rag-server' is not installed, so not removed
+E           Package 'pgedge-postgres-mcp' is not installed, so not removed
+E           Package 'pgedge-nla-cli' is not installed, so not removed
+E           Package 'pgedge-postgres-mcp-kb' is not installed, so not removed
+E           Package 'pgedge-nla-web' is not installed, so not removed
+E           Package 'pgedge-enterprise-all-17' is not installed, so not removed
+E           Package 'pgedge-postgresql-17' is not installed, so not removed
+E           Package 'pgedge-postgresql-17-spock50' is not installed, so not removed
+E           Package 'pgedge-postgresql-17-snowflake' is not installed, so not removed
+E           Package 'pgedge-postgresql-17-lolor' is not installed, so not removed
+E           Package 'pgedge-postgresql-17-pgaudit' is not installed, so not removed
+E           Package 'pgedge-postgresql-17-pgvector' is not installed, so not removed
+E           Package 'pgedge-postgresql-17-postgis-3' is not installed, so not removed
+E           Package 'pgedge-postgresql-17-pgmq' is not installed, so not removed
+E           Package 'pgedge-postgresql-17-cron' is not installed, so not removed
+E           Package 'pgedge-postgresql-17-pg-tokenizer' is not installed, so not removed
+E           Package 'pgedge-postgresql-17-pg-vectorize' is not installed, so not removed
+E           Package 'pgedge-postgresql-17-pg-stat-monitor' is not installed, so not removed
+E           Package 'pgedge-postgresql-17-vchord-bm25' is not installed, so not removed
+E           Package 'pgedge-postgresql-17-vectorizer' is not installed, so not removed
+E           Package 'pgedge-enterprise-all-18' is not installed, so not removed
+E           Package 'pgedge-postgresql-18-spock50' is not installed, so not removed
+E           Package 'pgedge-postgresql-18-snowflake' is not installed, so not removed
+E           Package 'pgedge-postgresql-18-lolor' is not installed, so not removed
+E           Package 'pgedge-postgresql-18-pgaudit' is not installed, so not removed
+E           Package 'pgedge-postgresql-18-pgvector' is not installed, so not removed
+E           Package 'pgedge-postgresql-18-postgis-3' is not installed, so not removed
+E           Package 'pgedge-postgresql-18-pgmq' is not installed, so not removed
+E           Package 'pgedge-postgresql-18-cron' is not installed, so not removed
+E           Package 'pgedge-postgresql-18-pg-tokenizer' is not installed, so not removed
+E           Package 'pgedge-postgresql-18-pg-vectorize' is not installed, so not removed
+E           Package 'pgedge-postgresql-18-pg-stat-monitor' is not installed, so not removed
+E           Package 'pgedge-postgresql-18-vchord-bm25' is not installed, so not removed
+E           Package 'pgedge-postgresql-18-vectorizer' is not installed, so not removed
+E           Package 'pgedge-enterprise-postgres-16' is not installed, so not removed
+E           Package 'pgedge-enterprise-postgres-17' is not installed, so not removed
+E           Package 'pgedge-enterprise-postgres-18' is not installed, so not removed
+E           Package 'pgedge-pgadmin4-server' is not installed, so not removed
+E           Package 'pgedge-pgadmin4-desktop' is not installed, so not removed
+E           Package 'pgedge-pgadmin4-web' is not installed, so not removed
+E           Package 'pgedge-postgresql-client' is not installed, so not removed
+E           Package 'pgedge-pgbackrest-doc' is not installed, so not removed
+E           Package 'pgedge-pgbackrest-dbgsym' is not installed, so not removed
+E           Package 'pgedge-python3-psycopg2' is not installed, so not removed
+E           Package 'pgedge-postgresql' is not installed, so not removed
+E           Package 'pgedge-pgbouncer-dbgsym' is not installed, so not removed
+E           Package 'pgedge-postgis' is not installed, so not removed
+E           Package 'pgedge-postgresql-postgis' is not installed, so not removed
+E           Package 'pgedge-postgis-doc' is not installed, so not removed
+E           Package 'pgedge-postgis-dbgsym' is not installed, so not removed
+E           Package 'pgedge-postgresql-doc' is not installed, so not removed
+E           Package 'pgedge-postgresql-client-16' is not installed, so not removed
+E           Package 'pgedge-postgresql-16-cron-dbgsym' is not installed, so not removed
+E           Package 'pgedge-postgresql-16-dbgsym' is not installed, so not removed
+E           Package 'pgedge-postgresql-16-lolor-dbgsym' is not installed, so not removed
+E           Package 'pgedge-postgresql-16-pg-search' is not installed, so not removed
+E           Package 'pgedge-postgresql-16-pg-search-dbgsym' is not installed, so not removed
+E           Package 'pgedge-postgresql-16-pg-stat-monitor-dbgsym' is not installed, so not removed
+E           Package 'pgedge-postgresql-16-pg-tokenizer-dbgsym' is not installed, so not removed
+E           Package 'pgedge-postgresql-16-pg-vectorize-dbgsym' is not installed, so not removed
+E           Package 'pgedge-postgresql-16-pgaudit-dbgsym' is not installed, so not removed
+E           Package 'pgedge-postgresql-16-pgvector-dbgsym' is not installed, so not removed
+E           Package 'pgedge-postgresql-16-pldebugger' is not installed, so not removed
+E           Package 'pgedge-postgresql-16-pldebugger-dbgsym' is not installed, so not removed
+E           Package 'pgedge-postgresql-16-postgis-3-scripts' is not installed, so not removed
+E           Package 'pgedge-postgresql-16-postgis-3-dbgsym' is not installed, so not removed
+E           Package 'pgedge-postgresql-16-snowflake-dbgsym' is not installed, so not removed
+E           Package 'pgedge-postgresql-16-spock50-dbgsym' is not installed, so not removed
+E           Package 'pgedge-postgresql-16-system-stats' is not installed, so not removed
+E           Package 'pgedge-postgresql-16-system-stats-dbgsym' is not installed, so not removed
+E           Package 'pgedge-postgresql-16-vchord-bm25-dbgsym' is not installed, so not removed
+E           Package 'pgedge-postgresql-16-vectorizer-dbgsym' is not installed, so not removed
+E           Package 'pgedge-postgresql-client-17' is not installed, so not removed
+E           Package 'pgedge-postgresql-17-cron-dbgsym' is not installed, so not removed
+E           Package 'pgedge-postgresql-17-dbgsym' is not installed, so not removed
+E           Package 'pgedge-postgresql-17-lolor-dbgsym' is not installed, so not removed
+E           Package 'pgedge-postgresql-17-pg-search' is not installed, so not removed
+E           Package 'pgedge-postgresql-17-pg-search-dbgsym' is not installed, so not removed
+E           Package 'pgedge-postgresql-17-pg-stat-monitor-dbgsym' is not installed, so not removed
+E           Package 'pgedge-postgresql-17-pg-tokenizer-dbgsym' is not installed, so not removed
+E           Package 'pgedge-postgresql-17-pg-vectorize-dbgsym' is not installed, so not removed
+E           Package 'pgedge-postgresql-17-pgaudit-dbgsym' is not installed, so not removed
+E           Package 'pgedge-postgresql-17-pgvector-dbgsym' is not installed, so not removed
+E           Package 'pgedge-postgresql-17-pldebugger' is not installed, so not removed
+E           Package 'pgedge-postgresql-17-pldebugger-dbgsym' is not installed, so not removed
+E           Package 'pgedge-postgresql-17-postgis-3-scripts' is not installed, so not removed
+E           Package 'pgedge-postgresql-17-postgis-3-dbgsym' is not installed, so not removed
+E           Package 'pgedge-postgresql-17-snowflake-dbgsym' is not installed, so not removed
+E           Package 'pgedge-postgresql-17-spock50-dbgsym' is not installed, so not removed
+E           Package 'pgedge-postgresql-17-system-stats' is not installed, so not removed
+E           Package 'pgedge-postgresql-17-system-stats-dbgsym' is not installed, so not removed
+E           Package 'pgedge-postgresql-17-vchord-bm25-dbgsym' is not installed, so not removed
+E           Package 'pgedge-postgresql-17-vectorizer-dbgsym' is not installed, so not removed
+E           Package 'pgedge-postgresql-client-18' is not installed, so not removed
+E           Package 'pgedge-postgresql-18-jit' is not installed, so not removed
+E           Package 'pgedge-postgresql-18-cron-dbgsym' is not installed, so not removed
+E           Package 'pgedge-postgresql-18-dbgsym' is not installed, so not removed
+E           Package 'pgedge-postgresql-18-jit-dbgsym' is not installed, so not removed
+E           Package 'pgedge-postgresql-18-lolor-dbgsym' is not installed, so not removed
+E           Package 'pgedge-postgresql-18-pg-stat-monitor-dbgsym' is not installed, so not removed
+E           Package 'pgedge-postgresql-18-pg-tokenizer-dbgsym' is not installed, so not removed
+E           Package 'pgedge-postgresql-18-pg-vectorize-dbgsym' is not installed, so not removed
+E           Package 'pgedge-postgresql-18-pgaudit-dbgsym' is not installed, so not removed
+E           Package 'pgedge-postgresql-18-pgvector-dbgsym' is not installed, so not removed
+E           Package 'pgedge-postgresql-18-pldebugger' is not installed, so not removed
+E           Package 'pgedge-postgresql-18-pldebugger-dbgsym' is not installed, so not removed
+E           Package 'pgedge-postgresql-18-postgis-3-scripts' is not installed, so not removed
+E           Package 'pgedge-postgresql-18-postgis-3-dbgsym' is not installed, so not removed
+E           Package 'pgedge-postgresql-18-snowflake-dbgsym' is not installed, so not removed
+E           Package 'pgedge-postgresql-18-spock50-dbgsym' is not installed, so not removed
+E           Package 'pgedge-postgresql-18-system-stats' is not installed, so not removed
+E           Package 'pgedge-postgresql-18-system-stats-dbgsym' is not installed, so not removed
+E           Package 'pgedge-postgresql-18-vchord-bm25-dbgsym' is not installed, so not removed
+E           Package 'pgedge-postgresql-18-vectorizer-dbgsym' is not installed, so not removed
+E           Package 'pgedge-postgresql-all' is not installed, so not removed
+E           Package 'pgedge-postgresql-server-dev-all' is not installed, so not removed
+E           Package 'pgedge-postgresql-plperl-18' is not installed, so not removed
+E           Package 'pgedge-postgresql-plpython3-18' is not installed, so not removed
+E           Package 'pgedge-postgresql-pltcl-18' is not installed, so not removed
+E           Package 'pgedge-postgresql-client-common' is not installed, so not removed
+E           Package 'pgedge-postgresql-doc-16' is not installed, so not removed
+E           Package 'pgedge-postgresql-client-16-dbgsym' is not installed, so not removed
+E           Package 'pgedge-postgresql-doc-17' is not installed, so not removed
+E           Package 'pgedge-postgresql-client-17-dbgsym' is not installed, so not removed
+E           Package 'pgedge-postgresql-client-18-dbgsym' is not installed, so not removed
+E           Package 'pgedge-postgresql-common-dev' is not installed, so not removed
+E           Package 'pgedge-postgresql-plperl-16' is not installed, so not removed
+E           Package 'pgedge-postgresql-plperl-16-dbgsym' is not installed, so not removed
+E           Package 'pgedge-postgresql-plperl-17' is not installed, so not removed
+E           Package 'pgedge-postgresql-plperl-17-dbgsym' is not installed, so not removed
+E           Package 'pgedge-postgresql-plperl-18-dbgsym' is not installed, so not removed
+E           Package 'pgedge-postgresql-plpython3-16' is not installed, so not removed
+E           Package 'pgedge-postgresql-plpython3-16-dbgsym' is not installed, so not removed
+E           Package 'pgedge-postgresql-plpython3-17' is not installed, so not removed
+E           Package 'pgedge-postgresql-plpython3-17-dbgsym' is not installed, so not removed
+E           Package 'pgedge-postgresql-plpython3-18-dbgsym' is not installed, so not removed
+E           Package 'pgedge-postgresql-pltcl-16' is not installed, so not removed
+E           Package 'pgedge-postgresql-pltcl-16-dbgsym' is not installed, so not removed
+E           Package 'pgedge-postgresql-pltcl-17' is not installed, so not removed
+E           Package 'pgedge-postgresql-pltcl-17-dbgsym' is not installed, so not removed
+E           Package 'pgedge-postgresql-pltcl-18-dbgsym' is not installed, so not removed
+E           Package 'pgedge-postgresql-postgis-scripts' is not installed, so not removed
+E           Package 'pgedge-postgresql-server-dev-16' is not installed, so not removed
+E           Package 'pgedge-postgresql-server-dev-17' is not installed, so not removed
+E           Package 'pgedge-postgresql-server-dev-17-dbgsym' is not installed, so not removed
+E           Package 'pgedge-postgresql-server-dev-18' is not installed, so not removed
+E           Package 'pgedge-postgresql-server-dev-18-dbgsym' is not installed, so not removed
+E           Package 'pgedge-python-psycopg2-doc' is not installed, so not removed
+E           Package 'pgedge-python3-psycopg2-dbgsym' is not installed, so not removed
+E           Package 'pgedge-sql-exporter' is not installed, so not removed
+E           The following packages were automatically installed and are no longer required:
+E             apache2 apache2-bin apache2-data apache2-utils bsd-mailx cpp cpp-14
+E             cpp-14-x86-64-linux-gnu cpp-x86-64-linux-gnu cron cron-daemon-common dbus
+E             dbus-bin dbus-daemon dbus-session-bus-common dbus-system-bus-common dmsetup
+E             exim4-base exim4-config exim4-daemon-light fontconfig-config
+E             fonts-dejavu-core fonts-dejavu-mono gdal-data gdal-plugins
+E             gir1.2-girepository-2.0 gir1.2-glib-2.0 guile-3.0-libs iproute2
+E             libabsl20240722 libaec0 libaom3 libapache2-mod-wsgi-py3 libapr1t64
+E             libaprutil1-dbd-sqlite3 libaprutil1-ldap libaprutil1t64 libarmadillo14
+E             libarpack2t64 libatomic1 libauthen-sasl-perl libavif16 libblas3 libblosc1
+E             libboost-serialization1.83.0 libbpf1 libc-l10n libcap2-bin libcares2
+E             libcfitsio10t64 libclone-perl libcommon-sense-perl libcryptsetup12
+E             libcurl3t64-gnutls libdata-dump-perl libdav1d7 libdbus-1-3 libde265-0
+E             libdeflate0 libdevmapper1.02.1 libdrm-amdgpu1 libdrm-common libdrm-intel1
+E             libdrm2 libedit2 libegl-mesa0 libegl1 libelf1t64 libencode-locale-perl
+E             libevent-2.1-7t64 libfile-basedir-perl libfile-desktopentry-perl
+E             libfile-fcntllock-perl libfile-listing-perl libfile-mimeinfo-perl
+E             libfont-afm-perl libfontconfig1 libfreetype6 libfreexl1 libfyba0t64
+E             libgav1-1 libgbm1 libgc1 libgdal36 libgdbm-compat4t64 libgdbm6t64
+E             libgeos-c1t64 libgeos3.13.1 libgeotiff5 libgfortran5 libgif7
+E             libgirepository-1.0-1 libgl1 libgl1-mesa-dri libgles2 libglib2.0-0t64
+E             libglib2.0-data libglvnd0 libglx-mesa0 libglx0 libgmpxx4ldbl
+E             libgnutls-dane0t64 libgpgme11t64 libgpgmepp6t64 libhdf4-0-alt libhdf5-310
+E             libhdf5-hl-310 libheif-plugin-aomenc libheif-plugin-dav1d
+E             libheif-plugin-libde265 libheif-plugin-x265 libheif1 libhtml-form-perl
+E             libhtml-format-perl libhtml-parser-perl libhtml-tagset-perl
+E             libhtml-tree-perl libhttp-cookies-perl libhttp-daemon-perl libhttp-date-perl
+E             libhttp-message-perl libhttp-negotiate-perl libice6 libicu76 libidn12
+E             libio-compress-brotli-perl libio-html-perl libio-pty-perl
+E             libio-socket-ssl-perl libio-stringy-perl libipc-run-perl
+E             libipc-system-simple-perl libisl23 libjansson4 libjbig0 libjpeg62-turbo
+E             libjson-c5 libjson-perl libjson-xs-perl libkmlbase1t64 libkmldom1t64
+E             libkmlengine1t64 libkmod2 liblapack3 liblcms2-2 liblerc4 libllvm19
+E             liblockfile-bin liblockfile1 libltdl7 liblua5.4-0 liblwp-mediatypes-perl
+E             liblwp-protocol-https-perl libmailtools-perl libmariadb3 libminizip1t64
+E             libmnl0 libmpc3 libmpfr6 libnet-dbus-perl libnet-http-perl
+E             libnet-smtp-ssl-perl libnet-ssleay-perl libnetcdf22 libngtcp2-16
+E             libngtcp2-crypto-gnutls8 libnsl2 libnspr4 libnss3 libnuma1 libodbc2
+E             libodbccr2 libodbcinst2 libogdi4.1 libopenjp2-7 libpam-cap libpciaccess0
+E             libperl5.40 libpng16-16t64 libpoppler147 libpopt0 libpq5 libproc2-0
+E             libproj25 libprotobuf-c1 libpython3.13 libqhull-r8.0 librav1e0.7 librttopo1
+E             libsensors-config libsensors5 libsfcgal2 libsharpyuv0 libsm6 libsnappy1v5
+E             libspatialite8t64 libsvtav1enc2 libsystemd-shared libsz2 libtcl8.6
+E             libtext-charwidth-perl libtext-iconv-perl libtext-wrapi18n-perl
+E             libtie-ixhash-perl libtiff6 libtimedate-perl libtirpc-common libtirpc3t64
+E             libtry-tiny-perl libtypes-serialiser-perl libunbound8 liburi-perl liburing2
+E             liburiparser1 libvulkan1 libwayland-client0 libwayland-server0 libwebp7
+E             libwww-perl libwww-robotrules-perl libx11-6 libx11-data libx11-protocol-perl
+E             libx11-xcb1 libx265-215 libxau6 libxaw7 libxcb-dri3-0 libxcb-glx0
+E             libxcb-present0 libxcb-randr0 libxcb-shape0 libxcb-shm0 libxcb-sync1
+E             libxcb-xfixes0 libxcb1 libxcomposite1 libxcursor1 libxdmcp6
+E             libxerces-c3.2t64 libxext6 libxfixes3 libxft2 libxi6 libxinerama1
+E             libxkbfile1 libxml-parser-perl libxml-twig-perl libxml-xpathengine-perl
+E             libxml2 libxmu6 libxmuu1 libxpm4 libxrandr2 libxrender1 libxshmfence1
+E             libxslt1.1 libxt6t64 libxtables12 libxtst6 libxv1 libxxf86dga1 libxxf86vm1
+E             libyuv0 libz3-4 linux-sysctl-defaults locales logrotate luit make-guile
+E             mariadb-common mesa-libgallium mesa-vulkan-drivers mysql-common nginx
+E             nginx-common perl perl-modules-5.40 perl-openssl-defaults poppler-data
+E             procps proj-bin proj-data psmisc python3-dbus python3-gi shared-mime-info
+E             ssl-cert sysstat systemd systemd-cryptsetup systemd-timesyncd ucf
+E             unixodbc-common x11-common x11-utils x11-xserver-utils xdg-user-dirs
+E             xdg-utils xz-utils zutty
+E           Use 'apt autoremove' to remove them.
+E           The following packages will be REMOVED:
+E             pgedge-ace* pgedge-postgresql-18* pgedge-postgresql-common* pgedge-release*
+E           0 upgraded, 0 newly installed, 4 to remove and 27 not upgraded.
+E           After this operation, 19.4 MB disk space will be freed.
+E           (Reading database ... (Reading database ... 5%(Reading database ... 10%(Reading database ... 15%(Reading database ... 20%(Reading database ... 25%(Reading database ... 30%(Reading database ... 35%(Reading database ... 40%(Reading database ... 45%(Reading database ... 50%(Reading database ... 55%(Reading database ... 60%(Reading database ... 65%(Reading database ... 70%(Reading database ... 75%(Reading database ... 80%(Reading database ... 85%(Reading database ... 90%(Reading database ... 95%(Reading database ... 100%(Reading database ... 22401 files and directories currently installed.)
+E           Removing pgedge-ace (1.5.4-1.trixie) ...
+E           Removing pgedge-release (1.0-1) ...
+E           (Reading database ... (Reading database ... 5%(Reading database ... 10%(Reading database ... 15%(Reading database ... 20%(Reading database ... 25%(Reading database ... 30%(Reading database ... 35%(Reading database ... 40%(Reading database ... 45%(Reading database ... 50%(Reading database ... 55%(Reading database ... 60%(Reading database ... 65%(Reading database ... 70%(Reading database ... 75%(Reading database ... 80%(Reading database ... 85%(Reading database ... 90%(Reading database ... 95%(Reading database ... 100%(Reading database ... 22390 files and directories currently installed.)
+E           Purging configuration files for pgedge-ace (1.5.4-1.trixie) ...
+E           Purging configuration files for pgedge-postgresql-18 (18.1-1.trixie) ...
+E           debconf: unable to initialize frontend: Dialog
+E           debconf: (TERM is not set, so the dialog frontend is not usable.)
+E           debconf: falling back to frontend: Readline
+E           debconf: unable to initialize frontend: Readline
+E           debconf: (This frontend requires a controlling tty.)
+E           debconf: falling back to frontend: Teletype
+E           debconf: unable to initialize frontend: Teletype
+E           debconf: (This frontend requires a controlling tty.)
+E           debconf: falling back to frontend: Noninteractive
+E           dpkg: error processing package pgedge-postgresql-18 (--purge):
+E            installed pgedge-postgresql-18 package post-removal script subprocess returned error exit status 10
+E           Purging configuration files for pgedge-postgresql-common (284-1.trixie) ...
+E           ucfr: Association belongs to postgresql-common, not pgedge-postgresql-common
+E           ucfr: Aborting
+E           dpkg: error processing package pgedge-postgresql-common (--purge):
+E            installed pgedge-postgresql-common package post-removal script subprocess returned error exit status 5
+E           Errors were encountered while processing:
+E            pgedge-postgresql-18
+E            pgedge-postgresql-common
+E           E: Sub-process /usr/bin/dpkg returned an error code (1)
+
+aspects/package_management.py:185: Exception
+
+During handling of the above exception, another exception occurred:
+
+container_name = 'auto-debian13-amd', container_type = 'deb'
+
+    @pytest.mark.parametrize("container_name,container_type", all_containers)
+    def test_package_uninstall(container_name, container_type):
+        """Uninstall ace package using package_management module"""
+        container_name = container_name.strip()
+        if not container_name:
+            pytest.skip("No container defined in env")
+    
+        # Get container-specific configuration
+        config = get_container_config(container_type)
+        ace_package = config["ace_package"]
+    
+        try:
+            container = client.containers.get(container_name)
+        except docker.errors.NotFound:
+            pytest.skip(f"Container {container_name} not found or not running.")
+    
+        assert container.status == "running"
+    
+        print(f"\n--- Uninstalling {ace_package} on {container_name} ({container_type}) ---")
+    
+        # Use the package_management module to uninstall the package
+        try:
+            success, platform, message = package_management.uninstall_package(container, ace_package)
+            assert success, f"Package uninstallation failed: {message}"
+            print(f"✅ {message}")
+            print(f"✅ Platform detected: {platform}")
+        except Exception as e:
+&gt;           pytest.fail(f"Failed to uninstall {ace_package}: {str(e)}")
+E           Failed: Failed to uninstall pgedge-ace: Failed to uninstall pgedge-ace: Reading package lists...
+E           Building dependency tree...
+E           Reading state information...
+E           Package 'pgedge-postgresql-doc-18' is not installed, so not removed
+E           Package 'pgedge-anonymizer' is not installed, so not removed
+E           Package 'pgedge-docloader' is not installed, so not removed
+E           Package 'pgedge-enterprise-all-16' is not installed, so not removed
+E           Package 'pgedge-postgresql-16' is not installed, so not removed
+E           Package 'pgedge-postgresql-16-spock50' is not installed, so not removed
+E           Package 'pgedge-postgresql-16-snowflake' is not installed, so not removed
+E           Package 'pgedge-postgresql-16-lolor' is not installed, so not removed
+E           Package 'pgedge-postgresql-16-pgaudit' is not installed, so not removed
+E           Package 'pgedge-postgresql-16-pgvector' is not installed, so not removed
+E           Package 'pgedge-postgresql-16-postgis-3' is not installed, so not removed
+E           Package 'pgedge-pgadmin4' is not installed, so not removed
+E           Package 'pgedge-pgbackrest' is not installed, so not removed
+E           Package 'pgedge-pgbouncer' is not installed, so not removed
+E           Package 'pgedge-postgresql-16-pgmq' is not installed, so not removed
+E           Package 'pgedge-postgresql-16-cron' is not installed, so not removed
+E           Package 'pgedge-postgresql-16-pg-tokenizer' is not installed, so not removed
+E           Package 'pgedge-postgresql-16-pg-vectorize' is not installed, so not removed
+E           Package 'pgedge-postgresql-16-pg-stat-monitor' is not installed, so not removed
+E           Package 'pgedge-postgresql-16-vchord-bm25' is not installed, so not removed
+E           Package 'pgedge-postgresql-16-vectorizer' is not installed, so not removed
+E           Package 'pgedge-rag-server' is not installed, so not removed
+E           Package 'pgedge-postgres-mcp' is not installed, so not removed
+E           Package 'pgedge-nla-cli' is not installed, so not removed
+E           Package 'pgedge-postgres-mcp-kb' is not installed, so not removed
+E           Package 'pgedge-nla-web' is not installed, so not removed
+E           Package 'pgedge-enterprise-all-17' is not installed, so not removed
+E           Package 'pgedge-postgresql-17' is not installed, so not removed
+E           Package 'pgedge-postgresql-17-spock50' is not installed, so not removed
+E           Package 'pgedge-postgresql-17-snowflake' is not installed, so not removed
+E           Package 'pgedge-postgresql-17-lolor' is not installed, so not removed
+E           Package 'pgedge-postgresql-17-pgaudit' is not installed, so not removed
+E           Package 'pgedge-postgresql-17-pgvector' is not installed, so not removed
+E           Package 'pgedge-postgresql-17-postgis-3' is not installed, so not removed
+E           Package 'pgedge-postgresql-17-pgmq' is not installed, so not removed
+E           Package 'pgedge-postgresql-17-cron' is not installed, so not removed
+E           Package 'pgedge-postgresql-17-pg-tokenizer' is not installed, so not removed
+E           Package 'pgedge-postgresql-17-pg-vectorize' is not installed, so not removed
+E           Package 'pgedge-postgresql-17-pg-stat-monitor' is not installed, so not removed
+E           Package 'pgedge-postgresql-17-vchord-bm25' is not installed, so not removed
+E           Package 'pgedge-postgresql-17-vectorizer' is not installed, so not removed
+E           Package 'pgedge-enterprise-all-18' is not installed, so not removed
+E           Package 'pgedge-postgresql-18-spock50' is not installed, so not removed
+E           Package 'pgedge-postgresql-18-snowflake' is not installed, so not removed
+E           Package 'pgedge-postgresql-18-lolor' is not installed, so not removed
+E           Package 'pgedge-postgresql-18-pgaudit' is not installed, so not removed
+E           Package 'pgedge-postgresql-18-pgvector' is not installed, so not removed
+E           Package 'pgedge-postgresql-18-postgis-3' is not installed, so not removed
+E           Package 'pgedge-postgresql-18-pgmq' is not installed, so not removed
+E           Package 'pgedge-postgresql-18-cron' is not installed, so not removed
+E           Package 'pgedge-postgresql-18-pg-tokenizer' is not installed, so not removed
+E           Package 'pgedge-postgresql-18-pg-vectorize' is not installed, so not removed
+E           Package 'pgedge-postgresql-18-pg-stat-monitor' is not installed, so not removed
+E           Package 'pgedge-postgresql-18-vchord-bm25' is not installed, so not removed
+E           Package 'pgedge-postgresql-18-vectorizer' is not installed, so not removed
+E           Package 'pgedge-enterprise-postgres-16' is not installed, so not removed
+E           Package 'pgedge-enterprise-postgres-17' is not installed, so not removed
+E           Package 'pgedge-enterprise-postgres-18' is not installed, so not removed
+E           Package 'pgedge-pgadmin4-server' is not installed, so not removed
+E           Package 'pgedge-pgadmin4-desktop' is not installed, so not removed
+E           Package 'pgedge-pgadmin4-web' is not installed, so not removed
+E           Package 'pgedge-postgresql-client' is not installed, so not removed
+E           Package 'pgedge-pgbackrest-doc' is not installed, so not removed
+E           Package 'pgedge-pgbackrest-dbgsym' is not installed, so not removed
+E           Package 'pgedge-python3-psycopg2' is not installed, so not removed
+E           Package 'pgedge-postgresql' is not installed, so not removed
+E           Package 'pgedge-pgbouncer-dbgsym' is not installed, so not removed
+E           Package 'pgedge-postgis' is not installed, so not removed
+E           Package 'pgedge-postgresql-postgis' is not installed, so not removed
+E           Package 'pgedge-postgis-doc' is not installed, so not removed
+E           Package 'pgedge-postgis-dbgsym' is not installed, so not removed
+E           Package 'pgedge-postgresql-doc' is not installed, so not removed
+E           Package 'pgedge-postgresql-client-16' is not installed, so not removed
+E           Package 'pgedge-postgresql-16-cron-dbgsym' is not installed, so not removed
+E           Package 'pgedge-postgresql-16-dbgsym' is not installed, so not removed
+E           Package 'pgedge-postgresql-16-lolor-dbgsym' is not installed, so not removed
+E           Package 'pgedge-postgresql-16-pg-search' is not installed, so not removed
+E           Package 'pgedge-postgresql-16-pg-search-dbgsym' is not installed, so not removed
+E           Package 'pgedge-postgresql-16-pg-stat-monitor-dbgsym' is not installed, so not removed
+E           Package 'pgedge-postgresql-16-pg-tokenizer-dbgsym' is not installed, so not removed
+E           Package 'pgedge-postgresql-16-pg-vectorize-dbgsym' is not installed, so not removed
+E           Package 'pgedge-postgresql-16-pgaudit-dbgsym' is not installed, so not removed
+E           Package 'pgedge-postgresql-16-pgvector-dbgsym' is not installed, so not removed
+E           Package 'pgedge-postgresql-16-pldebugger' is not installed, so not removed
+E           Package 'pgedge-postgresql-16-pldebugger-dbgsym' is not installed, so not removed
+E           Package 'pgedge-postgresql-16-postgis-3-scripts' is not installed, so not removed
+E           Package 'pgedge-postgresql-16-postgis-3-dbgsym' is not installed, so not removed
+E           Package 'pgedge-postgresql-16-snowflake-dbgsym' is not installed, so not removed
+E           Package 'pgedge-postgresql-16-spock50-dbgsym' is not installed, so not removed
+E           Package 'pgedge-postgresql-16-system-stats' is not installed, so not removed
+E           Package 'pgedge-postgresql-16-system-stats-dbgsym' is not installed, so not removed
+E           Package 'pgedge-postgresql-16-vchord-bm25-dbgsym' is not installed, so not removed
+E           Package 'pgedge-postgresql-16-vectorizer-dbgsym' is not installed, so not removed
+E           Package 'pgedge-postgresql-client-17' is not installed, so not removed
+E           Package 'pgedge-postgresql-17-cron-dbgsym' is not installed, so not removed
+E           Package 'pgedge-postgresql-17-dbgsym' is not installed, so not removed
+E           Package 'pgedge-postgresql-17-lolor-dbgsym' is not installed, so not removed
+E           Package 'pgedge-postgresql-17-pg-search' is not installed, so not removed
+E           Package 'pgedge-postgresql-17-pg-search-dbgsym' is not installed, so not removed
+E           Package 'pgedge-postgresql-17-pg-stat-monitor-dbgsym' is not installed, so not removed
+E           Package 'pgedge-postgresql-17-pg-tokenizer-dbgsym' is not installed, so not removed
+E           Package 'pgedge-postgresql-17-pg-vectorize-dbgsym' is not installed, so not removed
+E           Package 'pgedge-postgresql-17-pgaudit-dbgsym' is not installed, so not removed
+E           Package 'pgedge-postgresql-17-pgvector-dbgsym' is not installed, so not removed
+E           Package 'pgedge-postgresql-17-pldebugger' is not installed, so not removed
+E           Package 'pgedge-postgresql-17-pldebugger-dbgsym' is not installed, so not removed
+E           Package 'pgedge-postgresql-17-postgis-3-scripts' is not installed, so not removed
+E           Package 'pgedge-postgresql-17-postgis-3-dbgsym' is not installed, so not removed
+E           Package 'pgedge-postgresql-17-snowflake-dbgsym' is not installed, so not removed
+E           Package 'pgedge-postgresql-17-spock50-dbgsym' is not installed, so not removed
+E           Package 'pgedge-postgresql-17-system-stats' is not installed, so not removed
+E           Package 'pgedge-postgresql-17-system-stats-dbgsym' is not installed, so not removed
+E           Package 'pgedge-postgresql-17-vchord-bm25-dbgsym' is not installed, so not removed
+E           Package 'pgedge-postgresql-17-vectorizer-dbgsym' is not installed, so not removed
+E           Package 'pgedge-postgresql-client-18' is not installed, so not removed
+E           Package 'pgedge-postgresql-18-jit' is not installed, so not removed
+E           Package 'pgedge-postgresql-18-cron-dbgsym' is not installed, so not removed
+E           Package 'pgedge-postgresql-18-dbgsym' is not installed, so not removed
+E           Package 'pgedge-postgresql-18-jit-dbgsym' is not installed, so not removed
+E           Package 'pgedge-postgresql-18-lolor-dbgsym' is not installed, so not removed
+E           Package 'pgedge-postgresql-18-pg-stat-monitor-dbgsym' is not installed, so not removed
+E           Package 'pgedge-postgresql-18-pg-tokenizer-dbgsym' is not installed, so not removed
+E           Package 'pgedge-postgresql-18-pg-vectorize-dbgsym' is not installed, so not removed
+E           Package 'pgedge-postgresql-18-pgaudit-dbgsym' is not installed, so not removed
+E           Package 'pgedge-postgresql-18-pgvector-dbgsym' is not installed, so not removed
+E           Package 'pgedge-postgresql-18-pldebugger' is not installed, so not removed
+E           Package 'pgedge-postgresql-18-pldebugger-dbgsym' is not installed, so not removed
+E           Package 'pgedge-postgresql-18-postgis-3-scripts' is not installed, so not removed
+E           Package 'pgedge-postgresql-18-postgis-3-dbgsym' is not installed, so not removed
+E           Package 'pgedge-postgresql-18-snowflake-dbgsym' is not installed, so not removed
+E           Package 'pgedge-postgresql-18-spock50-dbgsym' is not installed, so not removed
+E           Package 'pgedge-postgresql-18-system-stats' is not installed, so not removed
+E           Package 'pgedge-postgresql-18-system-stats-dbgsym' is not installed, so not removed
+E           Package 'pgedge-postgresql-18-vchord-bm25-dbgsym' is not installed, so not removed
+E           Package 'pgedge-postgresql-18-vectorizer-dbgsym' is not installed, so not removed
+E           Package 'pgedge-postgresql-all' is not installed, so not removed
+E           Package 'pgedge-postgresql-server-dev-all' is not installed, so not removed
+E           Package 'pgedge-postgresql-plperl-18' is not installed, so not removed
+E           Package 'pgedge-postgresql-plpython3-18' is not installed, so not removed
+E           Package 'pgedge-postgresql-pltcl-18' is not installed, so not removed
+E           Package 'pgedge-postgresql-client-common' is not installed, so not removed
+E           Package 'pgedge-postgresql-doc-16' is not installed, so not removed
+E           Package 'pgedge-postgresql-client-16-dbgsym' is not installed, so not removed
+E           Package 'pgedge-postgresql-doc-17' is not installed, so not removed
+E           Package 'pgedge-postgresql-client-17-dbgsym' is not installed, so not removed
+E           Package 'pgedge-postgresql-client-18-dbgsym' is not installed, so not removed
+E           Package 'pgedge-postgresql-common-dev' is not installed, so not removed
+E           Package 'pgedge-postgresql-plperl-16' is not installed, so not removed
+E           Package 'pgedge-postgresql-plperl-16-dbgsym' is not installed, so not removed
+E           Package 'pgedge-postgresql-plperl-17' is not installed, so not removed
+E           Package 'pgedge-postgresql-plperl-17-dbgsym' is not installed, so not removed
+E           Package 'pgedge-postgresql-plperl-18-dbgsym' is not installed, so not removed
+E           Package 'pgedge-postgresql-plpython3-16' is not installed, so not removed
+E           Package 'pgedge-postgresql-plpython3-16-dbgsym' is not installed, so not removed
+E           Package 'pgedge-postgresql-plpython3-17' is not installed, so not removed
+E           Package 'pgedge-postgresql-plpython3-17-dbgsym' is not installed, so not removed
+E           Package 'pgedge-postgresql-plpython3-18-dbgsym' is not installed, so not removed
+E           Package 'pgedge-postgresql-pltcl-16' is not installed, so not removed
+E           Package 'pgedge-postgresql-pltcl-16-dbgsym' is not installed, so not removed
+E           Package 'pgedge-postgresql-pltcl-17' is not installed, so not removed
+E           Package 'pgedge-postgresql-pltcl-17-dbgsym' is not installed, so not removed
+E           Package 'pgedge-postgresql-pltcl-18-dbgsym' is not installed, so not removed
+E           Package 'pgedge-postgresql-postgis-scripts' is not installed, so not removed
+E           Package 'pgedge-postgresql-server-dev-16' is not installed, so not removed
+E           Package 'pgedge-postgresql-server-dev-17' is not installed, so not removed
+E           Package 'pgedge-postgresql-server-dev-17-dbgsym' is not installed, so not removed
+E           Package 'pgedge-postgresql-server-dev-18' is not installed, so not removed
+E           Package 'pgedge-postgresql-server-dev-18-dbgsym' is not installed, so not removed
+E           Package 'pgedge-python-psycopg2-doc' is not installed, so not removed
+E           Package 'pgedge-python3-psycopg2-dbgsym' is not installed, so not removed
+E           Package 'pgedge-sql-exporter' is not installed, so not removed
+E           The following packages were automatically installed and are no longer required:
+E             apache2 apache2-bin apache2-data apache2-utils bsd-mailx cpp cpp-14
+E             cpp-14-x86-64-linux-gnu cpp-x86-64-linux-gnu cron cron-daemon-common dbus
+E             dbus-bin dbus-daemon dbus-session-bus-common dbus-system-bus-common dmsetup
+E             exim4-base exim4-config exim4-daemon-light fontconfig-config
+E             fonts-dejavu-core fonts-dejavu-mono gdal-data gdal-plugins
+E             gir1.2-girepository-2.0 gir1.2-glib-2.0 guile-3.0-libs iproute2
+E             libabsl20240722 libaec0 libaom3 libapache2-mod-wsgi-py3 libapr1t64
+E             libaprutil1-dbd-sqlite3 libaprutil1-ldap libaprutil1t64 libarmadillo14
+E             libarpack2t64 libatomic1 libauthen-sasl-perl libavif16 libblas3 libblosc1
+E             libboost-serialization1.83.0 libbpf1 libc-l10n libcap2-bin libcares2
+E             libcfitsio10t64 libclone-perl libcommon-sense-perl libcryptsetup12
+E             libcurl3t64-gnutls libdata-dump-perl libdav1d7 libdbus-1-3 libde265-0
+E             libdeflate0 libdevmapper1.02.1 libdrm-amdgpu1 libdrm-common libdrm-intel1
+E             libdrm2 libedit2 libegl-mesa0 libegl1 libelf1t64 libencode-locale-perl
+E             libevent-2.1-7t64 libfile-basedir-perl libfile-desktopentry-perl
+E             libfile-fcntllock-perl libfile-listing-perl libfile-mimeinfo-perl
+E             libfont-afm-perl libfontconfig1 libfreetype6 libfreexl1 libfyba0t64
+E             libgav1-1 libgbm1 libgc1 libgdal36 libgdbm-compat4t64 libgdbm6t64
+E             libgeos-c1t64 libgeos3.13.1 libgeotiff5 libgfortran5 libgif7
+E             libgirepository-1.0-1 libgl1 libgl1-mesa-dri libgles2 libglib2.0-0t64
+E             libglib2.0-data libglvnd0 libglx-mesa0 libglx0 libgmpxx4ldbl
+E             libgnutls-dane0t64 libgpgme11t64 libgpgmepp6t64 libhdf4-0-alt libhdf5-310
+E             libhdf5-hl-310 libheif-plugin-aomenc libheif-plugin-dav1d
+E             libheif-plugin-libde265 libheif-plugin-x265 libheif1 libhtml-form-perl
+E             libhtml-format-perl libhtml-parser-perl libhtml-tagset-perl
+E             libhtml-tree-perl libhttp-cookies-perl libhttp-daemon-perl libhttp-date-perl
+E             libhttp-message-perl libhttp-negotiate-perl libice6 libicu76 libidn12
+E             libio-compress-brotli-perl libio-html-perl libio-pty-perl
+E             libio-socket-ssl-perl libio-stringy-perl libipc-run-perl
+E             libipc-system-simple-perl libisl23 libjansson4 libjbig0 libjpeg62-turbo
+E             libjson-c5 libjson-perl libjson-xs-perl libkmlbase1t64 libkmldom1t64
+E             libkmlengine1t64 libkmod2 liblapack3 liblcms2-2 liblerc4 libllvm19
+E             liblockfile-bin liblockfile1 libltdl7 liblua5.4-0 liblwp-mediatypes-perl
+E             liblwp-protocol-https-perl libmailtools-perl libmariadb3 libminizip1t64
+E             libmnl0 libmpc3 libmpfr6 libnet-dbus-perl libnet-http-perl
+E             libnet-smtp-ssl-perl libnet-ssleay-perl libnetcdf22 libngtcp2-16
+E             libngtcp2-crypto-gnutls8 libnsl2 libnspr4 libnss3 libnuma1 libodbc2
+E             libodbccr2 libodbcinst2 libogdi4.1 libopenjp2-7 libpam-cap libpciaccess0
+E             libperl5.40 libpng16-16t64 libpoppler147 libpopt0 libpq5 libproc2-0
+E             libproj25 libprotobuf-c1 libpython3.13 libqhull-r8.0 librav1e0.7 librttopo1
+E             libsensors-config libsensors5 libsfcgal2 libsharpyuv0 libsm6 libsnappy1v5
+E             libspatialite8t64 libsvtav1enc2 libsystemd-shared libsz2 libtcl8.6
+E             libtext-charwidth-perl libtext-iconv-perl libtext-wrapi18n-perl
+E             libtie-ixhash-perl libtiff6 libtimedate-perl libtirpc-common libtirpc3t64
+E             libtry-tiny-perl libtypes-serialiser-perl libunbound8 liburi-perl liburing2
+E             liburiparser1 libvulkan1 libwayland-client0 libwayland-server0 libwebp7
+E             libwww-perl libwww-robotrules-perl libx11-6 libx11-data libx11-protocol-perl
+E             libx11-xcb1 libx265-215 libxau6 libxaw7 libxcb-dri3-0 libxcb-glx0
+E             libxcb-present0 libxcb-randr0 libxcb-shape0 libxcb-shm0 libxcb-sync1
+E             libxcb-xfixes0 libxcb1 libxcomposite1 libxcursor1 libxdmcp6
+E             libxerces-c3.2t64 libxext6 libxfixes3 libxft2 libxi6 libxinerama1
+E             libxkbfile1 libxml-parser-perl libxml-twig-perl libxml-xpathengine-perl
+E             libxml2 libxmu6 libxmuu1 libxpm4 libxrandr2 libxrender1 libxshmfence1
+E             libxslt1.1 libxt6t64 libxtables12 libxtst6 libxv1 libxxf86dga1 libxxf86vm1
+E             libyuv0 libz3-4 linux-sysctl-defaults locales logrotate luit make-guile
+E             mariadb-common mesa-libgallium mesa-vulkan-drivers mysql-common nginx
+E             nginx-common perl perl-modules-5.40 perl-openssl-defaults poppler-data
+E             procps proj-bin proj-data psmisc python3-dbus python3-gi shared-mime-info
+E             ssl-cert sysstat systemd systemd-cryptsetup systemd-timesyncd ucf
+E             unixodbc-common x11-common x11-utils x11-xserver-utils xdg-user-dirs
+E             xdg-utils xz-utils zutty
+E           Use 'apt autoremove' to remove them.
+E           The following packages will be REMOVED:
+E             pgedge-ace* pgedge-postgresql-18* pgedge-postgresql-common* pgedge-release*
+E           0 upgraded, 0 newly installed, 4 to remove and 27 not upgraded.
+E           After this operation, 19.4 MB disk space will be freed.
+E           (Reading database ... (Reading database ... 5%(Reading database ... 10%(Reading database ... 15%(Reading database ... 20%(Reading database ... 25%(Reading database ... 30%(Reading database ... 35%(Reading database ... 40%(Reading database ... 45%(Reading database ... 50%(Reading database ... 55%(Reading database ... 60%(Reading database ... 65%(Reading database ... 70%(Reading database ... 75%(Reading database ... 80%(Reading database ... 85%(Reading database ... 90%(Reading database ... 95%(Reading database ... 100%(Reading database ... 22401 files and directories currently installed.)
+E           Removing pgedge-ace (1.5.4-1.trixie) ...
+E           Removing pgedge-release (1.0-1) ...
+E           (Reading database ... (Reading database ... 5%(Reading database ... 10%(Reading database ... 15%(Reading database ... 20%(Reading database ... 25%(Reading database ... 30%(Reading database ... 35%(Reading database ... 40%(Reading database ... 45%(Reading database ... 50%(Reading database ... 55%(Reading database ... 60%(Reading database ... 65%(Reading database ... 70%(Reading database ... 75%(Reading database ... 80%(Reading database ... 85%(Reading database ... 90%(Reading database ... 95%(Reading database ... 100%(Reading database ... 22390 files and directories currently installed.)
+E           Purging configuration files for pgedge-ace (1.5.4-1.trixie) ...
+E           Purging configuration files for pgedge-postgresql-18 (18.1-1.trixie) ...
+E           debconf: unable to initialize frontend: Dialog
+E           debconf: (TERM is not set, so the dialog frontend is not usable.)
+E           debconf: falling back to frontend: Readline
+E           debconf: unable to initialize frontend: Readline
+E           debconf: (This frontend requires a controlling tty.)
+E           debconf: falling back to frontend: Teletype
+E           debconf: unable to initialize frontend: Teletype
+E           debconf: (This frontend requires a controlling tty.)
+E           debconf: falling back to frontend: Noninteractive
+E           dpkg: error processing package pgedge-postgresql-18 (--purge):
+E            installed pgedge-postgresql-18 package post-removal script subprocess returned error exit status 10
+E           Purging configuration files for pgedge-postgresql-common (284-1.trixie) ...
+E           ucfr: Association belongs to postgresql-common, not pgedge-postgresql-common
+E           ucfr: Aborting
+E           dpkg: error processing package pgedge-postgresql-common (--purge):
+E            installed pgedge-postgresql-common package post-removal script subprocess returned error exit status 5
+E           Errors were encountered while processing:
+E            pgedge-postgresql-18
+E            pgedge-postgresql-common
+E           E: Sub-process /usr/bin/dpkg returned an error code (1)
+
+component-test/test_pep_ace.py:307: Failed</failure></testcase><testcase classname="component-test.test_pep_ace" name="test_package_uninstall[auto-ubuntu2204-arm-deb]" time="0.883"><failure message="Failed: Failed to uninstall pgedge-ace: Failed to uninstall pgedge-ace: Reading package lists...&#10;Building dependency tree...&#10;Reading state information...&#10;Package 'pgedge-anonymizer' is not installed, so not removed&#10;Package 'pgedge-docloader' is not installed, so not removed&#10;Package 'pgedge-enterprise-all-16' is not installed, so not removed&#10;Package 'pgedge-enterprise-all-17' is not installed, so not removed&#10;Package 'pgedge-enterprise-all-18' is not installed, so not removed&#10;Package 'pgedge-enterprise-postgres-16' is not installed, so not removed&#10;Package 'pgedge-enterprise-postgres-17' is not installed, so not removed&#10;Package 'pgedge-enterprise-postgres-18' is not installed, so not removed&#10;Package 'pgedge-nla-cli' is not installed, so not removed&#10;Package 'pgedge-nla-web' is not installed, so not removed&#10;Package 'pgedge-pgadmin4' is not installed, so not removed&#10;Package 'pgedge-pgadmin4-desktop' is not installed, so not removed&#10;Package 'pgedge-pgadmin4-server' is not installed, so not removed&#10;Package 'pgedge-pgadmin4-web' is not installed, so not removed&#10;Package 'pgedge-pgbackrest' is not installed, so not removed&#10;Package 'pgedge-pgbackrest-dbgsym' is not installed, so not removed&#10;Package 'pgedge-pgbackrest-doc' is not installed, so not removed&#10;Package 'pgedge-pgbouncer' is not installed, so not removed&#10;Package 'pgedge-pgbouncer-dbgsym' is not installed, so not removed&#10;Package 'pgedge-postgis' is not installed, so not removed&#10;Package 'pgedge-postgis-dbgsym' is not installed, so not removed&#10;Package 'pgedge-postgis-doc' is not installed, so not removed&#10;Package 'pgedge-postgres-mcp' is not installed, so not removed&#10;Package 'pgedge-postgres-mcp-kb' is not installed, so not removed&#10;Package 'pgedge-postgresql' is not installed, so not removed&#10;Package 'pgedge-postgresql-16' is not installed, so not removed&#10;Package 'pgedge-postgresql-16-cron' is not installed, so not removed&#10;Package 'pgedge-postgresql-16-cron-dbgsym' is not installed, so not removed&#10;Package 'pgedge-postgresql-16-dbgsym' is not installed, so not removed&#10;Package 'pgedge-postgresql-16-lolor' is not installed, so not removed&#10;Package 'pgedge-postgresql-16-lolor-dbgsym' is not installed, so not removed&#10;Package 'pgedge-postgresql-16-pg-search' is not installed, so not removed&#10;Package 'pgedge-postgresql-16-pg-search-dbgsym' is not installed, so not removed&#10;Package 'pgedge-postgresql-16-pg-stat-monitor' is not installed, so not removed&#10;Package 'pgedge-postgresql-16-pg-stat-monitor-dbgsym' is not installed, so not removed&#10;Package 'pgedge-postgresql-16-pg-tokenizer' is not installed, so not removed&#10;Package 'pgedge-postgresql-16-pg-tokenizer-dbgsym' is not installed, so not removed&#10;Package 'pgedge-postgresql-16-pg-vectorize' is not installed, so not removed&#10;Package 'pgedge-postgresql-16-pg-vectorize-dbgsym' is not installed, so not removed&#10;Package 'pgedge-postgresql-16-pgaudit' is not installed, so not removed&#10;Package 'pgedge-postgresql-16-pgaudit-dbgsym' is not installed, so not removed&#10;Package 'pgedge-postgresql-16-pgmq' is not installed, so not removed&#10;Package 'pgedge-postgresql-16-pgvector' is not installed, so not removed&#10;Package 'pgedge-postgresql-16-pgvector-dbgsym' is not installed, so not removed&#10;Package 'pgedge-postgresql-16-pldebugger' is not installed, so not removed&#10;Package 'pgedge-postgresql-16-pldebugger-dbgsym' is not installed, so not removed&#10;Package 'pgedge-postgresql-16-postgis-3' is not installed, so not removed&#10;Package 'pgedge-postgresql-16-postgis-3-dbgsym' is not installed, so not removed&#10;Package 'pgedge-postgresql-16-postgis-3-scripts' is not installed, so not removed&#10;Package 'pgedge-postgresql-16-snowflake' is not installed, so not removed&#10;Package 'pgedge-postgresql-16-snowflake-dbgsym' is not installed, so not removed&#10;Package 'pgedge-postgresql-16-spock50' is not installed, so not removed&#10;Package 'pgedge-postgresql-16-spock50-dbgsym' is not installed, so not removed&#10;Package 'pgedge-postgresql-16-system-stats' is not installed, so not removed&#10;Package 'pgedge-postgresql-16-system-stats-dbgsym' is not installed, so not removed&#10;Package 'pgedge-postgresql-16-vchord-bm25' is not installed, so not removed&#10;Package 'pgedge-postgresql-16-vchord-bm25-dbgsym' is not installed, so not removed&#10;Package 'pgedge-postgresql-16-vectorizer' is not installed, so not removed&#10;Package 'pgedge-postgresql-16-vectorizer-dbgsym' is not installed, so not removed&#10;Package 'pgedge-postgresql-17-cron' is not installed, so not removed&#10;Package 'pgedge-postgresql-17-cron-dbgsym' is not installed, so not removed&#10;Package 'pgedge-postgresql-17-dbgsym' is not installed, so not removed&#10;Package 'pgedge-postgresql-17-lolor' is not installed, so not removed&#10;Package 'pgedge-postgresql-17-lolor-dbgsym' is not installed, so not removed&#10;Package 'pgedge-postgresql-17-pg-search' is not installed, so not removed&#10;Package 'pgedge-postgresql-17-pg-search-dbgsym' is not installed, so not removed&#10;Package 'pgedge-postgresql-17-pg-stat-monitor' is not installed, so not removed&#10;Package 'pgedge-postgresql-17-pg-stat-monitor-dbgsym' is not installed, so not removed&#10;Package 'pgedge-postgresql-17-pg-tokenizer' is not installed, so not removed&#10;Package 'pgedge-postgresql-17-pg-tokenizer-dbgsym' is not installed, so not removed&#10;Package 'pgedge-postgresql-17-pg-vectorize' is not installed, so not removed&#10;Package 'pgedge-postgresql-17-pg-vectorize-dbgsym' is not installed, so not removed&#10;Package 'pgedge-postgresql-17-pgaudit' is not installed, so not removed&#10;Package 'pgedge-postgresql-17-pgaudit-dbgsym' is not installed, so not removed&#10;Package 'pgedge-postgresql-17-pgmq' is not installed, so not removed&#10;Package 'pgedge-postgresql-17-pgvector' is not installed, so not removed&#10;Package 'pgedge-postgresql-17-pgvector-dbgsym' is not installed, so not removed&#10;Package 'pgedge-postgresql-17-pldebugger' is not installed, so not removed&#10;Package 'pgedge-postgresql-17-pldebugger-dbgsym' is not installed, so not removed&#10;Package 'pgedge-postgresql-17-postgis-3' is not installed, so not removed&#10;Package 'pgedge-postgresql-17-postgis-3-dbgsym' is not installed, so not removed&#10;Package 'pgedge-postgresql-17-postgis-3-scripts' is not installed, so not removed&#10;Package 'pgedge-postgresql-17-snowflake' is not installed, so not removed&#10;Package 'pgedge-postgresql-17-snowflake-dbgsym' is not installed, so not removed&#10;Package 'pgedge-postgresql-17-spock50' is not installed, so not removed&#10;Package 'pgedge-postgresql-17-spock50-dbgsym' is not installed, so not removed&#10;Package 'pgedge-postgresql-17-system-stats' is not installed, so not removed&#10;Package 'pgedge-postgresql-17-system-stats-dbgsym' is not installed, so not removed&#10;Package 'pgedge-postgresql-17-vchord-bm25' is not installed, so not removed&#10;Package 'pgedge-postgresql-17-vchord-bm25-dbgsym' is not installed, so not removed&#10;Package 'pgedge-postgresql-17-vectorizer' is not installed, so not removed&#10;Package 'pgedge-postgresql-17-vectorizer-dbgsym' is not installed, so not removed&#10;Package 'pgedge-postgresql-18' is not installed, so not removed&#10;Package 'pgedge-postgresql-18-cron' is not installed, so not removed&#10;Package 'pgedge-postgresql-18-cron-dbgsym' is not installed, so not removed&#10;Package 'pgedge-postgresql-18-dbgsym' is not installed, so not removed&#10;Package 'pgedge-postgresql-18-jit' is not installed, so not removed&#10;Package 'pgedge-postgresql-18-jit-dbgsym' is not installed, so not removed&#10;Package 'pgedge-postgresql-18-lolor' is not installed, so not removed&#10;Package 'pgedge-postgresql-18-lolor-dbgsym' is not installed, so not removed&#10;Package 'pgedge-postgresql-18-pg-stat-monitor' is not installed, so not removed&#10;Package 'pgedge-postgresql-18-pg-stat-monitor-dbgsym' is not installed, so not removed&#10;Package 'pgedge-postgresql-18-pg-tokenizer' is not installed, so not removed&#10;Package 'pgedge-postgresql-18-pg-tokenizer-dbgsym' is not installed, so not removed&#10;Package 'pgedge-postgresql-18-pg-vectorize' is not installed, so not removed&#10;Package 'pgedge-postgresql-18-pg-vectorize-dbgsym' is not installed, so not removed&#10;Package 'pgedge-postgresql-18-pgaudit' is not installed, so not removed&#10;Package 'pgedge-postgresql-18-pgaudit-dbgsym' is not installed, so not removed&#10;Package 'pgedge-postgresql-18-pgmq' is not installed, so not removed&#10;Package 'pgedge-postgresql-18-pgvector' is not installed, so not removed&#10;Package 'pgedge-postgresql-18-pgvector-dbgsym' is not installed, so not removed&#10;Package 'pgedge-postgresql-18-pldebugger' is not installed, so not removed&#10;Package 'pgedge-postgresql-18-pldebugger-dbgsym' is not installed, so not removed&#10;Package 'pgedge-postgresql-18-postgis-3' is not installed, so not removed&#10;Package 'pgedge-postgresql-18-postgis-3-dbgsym' is not installed, so not removed&#10;Package 'pgedge-postgresql-18-postgis-3-scripts' is not installed, so not removed&#10;Package 'pgedge-postgresql-18-snowflake' is not installed, so not removed&#10;Package 'pgedge-postgresql-18-snowflake-dbgsym' is not installed, so not removed&#10;Package 'pgedge-postgresql-18-spock50' is not installed, so not removed&#10;Package 'pgedge-postgresql-18-spock50-dbgsym' is not installed, so not removed&#10;Package 'pgedge-postgresql-18-system-stats' is not installed, so not removed&#10;Package 'pgedge-postgresql-18-system-stats-dbgsym' is not installed, so not removed&#10;Package 'pgedge-postgresql-18-vchord-bm25' is not installed, so not removed&#10;Package 'pgedge-postgresql-18-vchord-bm25-dbgsym' is not installed, so not removed&#10;Package 'pgedge-postgresql-18-vectorizer' is not installed, so not removed&#10;Package 'pgedge-postgresql-18-vectorizer-dbgsym' is not installed, so not removed&#10;Package 'pgedge-postgresql-all' is not installed, so not removed&#10;Package 'pgedge-postgresql-client' is not installed, so not removed&#10;Package 'pgedge-postgresql-client-16' is not installed, so not removed&#10;Package 'pgedge-postgresql-client-16-dbgsym' is not installed, so not removed&#10;Package 'pgedge-postgresql-client-17' is not installed, so not removed&#10;Package 'pgedge-postgresql-client-17-dbgsym' is not installed, so not removed&#10;Package 'pgedge-postgresql-client-18' is not installed, so not removed&#10;Package 'pgedge-postgresql-client-18-dbgsym' is not installed, so not removed&#10;Package 'pgedge-postgresql-client-common' is not installed, so not removed&#10;Package 'pgedge-postgresql-common-dev' is not installed, so not removed&#10;Package 'pgedge-postgresql-doc' is not installed, so not removed&#10;Package 'pgedge-postgresql-doc-16' is not installed, so not removed&#10;Package 'pgedge-postgresql-doc-17' is not installed, so not removed&#10;Package 'pgedge-postgresql-doc-18' is not installed, so not removed&#10;Package 'pgedge-postgresql-plperl-16' is not installed, so not removed&#10;Package 'pgedge-postgresql-plperl-16-dbgsym' is not installed, so not removed&#10;Package 'pgedge-postgresql-plperl-17' is not installed, so not removed&#10;Package 'pgedge-postgresql-plperl-17-dbgsym' is not installed, so not removed&#10;Package 'pgedge-postgresql-plperl-18' is not installed, so not removed&#10;Package 'pgedge-postgresql-plperl-18-dbgsym' is not installed, so not removed&#10;Package 'pgedge-postgresql-plpython3-16' is not installed, so not removed&#10;Package 'pgedge-postgresql-plpython3-16-dbgsym' is not installed, so not removed&#10;Package 'pgedge-postgresql-plpython3-17' is not installed, so not removed&#10;Package 'pgedge-postgresql-plpython3-17-dbgsym' is not installed, so not removed&#10;Package 'pgedge-postgresql-plpython3-18' is not installed, so not removed&#10;Package 'pgedge-postgresql-plpython3-18-dbgsym' is not installed, so not removed&#10;Package 'pgedge-postgresql-pltcl-16' is not installed, so not removed&#10;Package 'pgedge-postgresql-pltcl-16-dbgsym' is not installed, so not removed&#10;Package 'pgedge-postgresql-pltcl-17' is not installed, so not removed&#10;Package 'pgedge-postgresql-pltcl-17-dbgsym' is not installed, so not removed&#10;Package 'pgedge-postgresql-pltcl-18' is not installed, so not removed&#10;Package 'pgedge-postgresql-pltcl-18-dbgsym' is not installed, so not removed&#10;Package 'pgedge-postgresql-postgis' is not installed, so not removed&#10;Package 'pgedge-postgresql-postgis-scripts' is not installed, so not removed&#10;Package 'pgedge-postgresql-server-dev-16' is not installed, so not removed&#10;Package 'pgedge-postgresql-server-dev-17' is not installed, so not removed&#10;Package 'pgedge-postgresql-server-dev-17-dbgsym' is not installed, so not removed&#10;Package 'pgedge-postgresql-server-dev-18' is not installed, so not removed&#10;Package 'pgedge-postgresql-server-dev-18-dbgsym' is not installed, so not removed&#10;Package 'pgedge-postgresql-server-dev-all' is not installed, so not removed&#10;Package 'pgedge-python-psycopg2-doc' is not installed, so not removed&#10;Package 'pgedge-python3-psycopg2' is not installed, so not removed&#10;Package 'pgedge-python3-psycopg2-dbgsym' is not installed, so not removed&#10;Package 'pgedge-rag-server' is not installed, so not removed&#10;Package 'pgedge-sql-exporter' is not installed, so not removed&#10;The following packages were automatically installed and are no longer required:&#10;  adwaita-icon-theme apache2 apache2-bin apache2-data apache2-utils&#10;  at-spi2-core binfmt-support binutils binutils-aarch64-linux-gnu&#10;  binutils-common clang-14 cpp cpp-11 cron dbus dbus-user-session&#10;  dconf-gsettings-backend dconf-service dmsetup fontconfig fontconfig-config&#10;  fonts-dejavu-core gcc-11-base gdal-data gir1.2-glib-2.0&#10;  gsettings-desktop-schemas gtk-update-icon-cache guile-3.0-libs&#10;  hicolor-icon-theme humanity-icon-theme icu-devtools iproute2&#10;  javascript-common libaec0 libaom3 libapache2-mod-wsgi-py3 libapparmor1&#10;  libapr1 libaprutil1 libaprutil1-dbd-sqlite3 libaprutil1-ldap libargon2-1&#10;  libarmadillo10 libarpack2 libasan6 libatk-bridge2.0-0 libatk1.0-0&#10;  libatk1.0-data libatm1 libatomic1 libatspi2.0-0 libauthen-sasl-perl&#10;  libavahi-client3 libavahi-common-data libavahi-common3 libbinutils libblas3&#10;  libblosc1 libboost-serialization1.74.0 libbpf0 libbsd0 libc-ares2&#10;  libc-dev-bin libc-devtools libc6-dev libcairo-gobject2 libcairo2 libcap2-bin&#10;  libcfitsio9 libcharls2 libclang-common-14-dev libclang-cpp14 libclang1-14&#10;  libclone-perl libcolord2 libcommon-sense-perl libcrypt-dev libcryptsetup12&#10;  libctf-nobfd0 libctf0 libcups2 libcurl3-gnutls libdata-dump-perl libdatrie1&#10;  libdav1d5 libdbus-1-3 libdconf1 libde265-0 libdeflate0 libdevmapper1.02.1&#10;  libdrm-amdgpu1 libdrm-common libdrm-nouveau2 libdrm-radeon1 libdrm2&#10;  libecpg-compat3 libecpg-dev libecpg6 libedit2 libelf1 libencode-locale-perl&#10;  libepoxy0 libevent-2.1-7 libffi-dev libfile-basedir-perl&#10;  libfile-desktopentry-perl libfile-listing-perl libfile-mimeinfo-perl&#10;  libfont-afm-perl libfontconfig1 libfontenc1 libfreetype6 libfreexl1&#10;  libfribidi0 libfyba0 libgc1 libgcc-11-dev libgd3 libgdal30&#10;  libgdk-pixbuf-2.0-0 libgdk-pixbuf2.0-bin libgdk-pixbuf2.0-common&#10;  libgeos-c1v5 libgeos3.10.2 libgeotiff5 libgfortran5 libgif7&#10;  libgirepository-1.0-1 libgl1 libgl1-amber-dri libgl1-mesa-dri libglapi-mesa&#10;  libglib2.0-0 libglib2.0-data libglvnd0 libglx-mesa0 libglx0 libgmpxx4ldbl&#10;  libgomp1 libgraphite2-3 libgtk-3-0 libgtk-3-bin libgtk-3-common libgtkd-3-0&#10;  libharfbuzz0b libhdf4-0-alt libhdf5-103-1 libhdf5-hl-100 libheif1&#10;  libhtml-form-perl libhtml-format-perl libhtml-parser-perl&#10;  libhtml-tagset-perl libhtml-tree-perl libhttp-cookies-perl&#10;  libhttp-daemon-perl libhttp-date-perl libhttp-message-perl&#10;  libhttp-negotiate-perl libhwasan0 libice6 libicu-dev libicu70&#10;  libio-html-perl libio-pty-perl libio-socket-ssl-perl libio-stringy-perl&#10;  libip4tc2 libipc-run-perl libipc-system-simple-perl libisl23 libitm1&#10;  libjansson4 libjbig0 libjpeg-turbo8 libjpeg8 libjs-jquery libjs-sphinxdoc&#10;  libjs-underscore libjson-c5 libjson-perl libjson-xs-perl libkmlbase1&#10;  libkmldom1 libkmlengine1 libkmod2 liblapack3 liblcms2-2 libllvm11 libllvm14&#10;  libllvm15 liblsan0 libltdl7 liblua5.3-0 liblwp-mediatypes-perl&#10;  liblwp-protocol-https-perl libmailtools-perl libmaxminddb0 libmd0&#10;  libminizip1 libmnl0 libmpc3 libmpfr6 libmysqlclient21 libncurses-dev&#10;  libnet-dbus-perl libnet-http-perl libnet-smtp-ssl-perl libnet-ssleay-perl&#10;  libnetcdf19 libnginx-mod-http-geoip2 libnginx-mod-http-image-filter&#10;  libnginx-mod-http-xslt-filter libnginx-mod-mail libnginx-mod-stream&#10;  libnginx-mod-stream-geoip2 libnsl-dev libnspr4 libnss-systemd libnss3&#10;  libnuma1 libobjc-11-dev libobjc4 libodbc2 libodbcinst2 libogdi4.1&#10;  libopenjp2-7 libpam-cap libpam-systemd libpango-1.0-0 libpangocairo-1.0-0&#10;  libpangoft2-1.0-0 libpfm4 libpgtypes3 libphobos2-ldc-shared98 libpipeline1&#10;  libpixman-1-0 libpng16-16 libpoppler118 libpopt0 libpq-dev libpq5 libproj22&#10;  libprotobuf-c1 libqhull-r8.0 librsvg2-2 librsvg2-common librttopo1&#10;  libsensors-config libsensors5 libsfcgal1 libsm6 libsnappy1v5 libspatialite7&#10;  libssh2-1 libssl-dev libstdc++-11-dev libsuperlu5 libsz2 libtcl8.6&#10;  libtext-iconv-perl libthai-data libthai0 libtie-ixhash-perl libtiff5&#10;  libtimedate-perl libtinfo-dev libtirpc-dev libtry-tiny-perl libtsan0&#10;  libtypes-serialiser-perl libubsan1 liburi-perl liburing2 liburiparser1&#10;  libvte-2.91-0 libvte-2.91-common libvted-3-0 libwayland-client0&#10;  libwayland-cursor0 libwayland-egl1 libwebp7 libwww-perl&#10;  libwww-robotrules-perl libx11-6 libx11-data libx11-protocol-perl libx11-xcb1&#10;  libx265-199 libxau6 libxaw7 libxcb-dri2-0 libxcb-dri3-0 libxcb-glx0&#10;  libxcb-present0 libxcb-randr0 libxcb-render0 libxcb-shape0 libxcb-shm0&#10;  libxcb-sync1 libxcb-xfixes0 libxcb1 libxcomposite1 libxcursor1 libxdamage1&#10;  libxdmcp6 libxerces-c3.2 libxext6 libxfixes3 libxft2 libxi6 libxinerama1&#10;  libxkbcommon0 libxkbfile1 libxml-parser-perl libxml-twig-perl&#10;  libxml-xpathengine-perl libxml2 libxml2-dev libxmu6 libxmuu1 libxpm4&#10;  libxrandr2 libxrender1 libxshmfence1 libxslt1.1 libxt6 libxtables12 libxtst6&#10;  libxv1 libxxf86dga1 libxxf86vm1 libyaml-0-2 libz3-4 libz3-dev linux-libc-dev&#10;  llvm-14 llvm-14-dev llvm-14-linker-tools llvm-14-runtime llvm-14-tools&#10;  locales logrotate make-guile manpages manpages-dev mysql-common&#10;  networkd-dispatcher nginx nginx-common nginx-core perl-openssl-defaults&#10;  poppler-data proj-bin proj-data python3-dbus python3-gi&#10;  python3-pkg-resources python3-pygments python3-yaml rpcsvc-proto&#10;  session-migration shared-mime-info ssl-cert sysstat systemd systemd-sysv&#10;  systemd-timesyncd tilix tilix-common tzdata ubuntu-mono ucf unixodbc-common&#10;  x11-common x11-utils x11-xserver-utils xdg-user-dirs xdg-utils xkb-data&#10;Use 'apt autoremove' to remove them.&#10;The following packages will be REMOVED:&#10;  pgedge-ace* pgedge-postgresql-17* pgedge-postgresql-common* pgedge-release*&#10;0 upgraded, 0 newly installed, 4 to remove and 47 not upgraded.&#10;After this operation, 18.2 MB disk space will be freed.&#10;(Reading database ... &#13;(Reading database ... 5%&#13;(Reading database ... 10%&#13;(Reading database ... 15%&#13;(Reading database ... 20%&#13;(Reading database ... 25%&#13;(Reading database ... 30%&#13;(Reading database ... 35%&#13;(Reading database ... 40%&#13;(Reading database ... 45%&#13;(Reading database ... 50%&#13;(Reading database ... 55%&#13;(Reading database ... 60%&#13;(Reading database ... 65%&#13;(Reading database ... 70%&#13;(Reading database ... 75%&#13;(Reading database ... 80%&#13;(Reading database ... 85%&#13;(Reading database ... 90%&#13;(Reading database ... 95%&#13;(Reading database ... 100%&#13;(Reading database ... 44093 files and directories currently installed.)&#13;&#10;Removing pgedge-ace (1.5.4-1.jammy) ...&#13;&#10;Removing pgedge-release (1.0-1) ...&#13;&#10;(Reading database ... &#13;(Reading database ... 5%&#13;(Reading database ... 10%&#13;(Reading database ... 15%&#13;(Reading database ... 20%&#13;(Reading database ... 25%&#13;(Reading database ... 30%&#13;(Reading database ... 35%&#13;(Reading database ... 40%&#13;(Reading database ... 45%&#13;(Reading database ... 50%&#13;(Reading database ... 55%&#13;(Reading database ... 60%&#13;(Reading database ... 65%&#13;(Reading database ... 70%&#13;(Reading database ... 75%&#13;(Reading database ... 80%&#13;(Reading database ... 85%&#13;(Reading database ... 90%&#13;(Reading database ... 95%&#13;(Reading database ... 100%&#13;(Reading database ... 44082 files and directories currently installed.)&#13;&#10;Purging configuration files for pgedge-ace (1.5.4-1.jammy) ...&#13;&#10;Purging configuration files for pgedge-postgresql-17 (17.7-1.jammy) ...&#13;&#10;debconf: unable to initialize frontend: Dialog&#13;&#10;debconf: (TERM is not set, so the dialog frontend is not usable.)&#13;&#10;debconf: falling back to frontend: Readline&#13;&#10;dpkg: error processing package pgedge-postgresql-17 (--purge):&#13;&#10; installed pgedge-postgresql-17 package post-removal script subprocess returned error exit status 10&#13;&#10;Purging configuration files for pgedge-postgresql-common (284-1.jammy) ...&#13;&#10;ucfr: Association belongs to postgresql-common, not pgedge-postgresql-common&#13;&#10;ucfr: Aborting&#13;&#10;dpkg: error processing package pgedge-postgresql-common (--purge):&#13;&#10; installed pgedge-postgresql-common package post-removal script subprocess returned error exit status 5&#13;&#10;Errors were encountered while processing:&#13;&#10; pgedge-postgresql-17&#13;&#10; pgedge-postgresql-common&#13;&#10;E: Sub-process /usr/bin/dpkg returned an error code (1)">container_name = 'auto-ubuntu2204-arm', container_type = 'deb'
+
+    @pytest.mark.parametrize("container_name,container_type", all_containers)
+    def test_package_uninstall(container_name, container_type):
+        """Uninstall ace package using package_management module"""
+        container_name = container_name.strip()
+        if not container_name:
+            pytest.skip("No container defined in env")
+    
+        # Get container-specific configuration
+        config = get_container_config(container_type)
+        ace_package = config["ace_package"]
+    
+        try:
+            container = client.containers.get(container_name)
+        except docker.errors.NotFound:
+            pytest.skip(f"Container {container_name} not found or not running.")
+    
+        assert container.status == "running"
+    
+        print(f"\n--- Uninstalling {ace_package} on {container_name} ({container_type}) ---")
+    
+        # Use the package_management module to uninstall the package
+        try:
+&gt;           success, platform, message = package_management.uninstall_package(container, ace_package)
+                                         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+component-test/test_pep_ace.py:302: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+container = &lt;Container: 1710e97ab798&gt;, package_name = 'pgedge-ace'
+
+    def uninstall_package(container, package_name):
+        """
+        Uninstall a package from a Docker container.
+    
+        Args:
+            container: Docker container object with exec_run method
+            package_name: Name of the package to uninstall
+    
+        Returns:
+            tuple: (success: bool, platform: str, message: str)
+    
+        Raises:
+            Exception: If package uninstallation fails
+        """
+    
+        print(f"\n--- Uninstalling {package_name} from container ---")
+    
+        # Detect package manager
+        exit_code, _ = container.exec_run("command -v dnf", user="root")
+        if exit_code == 0:
+            pkg_mgr = "dnf remove -y"
+            platform = "rhel"
+        else:
+            exit_code, _ = container.exec_run("/bin/bash -c 'command -v apt-get'", user="root")
+            if exit_code == 0:
+                pkg_mgr = "apt-get purge -y"
+                platform = "debian"
+            else:
+                raise Exception("No supported package manager found (dnf or apt-get)")
+    
+        print(f"Detected platform: {platform}")
+    
+        # Uninstall the package
+        print(f"Uninstalling {package_name}...")
+        exit_code, output = container.exec_run(
+            ## Comment out the line due to not working on Debian-based systems. User not properly removed.
+            #f"{pkg_mgr} {package_name}",
+            f"{pkg_mgr} pgedge-*",
+            user="root"
+        )
+    
+        if exit_code != 0:
+&gt;           raise Exception(f"Failed to uninstall {package_name}: {output.decode()}")
+E           Exception: Failed to uninstall pgedge-ace: Reading package lists...
+E           Building dependency tree...
+E           Reading state information...
+E           Package 'pgedge-anonymizer' is not installed, so not removed
+E           Package 'pgedge-docloader' is not installed, so not removed
+E           Package 'pgedge-enterprise-all-16' is not installed, so not removed
+E           Package 'pgedge-enterprise-all-17' is not installed, so not removed
+E           Package 'pgedge-enterprise-all-18' is not installed, so not removed
+E           Package 'pgedge-enterprise-postgres-16' is not installed, so not removed
+E           Package 'pgedge-enterprise-postgres-17' is not installed, so not removed
+E           Package 'pgedge-enterprise-postgres-18' is not installed, so not removed
+E           Package 'pgedge-nla-cli' is not installed, so not removed
+E           Package 'pgedge-nla-web' is not installed, so not removed
+E           Package 'pgedge-pgadmin4' is not installed, so not removed
+E           Package 'pgedge-pgadmin4-desktop' is not installed, so not removed
+E           Package 'pgedge-pgadmin4-server' is not installed, so not removed
+E           Package 'pgedge-pgadmin4-web' is not installed, so not removed
+E           Package 'pgedge-pgbackrest' is not installed, so not removed
+E           Package 'pgedge-pgbackrest-dbgsym' is not installed, so not removed
+E           Package 'pgedge-pgbackrest-doc' is not installed, so not removed
+E           Package 'pgedge-pgbouncer' is not installed, so not removed
+E           Package 'pgedge-pgbouncer-dbgsym' is not installed, so not removed
+E           Package 'pgedge-postgis' is not installed, so not removed
+E           Package 'pgedge-postgis-dbgsym' is not installed, so not removed
+E           Package 'pgedge-postgis-doc' is not installed, so not removed
+E           Package 'pgedge-postgres-mcp' is not installed, so not removed
+E           Package 'pgedge-postgres-mcp-kb' is not installed, so not removed
+E           Package 'pgedge-postgresql' is not installed, so not removed
+E           Package 'pgedge-postgresql-16' is not installed, so not removed
+E           Package 'pgedge-postgresql-16-cron' is not installed, so not removed
+E           Package 'pgedge-postgresql-16-cron-dbgsym' is not installed, so not removed
+E           Package 'pgedge-postgresql-16-dbgsym' is not installed, so not removed
+E           Package 'pgedge-postgresql-16-lolor' is not installed, so not removed
+E           Package 'pgedge-postgresql-16-lolor-dbgsym' is not installed, so not removed
+E           Package 'pgedge-postgresql-16-pg-search' is not installed, so not removed
+E           Package 'pgedge-postgresql-16-pg-search-dbgsym' is not installed, so not removed
+E           Package 'pgedge-postgresql-16-pg-stat-monitor' is not installed, so not removed
+E           Package 'pgedge-postgresql-16-pg-stat-monitor-dbgsym' is not installed, so not removed
+E           Package 'pgedge-postgresql-16-pg-tokenizer' is not installed, so not removed
+E           Package 'pgedge-postgresql-16-pg-tokenizer-dbgsym' is not installed, so not removed
+E           Package 'pgedge-postgresql-16-pg-vectorize' is not installed, so not removed
+E           Package 'pgedge-postgresql-16-pg-vectorize-dbgsym' is not installed, so not removed
+E           Package 'pgedge-postgresql-16-pgaudit' is not installed, so not removed
+E           Package 'pgedge-postgresql-16-pgaudit-dbgsym' is not installed, so not removed
+E           Package 'pgedge-postgresql-16-pgmq' is not installed, so not removed
+E           Package 'pgedge-postgresql-16-pgvector' is not installed, so not removed
+E           Package 'pgedge-postgresql-16-pgvector-dbgsym' is not installed, so not removed
+E           Package 'pgedge-postgresql-16-pldebugger' is not installed, so not removed
+E           Package 'pgedge-postgresql-16-pldebugger-dbgsym' is not installed, so not removed
+E           Package 'pgedge-postgresql-16-postgis-3' is not installed, so not removed
+E           Package 'pgedge-postgresql-16-postgis-3-dbgsym' is not installed, so not removed
+E           Package 'pgedge-postgresql-16-postgis-3-scripts' is not installed, so not removed
+E           Package 'pgedge-postgresql-16-snowflake' is not installed, so not removed
+E           Package 'pgedge-postgresql-16-snowflake-dbgsym' is not installed, so not removed
+E           Package 'pgedge-postgresql-16-spock50' is not installed, so not removed
+E           Package 'pgedge-postgresql-16-spock50-dbgsym' is not installed, so not removed
+E           Package 'pgedge-postgresql-16-system-stats' is not installed, so not removed
+E           Package 'pgedge-postgresql-16-system-stats-dbgsym' is not installed, so not removed
+E           Package 'pgedge-postgresql-16-vchord-bm25' is not installed, so not removed
+E           Package 'pgedge-postgresql-16-vchord-bm25-dbgsym' is not installed, so not removed
+E           Package 'pgedge-postgresql-16-vectorizer' is not installed, so not removed
+E           Package 'pgedge-postgresql-16-vectorizer-dbgsym' is not installed, so not removed
+E           Package 'pgedge-postgresql-17-cron' is not installed, so not removed
+E           Package 'pgedge-postgresql-17-cron-dbgsym' is not installed, so not removed
+E           Package 'pgedge-postgresql-17-dbgsym' is not installed, so not removed
+E           Package 'pgedge-postgresql-17-lolor' is not installed, so not removed
+E           Package 'pgedge-postgresql-17-lolor-dbgsym' is not installed, so not removed
+E           Package 'pgedge-postgresql-17-pg-search' is not installed, so not removed
+E           Package 'pgedge-postgresql-17-pg-search-dbgsym' is not installed, so not removed
+E           Package 'pgedge-postgresql-17-pg-stat-monitor' is not installed, so not removed
+E           Package 'pgedge-postgresql-17-pg-stat-monitor-dbgsym' is not installed, so not removed
+E           Package 'pgedge-postgresql-17-pg-tokenizer' is not installed, so not removed
+E           Package 'pgedge-postgresql-17-pg-tokenizer-dbgsym' is not installed, so not removed
+E           Package 'pgedge-postgresql-17-pg-vectorize' is not installed, so not removed
+E           Package 'pgedge-postgresql-17-pg-vectorize-dbgsym' is not installed, so not removed
+E           Package 'pgedge-postgresql-17-pgaudit' is not installed, so not removed
+E           Package 'pgedge-postgresql-17-pgaudit-dbgsym' is not installed, so not removed
+E           Package 'pgedge-postgresql-17-pgmq' is not installed, so not removed
+E           Package 'pgedge-postgresql-17-pgvector' is not installed, so not removed
+E           Package 'pgedge-postgresql-17-pgvector-dbgsym' is not installed, so not removed
+E           Package 'pgedge-postgresql-17-pldebugger' is not installed, so not removed
+E           Package 'pgedge-postgresql-17-pldebugger-dbgsym' is not installed, so not removed
+E           Package 'pgedge-postgresql-17-postgis-3' is not installed, so not removed
+E           Package 'pgedge-postgresql-17-postgis-3-dbgsym' is not installed, so not removed
+E           Package 'pgedge-postgresql-17-postgis-3-scripts' is not installed, so not removed
+E           Package 'pgedge-postgresql-17-snowflake' is not installed, so not removed
+E           Package 'pgedge-postgresql-17-snowflake-dbgsym' is not installed, so not removed
+E           Package 'pgedge-postgresql-17-spock50' is not installed, so not removed
+E           Package 'pgedge-postgresql-17-spock50-dbgsym' is not installed, so not removed
+E           Package 'pgedge-postgresql-17-system-stats' is not installed, so not removed
+E           Package 'pgedge-postgresql-17-system-stats-dbgsym' is not installed, so not removed
+E           Package 'pgedge-postgresql-17-vchord-bm25' is not installed, so not removed
+E           Package 'pgedge-postgresql-17-vchord-bm25-dbgsym' is not installed, so not removed
+E           Package 'pgedge-postgresql-17-vectorizer' is not installed, so not removed
+E           Package 'pgedge-postgresql-17-vectorizer-dbgsym' is not installed, so not removed
+E           Package 'pgedge-postgresql-18' is not installed, so not removed
+E           Package 'pgedge-postgresql-18-cron' is not installed, so not removed
+E           Package 'pgedge-postgresql-18-cron-dbgsym' is not installed, so not removed
+E           Package 'pgedge-postgresql-18-dbgsym' is not installed, so not removed
+E           Package 'pgedge-postgresql-18-jit' is not installed, so not removed
+E           Package 'pgedge-postgresql-18-jit-dbgsym' is not installed, so not removed
+E           Package 'pgedge-postgresql-18-lolor' is not installed, so not removed
+E           Package 'pgedge-postgresql-18-lolor-dbgsym' is not installed, so not removed
+E           Package 'pgedge-postgresql-18-pg-stat-monitor' is not installed, so not removed
+E           Package 'pgedge-postgresql-18-pg-stat-monitor-dbgsym' is not installed, so not removed
+E           Package 'pgedge-postgresql-18-pg-tokenizer' is not installed, so not removed
+E           Package 'pgedge-postgresql-18-pg-tokenizer-dbgsym' is not installed, so not removed
+E           Package 'pgedge-postgresql-18-pg-vectorize' is not installed, so not removed
+E           Package 'pgedge-postgresql-18-pg-vectorize-dbgsym' is not installed, so not removed
+E           Package 'pgedge-postgresql-18-pgaudit' is not installed, so not removed
+E           Package 'pgedge-postgresql-18-pgaudit-dbgsym' is not installed, so not removed
+E           Package 'pgedge-postgresql-18-pgmq' is not installed, so not removed
+E           Package 'pgedge-postgresql-18-pgvector' is not installed, so not removed
+E           Package 'pgedge-postgresql-18-pgvector-dbgsym' is not installed, so not removed
+E           Package 'pgedge-postgresql-18-pldebugger' is not installed, so not removed
+E           Package 'pgedge-postgresql-18-pldebugger-dbgsym' is not installed, so not removed
+E           Package 'pgedge-postgresql-18-postgis-3' is not installed, so not removed
+E           Package 'pgedge-postgresql-18-postgis-3-dbgsym' is not installed, so not removed
+E           Package 'pgedge-postgresql-18-postgis-3-scripts' is not installed, so not removed
+E           Package 'pgedge-postgresql-18-snowflake' is not installed, so not removed
+E           Package 'pgedge-postgresql-18-snowflake-dbgsym' is not installed, so not removed
+E           Package 'pgedge-postgresql-18-spock50' is not installed, so not removed
+E           Package 'pgedge-postgresql-18-spock50-dbgsym' is not installed, so not removed
+E           Package 'pgedge-postgresql-18-system-stats' is not installed, so not removed
+E           Package 'pgedge-postgresql-18-system-stats-dbgsym' is not installed, so not removed
+E           Package 'pgedge-postgresql-18-vchord-bm25' is not installed, so not removed
+E           Package 'pgedge-postgresql-18-vchord-bm25-dbgsym' is not installed, so not removed
+E           Package 'pgedge-postgresql-18-vectorizer' is not installed, so not removed
+E           Package 'pgedge-postgresql-18-vectorizer-dbgsym' is not installed, so not removed
+E           Package 'pgedge-postgresql-all' is not installed, so not removed
+E           Package 'pgedge-postgresql-client' is not installed, so not removed
+E           Package 'pgedge-postgresql-client-16' is not installed, so not removed
+E           Package 'pgedge-postgresql-client-16-dbgsym' is not installed, so not removed
+E           Package 'pgedge-postgresql-client-17' is not installed, so not removed
+E           Package 'pgedge-postgresql-client-17-dbgsym' is not installed, so not removed
+E           Package 'pgedge-postgresql-client-18' is not installed, so not removed
+E           Package 'pgedge-postgresql-client-18-dbgsym' is not installed, so not removed
+E           Package 'pgedge-postgresql-client-common' is not installed, so not removed
+E           Package 'pgedge-postgresql-common-dev' is not installed, so not removed
+E           Package 'pgedge-postgresql-doc' is not installed, so not removed
+E           Package 'pgedge-postgresql-doc-16' is not installed, so not removed
+E           Package 'pgedge-postgresql-doc-17' is not installed, so not removed
+E           Package 'pgedge-postgresql-doc-18' is not installed, so not removed
+E           Package 'pgedge-postgresql-plperl-16' is not installed, so not removed
+E           Package 'pgedge-postgresql-plperl-16-dbgsym' is not installed, so not removed
+E           Package 'pgedge-postgresql-plperl-17' is not installed, so not removed
+E           Package 'pgedge-postgresql-plperl-17-dbgsym' is not installed, so not removed
+E           Package 'pgedge-postgresql-plperl-18' is not installed, so not removed
+E           Package 'pgedge-postgresql-plperl-18-dbgsym' is not installed, so not removed
+E           Package 'pgedge-postgresql-plpython3-16' is not installed, so not removed
+E           Package 'pgedge-postgresql-plpython3-16-dbgsym' is not installed, so not removed
+E           Package 'pgedge-postgresql-plpython3-17' is not installed, so not removed
+E           Package 'pgedge-postgresql-plpython3-17-dbgsym' is not installed, so not removed
+E           Package 'pgedge-postgresql-plpython3-18' is not installed, so not removed
+E           Package 'pgedge-postgresql-plpython3-18-dbgsym' is not installed, so not removed
+E           Package 'pgedge-postgresql-pltcl-16' is not installed, so not removed
+E           Package 'pgedge-postgresql-pltcl-16-dbgsym' is not installed, so not removed
+E           Package 'pgedge-postgresql-pltcl-17' is not installed, so not removed
+E           Package 'pgedge-postgresql-pltcl-17-dbgsym' is not installed, so not removed
+E           Package 'pgedge-postgresql-pltcl-18' is not installed, so not removed
+E           Package 'pgedge-postgresql-pltcl-18-dbgsym' is not installed, so not removed
+E           Package 'pgedge-postgresql-postgis' is not installed, so not removed
+E           Package 'pgedge-postgresql-postgis-scripts' is not installed, so not removed
+E           Package 'pgedge-postgresql-server-dev-16' is not installed, so not removed
+E           Package 'pgedge-postgresql-server-dev-17' is not installed, so not removed
+E           Package 'pgedge-postgresql-server-dev-17-dbgsym' is not installed, so not removed
+E           Package 'pgedge-postgresql-server-dev-18' is not installed, so not removed
+E           Package 'pgedge-postgresql-server-dev-18-dbgsym' is not installed, so not removed
+E           Package 'pgedge-postgresql-server-dev-all' is not installed, so not removed
+E           Package 'pgedge-python-psycopg2-doc' is not installed, so not removed
+E           Package 'pgedge-python3-psycopg2' is not installed, so not removed
+E           Package 'pgedge-python3-psycopg2-dbgsym' is not installed, so not removed
+E           Package 'pgedge-rag-server' is not installed, so not removed
+E           Package 'pgedge-sql-exporter' is not installed, so not removed
+E           The following packages were automatically installed and are no longer required:
+E             adwaita-icon-theme apache2 apache2-bin apache2-data apache2-utils
+E             at-spi2-core binfmt-support binutils binutils-aarch64-linux-gnu
+E             binutils-common clang-14 cpp cpp-11 cron dbus dbus-user-session
+E             dconf-gsettings-backend dconf-service dmsetup fontconfig fontconfig-config
+E             fonts-dejavu-core gcc-11-base gdal-data gir1.2-glib-2.0
+E             gsettings-desktop-schemas gtk-update-icon-cache guile-3.0-libs
+E             hicolor-icon-theme humanity-icon-theme icu-devtools iproute2
+E             javascript-common libaec0 libaom3 libapache2-mod-wsgi-py3 libapparmor1
+E             libapr1 libaprutil1 libaprutil1-dbd-sqlite3 libaprutil1-ldap libargon2-1
+E             libarmadillo10 libarpack2 libasan6 libatk-bridge2.0-0 libatk1.0-0
+E             libatk1.0-data libatm1 libatomic1 libatspi2.0-0 libauthen-sasl-perl
+E             libavahi-client3 libavahi-common-data libavahi-common3 libbinutils libblas3
+E             libblosc1 libboost-serialization1.74.0 libbpf0 libbsd0 libc-ares2
+E             libc-dev-bin libc-devtools libc6-dev libcairo-gobject2 libcairo2 libcap2-bin
+E             libcfitsio9 libcharls2 libclang-common-14-dev libclang-cpp14 libclang1-14
+E             libclone-perl libcolord2 libcommon-sense-perl libcrypt-dev libcryptsetup12
+E             libctf-nobfd0 libctf0 libcups2 libcurl3-gnutls libdata-dump-perl libdatrie1
+E             libdav1d5 libdbus-1-3 libdconf1 libde265-0 libdeflate0 libdevmapper1.02.1
+E             libdrm-amdgpu1 libdrm-common libdrm-nouveau2 libdrm-radeon1 libdrm2
+E             libecpg-compat3 libecpg-dev libecpg6 libedit2 libelf1 libencode-locale-perl
+E             libepoxy0 libevent-2.1-7 libffi-dev libfile-basedir-perl
+E             libfile-desktopentry-perl libfile-listing-perl libfile-mimeinfo-perl
+E             libfont-afm-perl libfontconfig1 libfontenc1 libfreetype6 libfreexl1
+E             libfribidi0 libfyba0 libgc1 libgcc-11-dev libgd3 libgdal30
+E             libgdk-pixbuf-2.0-0 libgdk-pixbuf2.0-bin libgdk-pixbuf2.0-common
+E             libgeos-c1v5 libgeos3.10.2 libgeotiff5 libgfortran5 libgif7
+E             libgirepository-1.0-1 libgl1 libgl1-amber-dri libgl1-mesa-dri libglapi-mesa
+E             libglib2.0-0 libglib2.0-data libglvnd0 libglx-mesa0 libglx0 libgmpxx4ldbl
+E             libgomp1 libgraphite2-3 libgtk-3-0 libgtk-3-bin libgtk-3-common libgtkd-3-0
+E             libharfbuzz0b libhdf4-0-alt libhdf5-103-1 libhdf5-hl-100 libheif1
+E             libhtml-form-perl libhtml-format-perl libhtml-parser-perl
+E             libhtml-tagset-perl libhtml-tree-perl libhttp-cookies-perl
+E             libhttp-daemon-perl libhttp-date-perl libhttp-message-perl
+E             libhttp-negotiate-perl libhwasan0 libice6 libicu-dev libicu70
+E             libio-html-perl libio-pty-perl libio-socket-ssl-perl libio-stringy-perl
+E             libip4tc2 libipc-run-perl libipc-system-simple-perl libisl23 libitm1
+E             libjansson4 libjbig0 libjpeg-turbo8 libjpeg8 libjs-jquery libjs-sphinxdoc
+E             libjs-underscore libjson-c5 libjson-perl libjson-xs-perl libkmlbase1
+E             libkmldom1 libkmlengine1 libkmod2 liblapack3 liblcms2-2 libllvm11 libllvm14
+E             libllvm15 liblsan0 libltdl7 liblua5.3-0 liblwp-mediatypes-perl
+E             liblwp-protocol-https-perl libmailtools-perl libmaxminddb0 libmd0
+E             libminizip1 libmnl0 libmpc3 libmpfr6 libmysqlclient21 libncurses-dev
+E             libnet-dbus-perl libnet-http-perl libnet-smtp-ssl-perl libnet-ssleay-perl
+E             libnetcdf19 libnginx-mod-http-geoip2 libnginx-mod-http-image-filter
+E             libnginx-mod-http-xslt-filter libnginx-mod-mail libnginx-mod-stream
+E             libnginx-mod-stream-geoip2 libnsl-dev libnspr4 libnss-systemd libnss3
+E             libnuma1 libobjc-11-dev libobjc4 libodbc2 libodbcinst2 libogdi4.1
+E             libopenjp2-7 libpam-cap libpam-systemd libpango-1.0-0 libpangocairo-1.0-0
+E             libpangoft2-1.0-0 libpfm4 libpgtypes3 libphobos2-ldc-shared98 libpipeline1
+E             libpixman-1-0 libpng16-16 libpoppler118 libpopt0 libpq-dev libpq5 libproj22
+E             libprotobuf-c1 libqhull-r8.0 librsvg2-2 librsvg2-common librttopo1
+E             libsensors-config libsensors5 libsfcgal1 libsm6 libsnappy1v5 libspatialite7
+E             libssh2-1 libssl-dev libstdc++-11-dev libsuperlu5 libsz2 libtcl8.6
+E             libtext-iconv-perl libthai-data libthai0 libtie-ixhash-perl libtiff5
+E             libtimedate-perl libtinfo-dev libtirpc-dev libtry-tiny-perl libtsan0
+E             libtypes-serialiser-perl libubsan1 liburi-perl liburing2 liburiparser1
+E             libvte-2.91-0 libvte-2.91-common libvted-3-0 libwayland-client0
+E             libwayland-cursor0 libwayland-egl1 libwebp7 libwww-perl
+E             libwww-robotrules-perl libx11-6 libx11-data libx11-protocol-perl libx11-xcb1
+E             libx265-199 libxau6 libxaw7 libxcb-dri2-0 libxcb-dri3-0 libxcb-glx0
+E             libxcb-present0 libxcb-randr0 libxcb-render0 libxcb-shape0 libxcb-shm0
+E             libxcb-sync1 libxcb-xfixes0 libxcb1 libxcomposite1 libxcursor1 libxdamage1
+E             libxdmcp6 libxerces-c3.2 libxext6 libxfixes3 libxft2 libxi6 libxinerama1
+E             libxkbcommon0 libxkbfile1 libxml-parser-perl libxml-twig-perl
+E             libxml-xpathengine-perl libxml2 libxml2-dev libxmu6 libxmuu1 libxpm4
+E             libxrandr2 libxrender1 libxshmfence1 libxslt1.1 libxt6 libxtables12 libxtst6
+E             libxv1 libxxf86dga1 libxxf86vm1 libyaml-0-2 libz3-4 libz3-dev linux-libc-dev
+E             llvm-14 llvm-14-dev llvm-14-linker-tools llvm-14-runtime llvm-14-tools
+E             locales logrotate make-guile manpages manpages-dev mysql-common
+E             networkd-dispatcher nginx nginx-common nginx-core perl-openssl-defaults
+E             poppler-data proj-bin proj-data python3-dbus python3-gi
+E             python3-pkg-resources python3-pygments python3-yaml rpcsvc-proto
+E             session-migration shared-mime-info ssl-cert sysstat systemd systemd-sysv
+E             systemd-timesyncd tilix tilix-common tzdata ubuntu-mono ucf unixodbc-common
+E             x11-common x11-utils x11-xserver-utils xdg-user-dirs xdg-utils xkb-data
+E           Use 'apt autoremove' to remove them.
+E           The following packages will be REMOVED:
+E             pgedge-ace* pgedge-postgresql-17* pgedge-postgresql-common* pgedge-release*
+E           0 upgraded, 0 newly installed, 4 to remove and 47 not upgraded.
+E           After this operation, 18.2 MB disk space will be freed.
+E           (Reading database ... (Reading database ... 5%(Reading database ... 10%(Reading database ... 15%(Reading database ... 20%(Reading database ... 25%(Reading database ... 30%(Reading database ... 35%(Reading database ... 40%(Reading database ... 45%(Reading database ... 50%(Reading database ... 55%(Reading database ... 60%(Reading database ... 65%(Reading database ... 70%(Reading database ... 75%(Reading database ... 80%(Reading database ... 85%(Reading database ... 90%(Reading database ... 95%(Reading database ... 100%(Reading database ... 44093 files and directories currently installed.)
+E           Removing pgedge-ace (1.5.4-1.jammy) ...
+E           Removing pgedge-release (1.0-1) ...
+E           (Reading database ... (Reading database ... 5%(Reading database ... 10%(Reading database ... 15%(Reading database ... 20%(Reading database ... 25%(Reading database ... 30%(Reading database ... 35%(Reading database ... 40%(Reading database ... 45%(Reading database ... 50%(Reading database ... 55%(Reading database ... 60%(Reading database ... 65%(Reading database ... 70%(Reading database ... 75%(Reading database ... 80%(Reading database ... 85%(Reading database ... 90%(Reading database ... 95%(Reading database ... 100%(Reading database ... 44082 files and directories currently installed.)
+E           Purging configuration files for pgedge-ace (1.5.4-1.jammy) ...
+E           Purging configuration files for pgedge-postgresql-17 (17.7-1.jammy) ...
+E           debconf: unable to initialize frontend: Dialog
+E           debconf: (TERM is not set, so the dialog frontend is not usable.)
+E           debconf: falling back to frontend: Readline
+E           dpkg: error processing package pgedge-postgresql-17 (--purge):
+E            installed pgedge-postgresql-17 package post-removal script subprocess returned error exit status 10
+E           Purging configuration files for pgedge-postgresql-common (284-1.jammy) ...
+E           ucfr: Association belongs to postgresql-common, not pgedge-postgresql-common
+E           ucfr: Aborting
+E           dpkg: error processing package pgedge-postgresql-common (--purge):
+E            installed pgedge-postgresql-common package post-removal script subprocess returned error exit status 5
+E           Errors were encountered while processing:
+E            pgedge-postgresql-17
+E            pgedge-postgresql-common
+E           E: Sub-process /usr/bin/dpkg returned an error code (1)
+
+aspects/package_management.py:185: Exception
+
+During handling of the above exception, another exception occurred:
+
+container_name = 'auto-ubuntu2204-arm', container_type = 'deb'
+
+    @pytest.mark.parametrize("container_name,container_type", all_containers)
+    def test_package_uninstall(container_name, container_type):
+        """Uninstall ace package using package_management module"""
+        container_name = container_name.strip()
+        if not container_name:
+            pytest.skip("No container defined in env")
+    
+        # Get container-specific configuration
+        config = get_container_config(container_type)
+        ace_package = config["ace_package"]
+    
+        try:
+            container = client.containers.get(container_name)
+        except docker.errors.NotFound:
+            pytest.skip(f"Container {container_name} not found or not running.")
+    
+        assert container.status == "running"
+    
+        print(f"\n--- Uninstalling {ace_package} on {container_name} ({container_type}) ---")
+    
+        # Use the package_management module to uninstall the package
+        try:
+            success, platform, message = package_management.uninstall_package(container, ace_package)
+            assert success, f"Package uninstallation failed: {message}"
+            print(f"✅ {message}")
+            print(f"✅ Platform detected: {platform}")
+        except Exception as e:
+&gt;           pytest.fail(f"Failed to uninstall {ace_package}: {str(e)}")
+E           Failed: Failed to uninstall pgedge-ace: Failed to uninstall pgedge-ace: Reading package lists...
+E           Building dependency tree...
+E           Reading state information...
+E           Package 'pgedge-anonymizer' is not installed, so not removed
+E           Package 'pgedge-docloader' is not installed, so not removed
+E           Package 'pgedge-enterprise-all-16' is not installed, so not removed
+E           Package 'pgedge-enterprise-all-17' is not installed, so not removed
+E           Package 'pgedge-enterprise-all-18' is not installed, so not removed
+E           Package 'pgedge-enterprise-postgres-16' is not installed, so not removed
+E           Package 'pgedge-enterprise-postgres-17' is not installed, so not removed
+E           Package 'pgedge-enterprise-postgres-18' is not installed, so not removed
+E           Package 'pgedge-nla-cli' is not installed, so not removed
+E           Package 'pgedge-nla-web' is not installed, so not removed
+E           Package 'pgedge-pgadmin4' is not installed, so not removed
+E           Package 'pgedge-pgadmin4-desktop' is not installed, so not removed
+E           Package 'pgedge-pgadmin4-server' is not installed, so not removed
+E           Package 'pgedge-pgadmin4-web' is not installed, so not removed
+E           Package 'pgedge-pgbackrest' is not installed, so not removed
+E           Package 'pgedge-pgbackrest-dbgsym' is not installed, so not removed
+E           Package 'pgedge-pgbackrest-doc' is not installed, so not removed
+E           Package 'pgedge-pgbouncer' is not installed, so not removed
+E           Package 'pgedge-pgbouncer-dbgsym' is not installed, so not removed
+E           Package 'pgedge-postgis' is not installed, so not removed
+E           Package 'pgedge-postgis-dbgsym' is not installed, so not removed
+E           Package 'pgedge-postgis-doc' is not installed, so not removed
+E           Package 'pgedge-postgres-mcp' is not installed, so not removed
+E           Package 'pgedge-postgres-mcp-kb' is not installed, so not removed
+E           Package 'pgedge-postgresql' is not installed, so not removed
+E           Package 'pgedge-postgresql-16' is not installed, so not removed
+E           Package 'pgedge-postgresql-16-cron' is not installed, so not removed
+E           Package 'pgedge-postgresql-16-cron-dbgsym' is not installed, so not removed
+E           Package 'pgedge-postgresql-16-dbgsym' is not installed, so not removed
+E           Package 'pgedge-postgresql-16-lolor' is not installed, so not removed
+E           Package 'pgedge-postgresql-16-lolor-dbgsym' is not installed, so not removed
+E           Package 'pgedge-postgresql-16-pg-search' is not installed, so not removed
+E           Package 'pgedge-postgresql-16-pg-search-dbgsym' is not installed, so not removed
+E           Package 'pgedge-postgresql-16-pg-stat-monitor' is not installed, so not removed
+E           Package 'pgedge-postgresql-16-pg-stat-monitor-dbgsym' is not installed, so not removed
+E           Package 'pgedge-postgresql-16-pg-tokenizer' is not installed, so not removed
+E           Package 'pgedge-postgresql-16-pg-tokenizer-dbgsym' is not installed, so not removed
+E           Package 'pgedge-postgresql-16-pg-vectorize' is not installed, so not removed
+E           Package 'pgedge-postgresql-16-pg-vectorize-dbgsym' is not installed, so not removed
+E           Package 'pgedge-postgresql-16-pgaudit' is not installed, so not removed
+E           Package 'pgedge-postgresql-16-pgaudit-dbgsym' is not installed, so not removed
+E           Package 'pgedge-postgresql-16-pgmq' is not installed, so not removed
+E           Package 'pgedge-postgresql-16-pgvector' is not installed, so not removed
+E           Package 'pgedge-postgresql-16-pgvector-dbgsym' is not installed, so not removed
+E           Package 'pgedge-postgresql-16-pldebugger' is not installed, so not removed
+E           Package 'pgedge-postgresql-16-pldebugger-dbgsym' is not installed, so not removed
+E           Package 'pgedge-postgresql-16-postgis-3' is not installed, so not removed
+E           Package 'pgedge-postgresql-16-postgis-3-dbgsym' is not installed, so not removed
+E           Package 'pgedge-postgresql-16-postgis-3-scripts' is not installed, so not removed
+E           Package 'pgedge-postgresql-16-snowflake' is not installed, so not removed
+E           Package 'pgedge-postgresql-16-snowflake-dbgsym' is not installed, so not removed
+E           Package 'pgedge-postgresql-16-spock50' is not installed, so not removed
+E           Package 'pgedge-postgresql-16-spock50-dbgsym' is not installed, so not removed
+E           Package 'pgedge-postgresql-16-system-stats' is not installed, so not removed
+E           Package 'pgedge-postgresql-16-system-stats-dbgsym' is not installed, so not removed
+E           Package 'pgedge-postgresql-16-vchord-bm25' is not installed, so not removed
+E           Package 'pgedge-postgresql-16-vchord-bm25-dbgsym' is not installed, so not removed
+E           Package 'pgedge-postgresql-16-vectorizer' is not installed, so not removed
+E           Package 'pgedge-postgresql-16-vectorizer-dbgsym' is not installed, so not removed
+E           Package 'pgedge-postgresql-17-cron' is not installed, so not removed
+E           Package 'pgedge-postgresql-17-cron-dbgsym' is not installed, so not removed
+E           Package 'pgedge-postgresql-17-dbgsym' is not installed, so not removed
+E           Package 'pgedge-postgresql-17-lolor' is not installed, so not removed
+E           Package 'pgedge-postgresql-17-lolor-dbgsym' is not installed, so not removed
+E           Package 'pgedge-postgresql-17-pg-search' is not installed, so not removed
+E           Package 'pgedge-postgresql-17-pg-search-dbgsym' is not installed, so not removed
+E           Package 'pgedge-postgresql-17-pg-stat-monitor' is not installed, so not removed
+E           Package 'pgedge-postgresql-17-pg-stat-monitor-dbgsym' is not installed, so not removed
+E           Package 'pgedge-postgresql-17-pg-tokenizer' is not installed, so not removed
+E           Package 'pgedge-postgresql-17-pg-tokenizer-dbgsym' is not installed, so not removed
+E           Package 'pgedge-postgresql-17-pg-vectorize' is not installed, so not removed
+E           Package 'pgedge-postgresql-17-pg-vectorize-dbgsym' is not installed, so not removed
+E           Package 'pgedge-postgresql-17-pgaudit' is not installed, so not removed
+E           Package 'pgedge-postgresql-17-pgaudit-dbgsym' is not installed, so not removed
+E           Package 'pgedge-postgresql-17-pgmq' is not installed, so not removed
+E           Package 'pgedge-postgresql-17-pgvector' is not installed, so not removed
+E           Package 'pgedge-postgresql-17-pgvector-dbgsym' is not installed, so not removed
+E           Package 'pgedge-postgresql-17-pldebugger' is not installed, so not removed
+E           Package 'pgedge-postgresql-17-pldebugger-dbgsym' is not installed, so not removed
+E           Package 'pgedge-postgresql-17-postgis-3' is not installed, so not removed
+E           Package 'pgedge-postgresql-17-postgis-3-dbgsym' is not installed, so not removed
+E           Package 'pgedge-postgresql-17-postgis-3-scripts' is not installed, so not removed
+E           Package 'pgedge-postgresql-17-snowflake' is not installed, so not removed
+E           Package 'pgedge-postgresql-17-snowflake-dbgsym' is not installed, so not removed
+E           Package 'pgedge-postgresql-17-spock50' is not installed, so not removed
+E           Package 'pgedge-postgresql-17-spock50-dbgsym' is not installed, so not removed
+E           Package 'pgedge-postgresql-17-system-stats' is not installed, so not removed
+E           Package 'pgedge-postgresql-17-system-stats-dbgsym' is not installed, so not removed
+E           Package 'pgedge-postgresql-17-vchord-bm25' is not installed, so not removed
+E           Package 'pgedge-postgresql-17-vchord-bm25-dbgsym' is not installed, so not removed
+E           Package 'pgedge-postgresql-17-vectorizer' is not installed, so not removed
+E           Package 'pgedge-postgresql-17-vectorizer-dbgsym' is not installed, so not removed
+E           Package 'pgedge-postgresql-18' is not installed, so not removed
+E           Package 'pgedge-postgresql-18-cron' is not installed, so not removed
+E           Package 'pgedge-postgresql-18-cron-dbgsym' is not installed, so not removed
+E           Package 'pgedge-postgresql-18-dbgsym' is not installed, so not removed
+E           Package 'pgedge-postgresql-18-jit' is not installed, so not removed
+E           Package 'pgedge-postgresql-18-jit-dbgsym' is not installed, so not removed
+E           Package 'pgedge-postgresql-18-lolor' is not installed, so not removed
+E           Package 'pgedge-postgresql-18-lolor-dbgsym' is not installed, so not removed
+E           Package 'pgedge-postgresql-18-pg-stat-monitor' is not installed, so not removed
+E           Package 'pgedge-postgresql-18-pg-stat-monitor-dbgsym' is not installed, so not removed
+E           Package 'pgedge-postgresql-18-pg-tokenizer' is not installed, so not removed
+E           Package 'pgedge-postgresql-18-pg-tokenizer-dbgsym' is not installed, so not removed
+E           Package 'pgedge-postgresql-18-pg-vectorize' is not installed, so not removed
+E           Package 'pgedge-postgresql-18-pg-vectorize-dbgsym' is not installed, so not removed
+E           Package 'pgedge-postgresql-18-pgaudit' is not installed, so not removed
+E           Package 'pgedge-postgresql-18-pgaudit-dbgsym' is not installed, so not removed
+E           Package 'pgedge-postgresql-18-pgmq' is not installed, so not removed
+E           Package 'pgedge-postgresql-18-pgvector' is not installed, so not removed
+E           Package 'pgedge-postgresql-18-pgvector-dbgsym' is not installed, so not removed
+E           Package 'pgedge-postgresql-18-pldebugger' is not installed, so not removed
+E           Package 'pgedge-postgresql-18-pldebugger-dbgsym' is not installed, so not removed
+E           Package 'pgedge-postgresql-18-postgis-3' is not installed, so not removed
+E           Package 'pgedge-postgresql-18-postgis-3-dbgsym' is not installed, so not removed
+E           Package 'pgedge-postgresql-18-postgis-3-scripts' is not installed, so not removed
+E           Package 'pgedge-postgresql-18-snowflake' is not installed, so not removed
+E           Package 'pgedge-postgresql-18-snowflake-dbgsym' is not installed, so not removed
+E           Package 'pgedge-postgresql-18-spock50' is not installed, so not removed
+E           Package 'pgedge-postgresql-18-spock50-dbgsym' is not installed, so not removed
+E           Package 'pgedge-postgresql-18-system-stats' is not installed, so not removed
+E           Package 'pgedge-postgresql-18-system-stats-dbgsym' is not installed, so not removed
+E           Package 'pgedge-postgresql-18-vchord-bm25' is not installed, so not removed
+E           Package 'pgedge-postgresql-18-vchord-bm25-dbgsym' is not installed, so not removed
+E           Package 'pgedge-postgresql-18-vectorizer' is not installed, so not removed
+E           Package 'pgedge-postgresql-18-vectorizer-dbgsym' is not installed, so not removed
+E           Package 'pgedge-postgresql-all' is not installed, so not removed
+E           Package 'pgedge-postgresql-client' is not installed, so not removed
+E           Package 'pgedge-postgresql-client-16' is not installed, so not removed
+E           Package 'pgedge-postgresql-client-16-dbgsym' is not installed, so not removed
+E           Package 'pgedge-postgresql-client-17' is not installed, so not removed
+E           Package 'pgedge-postgresql-client-17-dbgsym' is not installed, so not removed
+E           Package 'pgedge-postgresql-client-18' is not installed, so not removed
+E           Package 'pgedge-postgresql-client-18-dbgsym' is not installed, so not removed
+E           Package 'pgedge-postgresql-client-common' is not installed, so not removed
+E           Package 'pgedge-postgresql-common-dev' is not installed, so not removed
+E           Package 'pgedge-postgresql-doc' is not installed, so not removed
+E           Package 'pgedge-postgresql-doc-16' is not installed, so not removed
+E           Package 'pgedge-postgresql-doc-17' is not installed, so not removed
+E           Package 'pgedge-postgresql-doc-18' is not installed, so not removed
+E           Package 'pgedge-postgresql-plperl-16' is not installed, so not removed
+E           Package 'pgedge-postgresql-plperl-16-dbgsym' is not installed, so not removed
+E           Package 'pgedge-postgresql-plperl-17' is not installed, so not removed
+E           Package 'pgedge-postgresql-plperl-17-dbgsym' is not installed, so not removed
+E           Package 'pgedge-postgresql-plperl-18' is not installed, so not removed
+E           Package 'pgedge-postgresql-plperl-18-dbgsym' is not installed, so not removed
+E           Package 'pgedge-postgresql-plpython3-16' is not installed, so not removed
+E           Package 'pgedge-postgresql-plpython3-16-dbgsym' is not installed, so not removed
+E           Package 'pgedge-postgresql-plpython3-17' is not installed, so not removed
+E           Package 'pgedge-postgresql-plpython3-17-dbgsym' is not installed, so not removed
+E           Package 'pgedge-postgresql-plpython3-18' is not installed, so not removed
+E           Package 'pgedge-postgresql-plpython3-18-dbgsym' is not installed, so not removed
+E           Package 'pgedge-postgresql-pltcl-16' is not installed, so not removed
+E           Package 'pgedge-postgresql-pltcl-16-dbgsym' is not installed, so not removed
+E           Package 'pgedge-postgresql-pltcl-17' is not installed, so not removed
+E           Package 'pgedge-postgresql-pltcl-17-dbgsym' is not installed, so not removed
+E           Package 'pgedge-postgresql-pltcl-18' is not installed, so not removed
+E           Package 'pgedge-postgresql-pltcl-18-dbgsym' is not installed, so not removed
+E           Package 'pgedge-postgresql-postgis' is not installed, so not removed
+E           Package 'pgedge-postgresql-postgis-scripts' is not installed, so not removed
+E           Package 'pgedge-postgresql-server-dev-16' is not installed, so not removed
+E           Package 'pgedge-postgresql-server-dev-17' is not installed, so not removed
+E           Package 'pgedge-postgresql-server-dev-17-dbgsym' is not installed, so not removed
+E           Package 'pgedge-postgresql-server-dev-18' is not installed, so not removed
+E           Package 'pgedge-postgresql-server-dev-18-dbgsym' is not installed, so not removed
+E           Package 'pgedge-postgresql-server-dev-all' is not installed, so not removed
+E           Package 'pgedge-python-psycopg2-doc' is not installed, so not removed
+E           Package 'pgedge-python3-psycopg2' is not installed, so not removed
+E           Package 'pgedge-python3-psycopg2-dbgsym' is not installed, so not removed
+E           Package 'pgedge-rag-server' is not installed, so not removed
+E           Package 'pgedge-sql-exporter' is not installed, so not removed
+E           The following packages were automatically installed and are no longer required:
+E             adwaita-icon-theme apache2 apache2-bin apache2-data apache2-utils
+E             at-spi2-core binfmt-support binutils binutils-aarch64-linux-gnu
+E             binutils-common clang-14 cpp cpp-11 cron dbus dbus-user-session
+E             dconf-gsettings-backend dconf-service dmsetup fontconfig fontconfig-config
+E             fonts-dejavu-core gcc-11-base gdal-data gir1.2-glib-2.0
+E             gsettings-desktop-schemas gtk-update-icon-cache guile-3.0-libs
+E             hicolor-icon-theme humanity-icon-theme icu-devtools iproute2
+E             javascript-common libaec0 libaom3 libapache2-mod-wsgi-py3 libapparmor1
+E             libapr1 libaprutil1 libaprutil1-dbd-sqlite3 libaprutil1-ldap libargon2-1
+E             libarmadillo10 libarpack2 libasan6 libatk-bridge2.0-0 libatk1.0-0
+E             libatk1.0-data libatm1 libatomic1 libatspi2.0-0 libauthen-sasl-perl
+E             libavahi-client3 libavahi-common-data libavahi-common3 libbinutils libblas3
+E             libblosc1 libboost-serialization1.74.0 libbpf0 libbsd0 libc-ares2
+E             libc-dev-bin libc-devtools libc6-dev libcairo-gobject2 libcairo2 libcap2-bin
+E             libcfitsio9 libcharls2 libclang-common-14-dev libclang-cpp14 libclang1-14
+E             libclone-perl libcolord2 libcommon-sense-perl libcrypt-dev libcryptsetup12
+E             libctf-nobfd0 libctf0 libcups2 libcurl3-gnutls libdata-dump-perl libdatrie1
+E             libdav1d5 libdbus-1-3 libdconf1 libde265-0 libdeflate0 libdevmapper1.02.1
+E             libdrm-amdgpu1 libdrm-common libdrm-nouveau2 libdrm-radeon1 libdrm2
+E             libecpg-compat3 libecpg-dev libecpg6 libedit2 libelf1 libencode-locale-perl
+E             libepoxy0 libevent-2.1-7 libffi-dev libfile-basedir-perl
+E             libfile-desktopentry-perl libfile-listing-perl libfile-mimeinfo-perl
+E             libfont-afm-perl libfontconfig1 libfontenc1 libfreetype6 libfreexl1
+E             libfribidi0 libfyba0 libgc1 libgcc-11-dev libgd3 libgdal30
+E             libgdk-pixbuf-2.0-0 libgdk-pixbuf2.0-bin libgdk-pixbuf2.0-common
+E             libgeos-c1v5 libgeos3.10.2 libgeotiff5 libgfortran5 libgif7
+E             libgirepository-1.0-1 libgl1 libgl1-amber-dri libgl1-mesa-dri libglapi-mesa
+E             libglib2.0-0 libglib2.0-data libglvnd0 libglx-mesa0 libglx0 libgmpxx4ldbl
+E             libgomp1 libgraphite2-3 libgtk-3-0 libgtk-3-bin libgtk-3-common libgtkd-3-0
+E             libharfbuzz0b libhdf4-0-alt libhdf5-103-1 libhdf5-hl-100 libheif1
+E             libhtml-form-perl libhtml-format-perl libhtml-parser-perl
+E             libhtml-tagset-perl libhtml-tree-perl libhttp-cookies-perl
+E             libhttp-daemon-perl libhttp-date-perl libhttp-message-perl
+E             libhttp-negotiate-perl libhwasan0 libice6 libicu-dev libicu70
+E             libio-html-perl libio-pty-perl libio-socket-ssl-perl libio-stringy-perl
+E             libip4tc2 libipc-run-perl libipc-system-simple-perl libisl23 libitm1
+E             libjansson4 libjbig0 libjpeg-turbo8 libjpeg8 libjs-jquery libjs-sphinxdoc
+E             libjs-underscore libjson-c5 libjson-perl libjson-xs-perl libkmlbase1
+E             libkmldom1 libkmlengine1 libkmod2 liblapack3 liblcms2-2 libllvm11 libllvm14
+E             libllvm15 liblsan0 libltdl7 liblua5.3-0 liblwp-mediatypes-perl
+E             liblwp-protocol-https-perl libmailtools-perl libmaxminddb0 libmd0
+E             libminizip1 libmnl0 libmpc3 libmpfr6 libmysqlclient21 libncurses-dev
+E             libnet-dbus-perl libnet-http-perl libnet-smtp-ssl-perl libnet-ssleay-perl
+E             libnetcdf19 libnginx-mod-http-geoip2 libnginx-mod-http-image-filter
+E             libnginx-mod-http-xslt-filter libnginx-mod-mail libnginx-mod-stream
+E             libnginx-mod-stream-geoip2 libnsl-dev libnspr4 libnss-systemd libnss3
+E             libnuma1 libobjc-11-dev libobjc4 libodbc2 libodbcinst2 libogdi4.1
+E             libopenjp2-7 libpam-cap libpam-systemd libpango-1.0-0 libpangocairo-1.0-0
+E             libpangoft2-1.0-0 libpfm4 libpgtypes3 libphobos2-ldc-shared98 libpipeline1
+E             libpixman-1-0 libpng16-16 libpoppler118 libpopt0 libpq-dev libpq5 libproj22
+E             libprotobuf-c1 libqhull-r8.0 librsvg2-2 librsvg2-common librttopo1
+E             libsensors-config libsensors5 libsfcgal1 libsm6 libsnappy1v5 libspatialite7
+E             libssh2-1 libssl-dev libstdc++-11-dev libsuperlu5 libsz2 libtcl8.6
+E             libtext-iconv-perl libthai-data libthai0 libtie-ixhash-perl libtiff5
+E             libtimedate-perl libtinfo-dev libtirpc-dev libtry-tiny-perl libtsan0
+E             libtypes-serialiser-perl libubsan1 liburi-perl liburing2 liburiparser1
+E             libvte-2.91-0 libvte-2.91-common libvted-3-0 libwayland-client0
+E             libwayland-cursor0 libwayland-egl1 libwebp7 libwww-perl
+E             libwww-robotrules-perl libx11-6 libx11-data libx11-protocol-perl libx11-xcb1
+E             libx265-199 libxau6 libxaw7 libxcb-dri2-0 libxcb-dri3-0 libxcb-glx0
+E             libxcb-present0 libxcb-randr0 libxcb-render0 libxcb-shape0 libxcb-shm0
+E             libxcb-sync1 libxcb-xfixes0 libxcb1 libxcomposite1 libxcursor1 libxdamage1
+E             libxdmcp6 libxerces-c3.2 libxext6 libxfixes3 libxft2 libxi6 libxinerama1
+E             libxkbcommon0 libxkbfile1 libxml-parser-perl libxml-twig-perl
+E             libxml-xpathengine-perl libxml2 libxml2-dev libxmu6 libxmuu1 libxpm4
+E             libxrandr2 libxrender1 libxshmfence1 libxslt1.1 libxt6 libxtables12 libxtst6
+E             libxv1 libxxf86dga1 libxxf86vm1 libyaml-0-2 libz3-4 libz3-dev linux-libc-dev
+E             llvm-14 llvm-14-dev llvm-14-linker-tools llvm-14-runtime llvm-14-tools
+E             locales logrotate make-guile manpages manpages-dev mysql-common
+E             networkd-dispatcher nginx nginx-common nginx-core perl-openssl-defaults
+E             poppler-data proj-bin proj-data python3-dbus python3-gi
+E             python3-pkg-resources python3-pygments python3-yaml rpcsvc-proto
+E             session-migration shared-mime-info ssl-cert sysstat systemd systemd-sysv
+E             systemd-timesyncd tilix tilix-common tzdata ubuntu-mono ucf unixodbc-common
+E             x11-common x11-utils x11-xserver-utils xdg-user-dirs xdg-utils xkb-data
+E           Use 'apt autoremove' to remove them.
+E           The following packages will be REMOVED:
+E             pgedge-ace* pgedge-postgresql-17* pgedge-postgresql-common* pgedge-release*
+E           0 upgraded, 0 newly installed, 4 to remove and 47 not upgraded.
+E           After this operation, 18.2 MB disk space will be freed.
+E           (Reading database ... (Reading database ... 5%(Reading database ... 10%(Reading database ... 15%(Reading database ... 20%(Reading database ... 25%(Reading database ... 30%(Reading database ... 35%(Reading database ... 40%(Reading database ... 45%(Reading database ... 50%(Reading database ... 55%(Reading database ... 60%(Reading database ... 65%(Reading database ... 70%(Reading database ... 75%(Reading database ... 80%(Reading database ... 85%(Reading database ... 90%(Reading database ... 95%(Reading database ... 100%(Reading database ... 44093 files and directories currently installed.)
+E           Removing pgedge-ace (1.5.4-1.jammy) ...
+E           Removing pgedge-release (1.0-1) ...
+E           (Reading database ... (Reading database ... 5%(Reading database ... 10%(Reading database ... 15%(Reading database ... 20%(Reading database ... 25%(Reading database ... 30%(Reading database ... 35%(Reading database ... 40%(Reading database ... 45%(Reading database ... 50%(Reading database ... 55%(Reading database ... 60%(Reading database ... 65%(Reading database ... 70%(Reading database ... 75%(Reading database ... 80%(Reading database ... 85%(Reading database ... 90%(Reading database ... 95%(Reading database ... 100%(Reading database ... 44082 files and directories currently installed.)
+E           Purging configuration files for pgedge-ace (1.5.4-1.jammy) ...
+E           Purging configuration files for pgedge-postgresql-17 (17.7-1.jammy) ...
+E           debconf: unable to initialize frontend: Dialog
+E           debconf: (TERM is not set, so the dialog frontend is not usable.)
+E           debconf: falling back to frontend: Readline
+E           dpkg: error processing package pgedge-postgresql-17 (--purge):
+E            installed pgedge-postgresql-17 package post-removal script subprocess returned error exit status 10
+E           Purging configuration files for pgedge-postgresql-common (284-1.jammy) ...
+E           ucfr: Association belongs to postgresql-common, not pgedge-postgresql-common
+E           ucfr: Aborting
+E           dpkg: error processing package pgedge-postgresql-common (--purge):
+E            installed pgedge-postgresql-common package post-removal script subprocess returned error exit status 5
+E           Errors were encountered while processing:
+E            pgedge-postgresql-17
+E            pgedge-postgresql-common
+E           E: Sub-process /usr/bin/dpkg returned an error code (1)
+
+component-test/test_pep_ace.py:307: Failed</failure></testcase><testcase classname="component-test.test_pep_ace" name="test_pgedge_cleanup[auto-debian13-amd-deb]" time="0.059" /><testcase classname="component-test.test_pep_ace" name="test_pgedge_cleanup[auto-ubuntu2204-arm-deb]" time="0.053" /></testsuite></testsuites>

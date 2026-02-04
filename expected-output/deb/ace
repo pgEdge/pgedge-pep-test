@@ -1,0 +1,9 @@
+/etc/logrotate.d/pgedge-ace
+/lib/systemd/system/pgedge-ace.service
+/usr/bin/ace
+/usr/lib
+/usr/lib/tmpfiles.d/pgedge-ace.conf
+/usr/share/doc/pgedge-ace/LICENSE
+/usr/share/doc/pgedge-ace/changelog.Debian.gz
+/usr/share/pgedge-ace/ace-sbom.json
+/usr/share/pgedge-ace/ace-sbom.json.asc

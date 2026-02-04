@@ -8,3 +8,6 @@ docker>=6.0.0
 
 # Environment management
 python-dotenv>=1.0.0
+
+# SSH connectivity
+paramiko>=3.0.0

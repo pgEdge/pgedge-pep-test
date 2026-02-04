@@ -1,0 +1,6 @@
+/etc/pgedge/pgedge-anonymizer.yaml
+/usr/bin/pgedge-anonymizer
+/usr/share/doc/pgedge-anonymizer/changelog.Debian.gz
+/usr/share/doc/pgedge-anonymizer/changelog.gz
+/usr/share/pgedge-anonymizer/pgedge-anonymizer-sbom.json
+/usr/share/pgedge-anonymizer/pgedge-anonymizer-sbom.json.asc

@@ -1,0 +1,14 @@
+/usr/pgsql-17/lib/bitcode/pg_stat_monitor.index.bc
+/usr/pgsql-17/lib/bitcode/pg_stat_monitor/guc.bc
+/usr/pgsql-17/lib/bitcode/pg_stat_monitor/hash_query.bc
+/usr/pgsql-17/lib/bitcode/pg_stat_monitor/pg_stat_monitor.bc
+/usr/pgsql-17/lib/pg_stat_monitor.so
+/usr/pgsql-17/sbom/pg-stat-monitor-sbom.json
+/usr/pgsql-17/sbom/pg-stat-monitor-sbom.json.asc
+/usr/pgsql-17/share/extension/README-pg_stat_monitor
+/usr/pgsql-17/share/extension/pg_stat_monitor--1.0--2.0.sql
+/usr/pgsql-17/share/extension/pg_stat_monitor--2.0--2.1.sql
+/usr/pgsql-17/share/extension/pg_stat_monitor--2.0.sql
+/usr/pgsql-17/share/extension/pg_stat_monitor--2.1--2.2.sql
+/usr/pgsql-17/share/extension/pg_stat_monitor--2.2--2.3.sql
+/usr/pgsql-17/share/extension/pg_stat_monitor.control

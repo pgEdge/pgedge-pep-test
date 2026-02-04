@@ -1,0 +1,8 @@
+python-dotenv
+pytest
+pytest-html
+docker
+paramiko
+curl
+sudo
+

@@ -1,0 +1,17 @@
+/usr/lib/postgresql/17/lib/bitcode/pg_stat_monitor
+/usr/lib/postgresql/17/lib/bitcode/pg_stat_monitor/guc.bc
+/usr/lib/postgresql/17/lib/bitcode/pg_stat_monitor/hash_query.bc
+/usr/lib/postgresql/17/lib/bitcode/pg_stat_monitor/pg_stat_monitor.bc
+/usr/lib/postgresql/17/lib/bitcode/pg_stat_monitor.index.bc
+/usr/lib/postgresql/17/lib/pg_stat_monitor.so
+/usr/lib/postgresql/17/sbom/pg_stat_monitor-sbom.json
+/usr/lib/postgresql/17/sbom/pg_stat_monitor-sbom.json.asc
+/usr/share/doc/pgedge-postgresql-17-pg-stat-monitor
+/usr/share/doc/pgedge-postgresql-17-pg-stat-monitor/README.md.gz
+/usr/share/doc/pgedge-postgresql-17-pg-stat-monitor/changelog.Debian.gz
+/usr/share/postgresql/17/extension/pg_stat_monitor--1.0--2.0.sql
+/usr/share/postgresql/17/extension/pg_stat_monitor--2.0--2.1.sql
+/usr/share/postgresql/17/extension/pg_stat_monitor--2.0.sql
+/usr/share/postgresql/17/extension/pg_stat_monitor--2.1--2.2.sql
+/usr/share/postgresql/17/extension/pg_stat_monitor--2.2--2.3.sql
+/usr/share/postgresql/17/extension/pg_stat_monitor.control

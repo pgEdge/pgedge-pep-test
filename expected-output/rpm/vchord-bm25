@@ -1,0 +1,13 @@
+/usr/pgsql-17/lib/vchord_bm25.so
+/usr/pgsql-17/sbom/vchord-bm25-sbom.json
+/usr/pgsql-17/sbom/vchord-bm25-sbom.json.asc
+/usr/pgsql-17/share/extension/vchord_bm25--0.1.0--0.1.1.sql
+/usr/pgsql-17/share/extension/vchord_bm25--0.1.1--0.2.0.sql
+/usr/pgsql-17/share/extension/vchord_bm25--0.2.0--0.2.1.sql
+/usr/pgsql-17/share/extension/vchord_bm25--0.2.1--0.2.2.sql
+/usr/pgsql-17/share/extension/vchord_bm25--0.2.2.sql
+/usr/pgsql-17/share/extension/vchord_bm25.control
+/usr/share/doc/pgedge-vchord-bm25_17
+/usr/share/doc/pgedge-vchord-bm25_17/README.md
+/usr/share/licenses/pgedge-vchord-bm25_17
+/usr/share/licenses/pgedge-vchord-bm25_17/LICENSE

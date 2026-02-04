@@ -1,0 +1,194 @@
+# Functional Smoke Test for pgedge-lolor_16
+# Container: auto-oel9-arm
+# Container Type: rhel
+# PostgreSQL Version: 16
+# Date: 040226 Time: 132044
+# SQL File: /Users/zaid/Documents/GitHub/pgedge-pep-test/sql/lolor.sql
+================================================================================
+
+Timing is on.
+=== Test 1: Create Extension and Verify Schema ===
+DROP EXTENSION
+Time: 2.605 ms
+CREATE EXTENSION
+Time: 4.427 ms
+ extname | extversion 
+---------+------------
+ lolor   | 1.2.2
+(1 row)
+
+Time: 0.091 ms
+ nspname 
+---------
+ lolor
+(1 row)
+
+Time: 0.061 ms
+ schemaname |        tablename        
+------------+-------------------------
+ lolor      | pg_largeobject
+ lolor      | pg_largeobject_metadata
+(2 rows)
+
+Time: 0.427 ms
+=== Test 2: Create Large Object with Auto OID ===
+psql:Time: 0.164 ms
+/tmp/lolor_test.sql:29: ERROR:  value for lolor.node is not set
+psql:/tmp/lolor_test.sql:34: ERROR:  syntax error at or near ":"
+LINE 3: WHERE oid = :auto_oid;
+                    ^
+Time: 0.118 ms
+=== Test 3: Create Large Object with Specific OID ===
+ specific_oid 
+--------------
+       200000
+(1 row)
+
+Time: 0.215 ms
+  oid   | lomowner 
+--------+----------
+ 200000 |       10
+(1 row)
+
+Time: 0.141 ms
+=== Test 4: Write Data to Large Object ===
+Time: 0.060 ms
+psql:/tmp/lolor_test.sql:58: ERROR:  function lo_write(integer, unknown) does not exist
+LINE 1: SELECT lo_write(0, 'This is test data for lolor large object...
+               ^
+HINT:  No function matches the given name and argument types. You might need to add explicit type casts.
+Time: 0.080 ms
+psql:/tmp/lolor_test.sql:61: ERROR:  invalid large-object descriptor: 0
+Time: 0.065 ms
+ loid | pageno | data_length 
+------+--------+-------------
+(0 rows)
+
+Time: 0.123 ms
+=== Test 5: Read Data from Large Object ===
+Time: 0.038 ms
+psql:/tmp/lolor_test.sql:77: ERROR:  function lo_read(integer, integer) does not exist
+LINE 1: SELECT lo_read(0, 100) AS data;
+               ^
+HINT:  No function matches the given name and argument types. You might need to add explicit type casts.
+Time: 0.084 ms
+Time: 0.055 ms
+=== Test 6: Export Large Object ===
+psql:/tmp/lolor_test.sql:80: ERROR:  invalid large-object descriptor: 0
+  proname  | pronargs 
+-----------+----------
+ lo_export |        2
+(1 row)
+
+Time: 0.080 ms
+=== Test 7: Truncate Large Object ===
+ trunc_oid 
+-----------
+    200001
+(1 row)
+
+Time: 0.144 ms
+Time: 0.036 ms
+Time: 0.062 ms
+psql:/tmp/lolor_test.sql:106: ERROR:  function lo_write(integer, unknown) does not exist
+LINE 1: SELECT lo_write(0, 'Data to be truncated') AS written;
+               ^
+HINT:  No function matches the given name and argument types. You might need to add explicit type casts.
+Time: 0.071 ms
+psql:/tmp/lolor_test.sql:109: ERROR:  invalid large-object descriptor: 0
+psql:/tmp/lolor_test.sql:112: ERROR:  invalid large-object descriptor: 0
+Time: 0.107 ms
+ loid | pageno | data_length 
+------+--------+-------------
+(0 rows)
+
+Time: 0.134 ms
+=== Test 8: Seek in Large Object ===
+Time: 0.054 ms
+psql:/tmp/lolor_test.sql:128: ERROR:  invalid large-object descriptor: 0
+Time: 0.078 ms
+Time: 0.102 ms
+psql:/tmp/lolor_test.sql:131: ERROR:  function lo_read(integer, integer) does not exist
+LINE 1: SELECT lo_read(0, 10) AS data_after_seek;
+               ^
+HINT:  No function matches the given name and argument types. You might need to add explicit type casts.
+Time: 0.111 ms
+psql:/tmp/lolor_test.sql:134: ERROR:  invalid large-object descriptor: 0
+psql:/tmp/lolor_test.sql:137: ERROR:  invalid large-object descriptor: 0
+Time: 0.057 ms
+=== Test 9: Unlink (Delete) Large Objects ===
+Time: 0.060 ms
+psql:/tmp/lolor_test.sql:145: ERROR:  syntax error at or near ":"
+LINE 1: SELECT lo_unlink(:auto_oid) AS unlink_result_1;
+                         ^
+ unlink_result_2 
+-----------------
+               1
+(1 row)
+
+Time: 0.206 ms
+ unlink_result_3 
+-----------------
+               1
+(1 row)
+
+Time: 0.169 ms
+psql:/tmp/lolor_test.sql:152: ERROR:  syntax error at or near ":"
+LINE 3: WHERE oid IN (:auto_oid, 200000, 200001);
+                      ^
+Time: 0.048 ms
+=== Test 10: Verify Lolor System Views ===
+psql:/tmp/lolor_test.sql:160: ERROR:  value for lolor.node is not set
+Time: 0.068 ms
+Time: 0.093 ms
+psql:/tmp/lolor_test.sql:165: ERROR:  syntax error at or near ":"
+LINE 3: WHERE oid = :view_test_oid;
+                    ^
+Time: 0.075 ms
+psql:/tmp/lolor_test.sql:170: ERROR:  syntax error at or near ":"
+LINE 3: WHERE loid = :view_test_oid;
+                     ^
+Time: 0.080 ms
+=== Test 11: Large Object Permissions ===
+psql:/tmp/lolor_test.sql:173: ERROR:  syntax error at or near ":"
+LINE 1: SELECT lo_unlink(:view_test_oid);
+                         ^
+Time: 0.070 ms
+psql:/tmp/lolor_test.sql:181: ERROR:  value for lolor.node is not set
+Time: 0.098 ms
+psql:/tmp/lolor_test.sql:186: ERROR:  syntax error at or near ":"
+LINE 3: WHERE oid = :perm_oid;
+                    ^
+Time: 0.078 ms
+=== Test 12: Multiple Large Objects ===
+psql:/tmp/lolor_test.sql:189: ERROR:  syntax error at or near ":"
+LINE 1: SELECT lo_unlink(:perm_oid);
+                         ^
+psql:/tmp/lolor_test.sql:197: ERROR:  value for lolor.node is not set
+Time: 0.055 ms
+psql:/tmp/lolor_test.sql:198: ERROR:  value for lolor.node is not set
+Time: 0.066 ms
+psql:/tmp/lolor_test.sql:199: ERROR:  value for lolor.node is not set
+Time: 0.104 ms
+psql:/tmp/lolor_test.sql:220: ERROR:  syntax error at or near ":"
+LINE 6:     fd := lo_open(:oid1, 131072);
+                          ^
+Time: 0.094 ms
+Time: 0.124 ms
+psql:/tmp/lolor_test.sql:225: ERROR:  syntax error at or near ":"
+LINE 3: WHERE oid IN (:oid1, :oid2, :oid3);
+                      ^
+Time: 0.068 ms
+psql:/tmp/lolor_test.sql:228: ERROR:  syntax error at or near ":"
+LINE 1: SELECT lo_unlink(:oid1);
+                         ^
+psql:/tmp/lolor_test.sql:229: ERROR:  syntax error at or near ":"
+LINE 1: SELECT lo_unlink(:oid2);
+                         ^
+Time: 0.101 ms
+psql:/tmp/lolor_test.sql:230: ERROR:  syntax error at or near ":"
+LINE 1: SELECT lo_unlink(:oid3);
+                         ^
+Time: 0.102 ms
+=== Test Summary ===
+All lolor functional tests completed successfully!

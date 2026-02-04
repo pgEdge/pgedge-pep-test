@@ -10,9 +10,12 @@ from dotenv import load_dotenv
 
 # Add the parent directory to sys.path to import from aspects
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
-from aspects import configure_repository, package_management, machine_cleanup, machine_prereq_setup, file_management, container_management
+from aspects import configure_repository, package_management, pg_server_management, machine_cleanup, machine_prereq_setup, file_management, container_management
 
-load_dotenv()
+# Load environment from configuration file
+config_file = os.path.join(os.path.dirname(__file__), '..', 'configuration', 'config16.env')
+load_dotenv(config_file)
+load_dotenv()  # Also load .env if present (can override)
 client = docker.from_env()
 
 # Load values from env
@@ -52,19 +55,43 @@ deb_bundled_files = os.getenv(
     "/usr/bin/ace"
 ).split(",")
 
+# Server package configuration
+pg_major_version = os.getenv("PG_MAJOR_VERSION", "16")
+rhel_server_package = os.getenv("SERVER_PACKAGE", f"pgedge-postgresql{pg_major_version}-server,pgedge-postgresql{pg_major_version}-contrib")
+deb_server_package = os.getenv("DEB_SERVER_PACKAGE", f"pgedge-postgresql-{pg_major_version}")
+
+# PostgreSQL binary paths
+rhel_pgbin = os.getenv("PG_BIN_PATH", f"/usr/pgsql-{pg_major_version}/bin")
+deb_pgbin = os.getenv("DEB_PG_BIN_PATH", f"/usr/lib/postgresql/{pg_major_version}/bin")
+
+# Cluster configuration for ACE
+ace_no_of_clusters = int(os.getenv("ACE_NO_OF_CLUSTERS", "2"))
+base_port = int(os.getenv("BASE_PORT", "5431"))
+base_data_dir = os.getenv("PG_DATA_DIR", "/tmp/n1")
+
+# Generate cluster configurations: list of (cluster_index, port, data_dir)
+cluster_configs = [
+    (i + 1, base_port + i, f"{base_data_dir.rstrip('0123456789')}{i + 1}")
+    for i in range(ace_no_of_clusters)
+]
+
 
 def get_container_config(container_type):
     """Get configuration based on container type (rhel or deb)"""
     if container_type == "rhel":
         return {
             "pguser": rhel_pguser,
+            "pgbin": rhel_pgbin.rstrip('/'),
             "ace_package": rhel_ace_package,
+            "server_package": rhel_server_package,
             "bundled_files": rhel_bundled_files
         }
     else:  # deb
         return {
             "pguser": deb_pguser,
+            "pgbin": deb_pgbin.rstrip('/'),
             "ace_package": deb_ace_package,
+            "server_package": deb_server_package,
             "bundled_files": deb_bundled_files
         }
 
@@ -275,6 +302,177 @@ def test_ace_help(container_name, container_type):
     assert exit_code == 0, f"ace --help failed with exit code {exit_code}: {output_str}"
     assert len(output_str) > 0, "ace --help returned empty output"
     print(f"✅ ace --help executed successfully")
+
+
+@pytest.mark.parametrize("container_name,container_type", all_containers)
+def test_install_server(container_name, container_type):
+    """Install PostgreSQL server package for ACE cluster testing"""
+    container_name = container_name.strip()
+    if not container_name:
+        pytest.skip("No container defined in env")
+
+    # Get container-specific configuration
+    config = get_container_config(container_type)
+    server_package = config["server_package"]
+
+    try:
+        container = client.containers.get(container_name)
+    except docker.errors.NotFound:
+        pytest.skip(f"Container {container_name} not found or not running.")
+
+    assert container.status == "running"
+
+    print(f"\n--- Installing server packages on {container_name} ({container_type}) ---")
+
+    # Install each server package (may be comma-separated)
+    for package in server_package.split(","):
+        package = package.strip()
+        if not package:
+            continue
+        try:
+            success, platform, message = package_management.install_package(container, package)
+            assert success, f"Package installation failed for {package}: {message}"
+            print(f"✅ {message}")
+        except Exception as e:
+            pytest.fail(f"Failed to install {package}: {str(e)}")
+
+
+@pytest.mark.parametrize("container_name,container_type", all_containers)
+@pytest.mark.parametrize("cluster_idx,cluster_port,cluster_data_dir", cluster_configs)
+def test_init_cluster(container_name, container_type, cluster_idx, cluster_port, cluster_data_dir):
+    """Initialize PostgreSQL cluster for ACE testing"""
+    container_name = container_name.strip()
+    if not container_name:
+        pytest.skip("No container defined in env")
+
+    try:
+        container = client.containers.get(container_name)
+    except docker.errors.NotFound:
+        pytest.skip(f"Container {container_name} not found or not running.")
+
+    assert container.status == "running"
+
+    # Get container-specific configuration
+    config = get_container_config(container_type)
+    pgbin = config["pgbin"]
+    pguser = config["pguser"]
+
+    print(f"\n--- Initializing cluster {cluster_idx} on {container_name} ---")
+    print(f"    Data directory: {cluster_data_dir}")
+    print(f"    Port: {cluster_port}")
+
+    # Use the pg_server_management module to initialize cluster
+    try:
+        success, config_content, message = pg_server_management.init_cluster(
+            container, pgbin, cluster_data_dir, pguser
+        )
+        assert success, f"Cluster {cluster_idx} initialization failed: {message}"
+        print(f"✅ {message}")
+    except Exception as e:
+        pytest.fail(f"Failed to initialize cluster {cluster_idx}: {str(e)}")
+
+
+@pytest.mark.parametrize("container_name,container_type", all_containers)
+@pytest.mark.parametrize("cluster_idx,cluster_port,cluster_data_dir", cluster_configs)
+def test_start_cluster(container_name, container_type, cluster_idx, cluster_port, cluster_data_dir):
+    """Start PostgreSQL cluster for ACE testing"""
+    container_name = container_name.strip()
+    if not container_name:
+        pytest.skip("No container defined in env")
+
+    try:
+        container = client.containers.get(container_name)
+    except docker.errors.NotFound:
+        pytest.skip(f"Container {container_name} not found or not running.")
+
+    assert container.status == "running"
+
+    # Get container-specific configuration
+    config = get_container_config(container_type)
+    pgbin = config["pgbin"]
+    pguser = config["pguser"]
+
+    print(f"\n--- Starting cluster {cluster_idx} on {container_name} ---")
+    print(f"    Data directory: {cluster_data_dir}")
+    print(f"    Port: {cluster_port}")
+
+    # Use the pg_server_management module to start the server
+    try:
+        success, server_output, message = pg_server_management.start_server(
+            container, pgbin, cluster_data_dir, str(cluster_port), pguser
+        )
+        assert success, f"Cluster {cluster_idx} start failed: {message}"
+        print(f"✅ {message}")
+    except Exception as e:
+        pytest.fail(f"Failed to start cluster {cluster_idx}: {str(e)}")
+
+
+@pytest.mark.parametrize("container_name,container_type", all_containers)
+@pytest.mark.parametrize("cluster_idx,cluster_port,cluster_data_dir", cluster_configs)
+def test_check_cluster_connection(container_name, container_type, cluster_idx, cluster_port, cluster_data_dir):
+    """Check PostgreSQL connection for each cluster"""
+    container_name = container_name.strip()
+    if not container_name:
+        pytest.skip("No container defined in env")
+
+    try:
+        container = client.containers.get(container_name)
+    except docker.errors.NotFound:
+        pytest.skip(f"Container {container_name} not found or not running.")
+
+    assert container.status == "running"
+
+    # Get container-specific configuration
+    config = get_container_config(container_type)
+    pgbin = config["pgbin"]
+    pguser = config["pguser"]
+
+    print(f"\n--- Checking connection to cluster {cluster_idx} on {container_name} ---")
+    print(f"    Port: {cluster_port}")
+
+    # Use the pg_server_management module to check connection
+    try:
+        success, version_output, message = pg_server_management.check_connection(
+            container, pgbin, str(cluster_port), pguser
+        )
+        assert success, f"Cluster {cluster_idx} connection check failed: {message}"
+        print(f"✅ Cluster {cluster_idx}: {message}")
+        print(f"    Version: {version_output.strip().split(chr(10))[2] if version_output else 'N/A'}")
+    except Exception as e:
+        pytest.fail(f"Failed to check connection to cluster {cluster_idx}: {str(e)}")
+
+
+@pytest.mark.parametrize("container_name,container_type", all_containers)
+@pytest.mark.parametrize("cluster_idx,cluster_port,cluster_data_dir", cluster_configs)
+def test_stop_cluster(container_name, container_type, cluster_idx, cluster_port, cluster_data_dir):
+    """Stop PostgreSQL cluster"""
+    container_name = container_name.strip()
+    if not container_name:
+        pytest.skip("No container defined in env")
+
+    try:
+        container = client.containers.get(container_name)
+    except docker.errors.NotFound:
+        pytest.skip(f"Container {container_name} not found or not running.")
+
+    assert container.status == "running"
+
+    # Get container-specific configuration
+    config = get_container_config(container_type)
+    pgbin = config["pgbin"]
+    pguser = config["pguser"]
+
+    print(f"\n--- Stopping cluster {cluster_idx} on {container_name} ---")
+
+    # Use the pg_server_management module to stop the server
+    try:
+        success, server_output, message = pg_server_management.stop_server(
+            container, pgbin, cluster_data_dir, str(cluster_port), pguser
+        )
+        assert success, f"Cluster {cluster_idx} stop failed: {message}"
+        print(f"✅ {message}")
+    except Exception as e:
+        pytest.fail(f"Failed to stop cluster {cluster_idx}: {str(e)}")
 
 
 @pytest.mark.parametrize("container_name,container_type", all_containers)

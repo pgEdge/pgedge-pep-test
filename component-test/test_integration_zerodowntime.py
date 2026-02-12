@@ -58,10 +58,10 @@ deb_pgbin = os.getenv("DEB_PG_BIN_PATH", f"/usr/lib/postgresql/{pg_major_version
 
 # Spock configuration script
 from pathlib import Path
-zodan_script = (Path(__file__).parent.parent / "config" / "spock" / "zodan-504.py").resolve()
+zodan_script = (Path(__file__).parent.parent / "config" / "spock" / "zodan-505.py").resolve()
 
 # SQL files to run on each node
-sql_files_to_run = ["sql/postgis.sql", "sql/lolor.sql"]
+sql_files_to_run = ["sql/postgis35.sql", "sql/lolor.sql", "sql/server-extensions.sql"]
 
 
 def get_container_config(container_type):
@@ -384,7 +384,7 @@ def test_run_sql_files_on_nodes(container_name, container_type):
 
 @pytest.mark.parametrize("container_name,container_type", all_containers)
 def test_setup_cross_wiring_with_zodan(container_name, container_type):
-    """Step 9: Setup cross-wiring between nodes using zodan-504.py"""
+    """Step 9: Setup cross-wiring between nodes using zodan-50x.py"""
     container_name = container_name.strip()
 
     if not container_name:
@@ -410,7 +410,7 @@ def test_setup_cross_wiring_with_zodan(container_name, container_type):
     with zodan_script.open('r') as f:
         zodan_content = f.read()
 
-    container_zodan_path = "/tmp/zodan-504.py"
+    container_zodan_path = "/tmp/zodan-505.py"
 
     # Use array syntax to avoid shell escaping issues with heredoc
     exit_code, output = container.exec_run(
@@ -931,7 +931,7 @@ done
     print(f"\n▶️  Step 6: Setting up cross-wiring between n2 and n3 using zodan")
 
     # Check if zodan script already exists in container from previous tests
-    container_zodan_path = "/tmp/zodan-504.py"
+    container_zodan_path = "/tmp/zodan-505.py"
     exit_code, output = container.exec_run(
         ["test", "-f", container_zodan_path],
         user="root"
@@ -1131,4 +1131,34 @@ def test_cleanup_nodes(container_name, container_type):
             print(f"⚠️  Warning: Could not stop node {node_name}: {message}")
 
     print(f"\n✅ Cleanup completed")
+
+
+@pytest.mark.parametrize("container_name,container_type", all_containers)
+def test_component_uninstall(container_name, container_type):
+    """Uninstall the enterprise-all package using package_management module"""
+    container_name = container_name.strip()
+
+    if not container_name:
+        pytest.skip("No container defined")
+
+    try:
+        container = client.containers.get(container_name)
+    except docker.errors.NotFound:
+        pytest.skip(f"Container {container_name} not found or not running.")
+
+    assert container.status == "running"
+
+    config = get_container_config(container_type)
+    enterprise_package = config["enterprise_package"]
+
+    print(f"\n--- Uninstalling {enterprise_package} on {container_name} ({container_type}) ---")
+
+    # Use the package_management module to uninstall the package
+    try:
+        success, platform, message = package_management.uninstall_package(container, enterprise_package)
+        assert success, f"Package uninstallation failed: {message}"
+        print(f"✅ {message}")
+        print(f"✅ Platform detected: {platform}")
+    except Exception as e:
+        pytest.fail(f"Failed to uninstall {enterprise_package}: {str(e)}")
 

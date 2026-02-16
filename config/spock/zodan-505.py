@@ -25,7 +25,7 @@ import re
 
 class SpockClusterManager:
     VERSION = "1.0.0"
-    REQUIRED_SPOCK_VERSION = "5.0.4"
+    MIN_SPOCK_VERSION = "5.0.4"
 
     def __init__(self, verbose: bool = False):
         self.verbose = verbose
@@ -164,6 +164,21 @@ class SpockClusterManager:
             raise Exception(
                 f"Exiting add_node: Database {new_db_name} does not exist on new node. Please create it first.")
 
+        # Check if they previously installed lolor on the destination.
+        # They should not have run CREATE EXTENSION lolor yet
+        sql = """
+        SELECT count(*) FROM pg_tables
+        WHERE schemaname = 'lolor'
+        """
+        user_table_count = self.run_psql(new_node_dsn, sql, fetch=True, return_single=True)
+
+        if user_table_count and int(user_table_count.strip()) > 0:
+            self.format_notice("✗", f"Checking database {new_db_name} to ensure lolor is not installed")
+            raise Exception(
+                f"Exiting add_node: Destination database {new_db_name} has the lolor extension installed or remaining lolor user data. The new node should not have the lolor extension installed")
+        else:
+            self.format_notice("OK:", f"Checking database {new_db_name} to ensure lolor is not installed")
+
         # Check if database has user-created tables
         sql = """
         SELECT count(*) FROM pg_tables 
@@ -191,7 +206,7 @@ class SpockClusterManager:
         try:
             src_users_result = self.run_psql(src_dsn, src_users_sql, fetch=True)
             if src_users_result:
-                src_users = [line.strip() for line in src_users_result.strip().split('\n') if line.strip()]
+                src_users = [line.strip() for line in src_users_result if line.strip()]
                 missing_users = []
 
                 for user in src_users:
@@ -391,8 +406,8 @@ class SpockClusterManager:
         if self.verbose:
             self.info(f"Subscription {subscription_name} created remotely")
 
-    def create_replication_slot(self, node_dsn: str, slot_name: str, plugin: str = "spock_output"):
-        """Create a logical replication slot on a remote node"""
+    def create_replication_slot(self, node_dsn: str, slot_name: str, plugin: str = "spock_output") -> Optional[str]:
+        """Create a logical replication slot on a remote node and return the LSN"""
         # Check if slot already exists
         sql = f"SELECT count(*) FROM pg_replication_slots WHERE slot_name = '{slot_name}';"
         count = self.run_psql(node_dsn, sql, fetch=True, return_single=True)
@@ -400,20 +415,24 @@ class SpockClusterManager:
         if count and int(count.strip()) > 0:
             if self.verbose:
                 self.info(f"Replication slot '{slot_name}' already exists. Skipping creation.")
-            return
+            return None
 
-        sql = f"SELECT slot_name, lsn FROM pg_create_logical_replication_slot('{slot_name}', '{plugin}');"
+        sql = f"SELECT lsn FROM pg_create_logical_replication_slot('{slot_name}', '{plugin}');"
 
         if self.verbose:
             self.info(f"[QUERY] {sql}")
 
-        result = self.run_psql(node_dsn, sql)
+        # Fetch the result to get the LSN
+        result = self.run_psql(node_dsn, sql, fetch=True, return_single=True)
         if result is None:
             if self.verbose:
                 self.info(f"Replication slot '{slot_name}' may already exist or creation failed.")
+            return None
         else:
+            lsn = result.strip()
             if self.verbose:
-                self.info(f"Created replication slot '{slot_name}' with plugin '{plugin}' on remote node.")
+                self.info(f"Created replication slot '{slot_name}' with plugin '{plugin}' on remote node (LSN: {lsn}).")
+            return lsn
 
     def create_disable_subscriptions_and_slots(self, src_node_name: str, src_dsn: str,
                                                new_node_name: str, new_node_dsn: str):
@@ -430,7 +449,7 @@ class SpockClusterManager:
             if rec['node_name'] == src_node_name:
                 continue
 
-            # Create replication slot
+            # Create replication slot and capture the commit LSN
             dbname = "pgedge"  # Default database name
             if "dbname=" in rec['dsn']:
                 dbname = rec['dsn'].split("dbname=")[1].split()[0]
@@ -439,12 +458,17 @@ class SpockClusterManager:
             if len(slot_name) > 64:
                 slot_name = slot_name[:64]
 
-            self.create_replication_slot(rec['dsn'], slot_name)
-            self.notice(f"    OK: Creating replication slot {slot_name} on node {rec['node_name']}")
+            commit_lsn = self.create_replication_slot(rec['dsn'], slot_name)
+            self.notice(f"    OK: Creating replication slot {slot_name} (LSN: {commit_lsn}) on node {rec['node_name']}")
 
             # Trigger sync event on origin node and store LSN for later use
             sync_lsn = self.sync_event(rec['dsn'])
-            self.sync_lsns[rec['node_name']] = sync_lsn
+
+            # Store both sync_lsn and commit_lsn
+            self.sync_lsns[rec['node_name']] = {
+                'sync_lsn': sync_lsn,
+                'commit_lsn': commit_lsn
+            }
             self.notice(f"    OK: Triggering sync event on node {rec['node_name']} (LSN: {sync_lsn})")
 
             # Create disabled subscription
@@ -458,8 +482,8 @@ class SpockClusterManager:
 
     def create_source_to_new_subscription(self, src_node_name: str, src_dsn: str,
                                           new_node_name: str, new_node_dsn: str):
-        """Phase 4: Create source to new node subscription"""
-        self.notice("Phase 4: Creating source to new node subscription")
+        """Phase 5: Create source to new node subscription"""
+        self.notice("Phase 5: Creating source to new node subscription")
 
         sub_name = f"sub_{src_node_name}_{new_node_name}"
         self.create_sub(
@@ -501,8 +525,8 @@ class SpockClusterManager:
 
     def trigger_sync_on_other_nodes_and_wait_on_source(self, src_node_name: str, src_dsn: str,
                                                        new_node_name: str, new_node_dsn: str):
-        """Phase 5: Trigger sync events on other nodes and wait on source"""
-        self.notice("Phase 5: Triggering sync events on other nodes and waiting on source")
+        """Phase 4: Trigger sync events on other nodes and wait on source"""
+        self.notice("Phase 4: Triggering sync events on other nodes and waiting on source")
 
         # Get all nodes from source cluster
         nodes = self.get_spock_nodes(src_dsn)
@@ -519,12 +543,12 @@ class SpockClusterManager:
             self.wait_for_sync_event(src_dsn, True, rec['node_name'], sync_lsn, 1200)
             self.notice(f"    OK: Waiting for sync event from {rec['node_name']} on source node {src_node_name}...")
 
-    def wait_for_source_node_sync(self, src_node_name: str, src_dsn: str,
-                                  new_node_name: str, new_node_dsn: str, wait_for_all: bool):
+    def trigger_source_sync_and_wait_on_new_node(self, src_node_name: str, src_dsn: str,
+                                                 new_node_name: str, new_node_dsn: str):
         """Phase 6: Wait for sync on source and new node using sync_event and wait_for_sync_event"""
         self.notice("Phase 6: Waiting for sync on source and new node")
 
-        # Trigger sync event on new node and wait for it on source node
+        # Trigger sync event on source node and wait for it on new node
         sync_lsn = None
         timeout_ms = 1200  # 20 minutes timeout
 
@@ -532,30 +556,30 @@ class SpockClusterManager:
             # Trigger sync event on new node
             sql = "SELECT spock.sync_event();"
             if self.verbose:
-                self.info(f"    Remote SQL for sync_event on new node {new_node_name}: {sql}")
+                self.info(f"    Remote SQL for sync_event on source node {src_node_name}: {sql}")
 
-            sync_lsn = self.run_psql(new_node_dsn, sql, fetch=True, return_single=True)
+            sync_lsn = self.run_psql(src_dsn, sql, fetch=True, return_single=True)
             if sync_lsn:
-                self.format_notice("✓", f"Triggered sync_event on new node {new_node_name} (LSN: {sync_lsn})")
+                self.format_notice("✓", f"Triggered sync_event on new node {src_node_name} (LSN: {sync_lsn})")
             else:
-                raise Exception("Failed to get sync LSN from new node")
+                raise Exception("Failed to get sync LSN from source node")
 
         except Exception as e:
-            self.format_notice("✗", f"Triggering sync_event on new node {new_node_name} (error: {str(e)})")
+            self.format_notice("✗", f"Triggering sync_event on source node {src_node_name} (error: {str(e)})")
             raise
 
         try:
-            # Wait for sync event on source node
-            sql = f"CALL spock.wait_for_sync_event(true, '{new_node_name}', '{sync_lsn}'::pg_lsn, {timeout_ms});"
+            # Wait for sync event on new node
+            sql = f"CALL spock.wait_for_sync_event(true, '{src_node_name}', '{sync_lsn}'::pg_lsn, {timeout_ms});"
             if self.verbose:
-                self.info(f"    Remote SQL for wait_for_sync_event on source node {src_node_name}: {sql}")
+                self.info(f"    Remote SQL for wait_for_sync_event on new node {new_node_name}: {sql}")
 
-            self.run_psql(src_dsn, sql)
-            self.format_notice("✓", f"Waiting for sync event from {new_node_name} on source node {src_node_name}")
+            self.run_psql(new_node_dsn, sql)
+            self.format_notice("✓", f"Waiting for sync event from {src_node_name} on new node {new_node_name}")
 
         except Exception as e:
             self.format_notice("✗",
-                               f"Unable to wait for sync event from {new_node_name} on source node {src_node_name} (error: {str(e)})")
+                               f"Unable to wait for sync event from {src_node_name} on new node {new_node_name} (error: {str(e)})")
             raise
 
     def get_commit_timestamp(self, node_dsn: str, origin: str, receiver: str) -> str:
@@ -568,19 +592,14 @@ class SpockClusterManager:
         result = self.run_psql(node_dsn, sql, fetch=True, return_single=True)
         return result
 
-    def advance_replication_slot(self, node_dsn: str, slot_name: str, sync_timestamp: str):
-        """Advance a replication slot to a specific timestamp"""
-        if not sync_timestamp:
+    def advance_replication_slot(self, node_dsn: str, slot_name: str, target_lsn: str):
+        """Advance a replication slot to a specific LSN"""
+        if not target_lsn:
             if self.verbose:
-                self.info(f"Commit timestamp is NULL, skipping slot advance for slot '{slot_name}'.")
+                self.info(f"Target LSN is NULL, skipping slot advance for slot '{slot_name}'.")
             return
 
-        sql = f"""
-        WITH lsn_cte AS (
-            SELECT spock.get_lsn_from_commit_ts('{slot_name}', '{sync_timestamp}') AS lsn
-        )
-        SELECT pg_replication_slot_advance('{slot_name}', lsn) FROM lsn_cte;
-        """
+        sql = f"SELECT pg_replication_slot_advance('{slot_name}', '{target_lsn}'::pg_lsn);"
 
         if self.verbose:
             self.info(f"[QUERY] {sql}")
@@ -589,8 +608,8 @@ class SpockClusterManager:
 
     def check_commit_timestamp_and_advance_slot(self, src_node_name: str, src_dsn: str,
                                                 new_node_name: str, new_node_dsn: str):
-        """Phase 7: Check commit timestamp and advance replication slot"""
-        self.notice("Phase 7: Checking commit timestamp and advancing replication slot")
+        """Phase 7: Check commit LSN and advance replication slot"""
+        self.notice("Phase 7: Checking commit LSN and advancing replication slot")
 
         # Get all nodes from source cluster
         nodes = self.get_spock_nodes(src_dsn)
@@ -599,10 +618,11 @@ class SpockClusterManager:
             if rec['node_name'] == src_node_name:
                 continue
 
-            # Get commit timestamp
-            sync_timestamp = self.get_commit_timestamp(new_node_dsn, src_node_name, rec['node_name'])
-            if sync_timestamp:
-                self.notice(f"    OK: Found commit timestamp for {src_node_name}->{rec['node_name']}: {sync_timestamp}")
+            # Get the stored commit LSN from when subscription was created
+            commit_lsn = self.sync_lsns[rec['node_name']]['commit_lsn']
+
+            if commit_lsn:
+                self.notice(f"    OK: Found commit LSN for {rec['node_name']} (LSN: {commit_lsn})...")
 
                 # Advance replication slot
                 dbname = "pgedge"
@@ -618,18 +638,15 @@ class SpockClusterManager:
 
                 current_lsn = self.run_psql(rec['dsn'], sql, fetch=True, return_single=True)
 
-                # Get target LSN
-                sql = f"SELECT spock.get_lsn_from_commit_ts('{slot_name}', '{sync_timestamp}')"
-                if self.verbose:
-                    self.info(f"[QUERY] {sql}")
-
-                target_lsn = self.run_psql(rec['dsn'], sql, fetch=True, return_single=True)
+                target_lsn = commit_lsn
 
                 if current_lsn and target_lsn and current_lsn >= target_lsn:
                     self.notice(
                         f"    - Slot {slot_name} already at or beyond target LSN (current: {current_lsn}, target: {target_lsn})")
                 else:
-                    self.advance_replication_slot(rec['dsn'], slot_name, sync_timestamp)
+                    self.advance_replication_slot(rec['dsn'], slot_name, target_lsn)
+            else:
+                self.notice(f"    - No commit LSN found for {rec['node_name']}->{new_node_name}")
 
     def enable_sub(self, node_dsn: str, sub_name: str, immediate: bool = True):
         """Enable a subscription on a remote node"""
@@ -662,6 +679,64 @@ class SpockClusterManager:
         if self.verbose:
             self.info(f"Subscription {sub_name} enabled successfully")
 
+    def verify_subscription_replicating(self, node_dsn: str, subscription_name: str,
+                                        verb: bool = True, max_attempts: int = 120):
+        """
+        Verifies that a subscription is actively replicating after being enabled
+
+        Arguments:
+            node_dsn: DSN of the node where subscription exists
+            subscription_name: Name of the subscription to verify
+            verb: Verbose output flag (default: True)
+            max_attempts: Maximum verification attempts in seconds (default: 120 = 2 minutes)
+
+        Usage:
+            manager.verify_subscription_replicating(node_dsn, 'sub_name', True)
+
+        Notes:
+            Raises exception if subscription fails to reach 'replicating' status within timeout
+
+        Example:
+            # Verify subscription is replicating with 2 minute timeout
+            self.verify_subscription_replicating(
+                new_node_dsn,
+                'sub_n1_n3',
+                verb=True,
+                max_attempts=120
+            )
+        """
+        verify_count = 0
+
+        while True:
+            verify_count += 1
+
+            # Check subscription status on the target node
+            sql = f"SELECT status FROM spock.sub_show_status() WHERE subscription_name = '{subscription_name}'"
+
+            if self.verbose and verb:
+                self.info(f"[QUERY] {sql}")
+
+            sub_status = self.run_psql(node_dsn, sql, fetch=True, return_single=True)
+
+            if sub_status and sub_status.strip() == 'replicating':
+                if verb:
+                    msg = f"Verified subscription {subscription_name} is replicating"
+                    self.notice(f"    SUCCESS: {msg.ljust(120)}")
+                break
+            elif verify_count >= max_attempts:
+                status_display = sub_status.strip() if sub_status else 'unknown'
+                raise Exception(
+                    f"Subscription {subscription_name} verification timeout after {max_attempts} seconds "
+                    f"(final status: {status_display})"
+                )
+            else:
+                if verb:
+                    status_display = sub_status.strip() if sub_status else 'unknown'
+                    msg = (f"Waiting for subscription {subscription_name} to start replicating "
+                           f"(status: {status_display}, attempt {verify_count}/{max_attempts})")
+                    self.notice(f"    ⏳ {msg.ljust(120)}")
+                time.sleep(1)
+
     def enable_disabled_subscriptions(self, src_node_name: str, src_dsn: str,
                                       new_node_name: str, new_node_dsn: str):
         """Phase 8: Enable disabled subscriptions and wait for stored sync events"""
@@ -682,7 +757,8 @@ class SpockClusterManager:
                 # Wait for the sync event that was captured when subscription was created
                 # This ensures the subscription starts replicating from the correct sync point
                 timeout_ms = 1200  # 20 minutes
-                sync_lsn = self.sync_lsns.get(rec['node_name'])  # Use stored sync LSN from Phase 3
+                sync_lsn = self.sync_lsns[rec['node_name']]['sync_lsn']  # Use stored sync LSN from Phase 3
+
                 if sync_lsn:
                     self.notice(
                         f"    OK: Using stored sync event from origin node {rec['node_name']} (LSN: {sync_lsn})...")
@@ -697,6 +773,13 @@ class SpockClusterManager:
                         f"    OK: Waiting for sync event from {rec['node_name']} on new node {new_node_name}...")
                 else:
                     self.notice(f"    ⚠ No stored sync LSN found for {rec['node_name']}, skipping sync wait")
+                # Verify it's replicating
+                self.verify_subscription_replicating(
+                    node_dsn=new_node_dsn,
+                    subscription_name=sub_name,
+                    verb=True,
+                    max_attempts=120  # 2 minutes
+                )
 
             except Exception as e:
                 self.notice(f"    ✗ Enabling subscription {sub_name}... (error: {e})")
@@ -847,7 +930,7 @@ class SpockClusterManager:
     def check_spock_version_compatibility(self, src_dsn: str, new_node_dsn: str):
         """Check that all nodes have the required Spock version"""
         self.info("Checking Spock version compatibility across all nodes")
-        required_version = self.REQUIRED_SPOCK_VERSION
+        min_required_version = self.MIN_SPOCK_VERSION
 
         # Get source node version
         src_version = self.run_psql(src_dsn,
@@ -857,10 +940,11 @@ class SpockClusterManager:
             raise Exception("Spock extension not found on source node")
         src_version = src_version.strip()
 
-        # Check source node has required version
-        if src_version != required_version:
+        # Check source node has required version (strip -devel suffix for comparison)
+        src_version_clean = src_version.replace('-devel', '')
+        if src_version_clean < min_required_version:
             raise Exception(f"Spock version mismatch: source node has version {src_version}, "
-                            f"but required version is {required_version}. Please upgrade all nodes to {required_version}.")
+                            f"but minimum required version is {min_required_version}. Please upgrade all nodes to at least {min_required_version}.")
 
         # Get new node version
         new_version = self.run_psql(new_node_dsn,
@@ -870,10 +954,15 @@ class SpockClusterManager:
             raise Exception("Spock extension not found on new node")
         new_version = new_version.strip()
 
-        # Check new node has required version
-        if new_version != required_version:
+        # Check new node has required version (strip -devel suffix for comparison)
+        new_version_clean = new_version.replace('-devel', '')
+        if new_version_clean < min_required_version:
             raise Exception(f"Spock version mismatch: new node has version {new_version}, "
-                            f"but required version is {required_version}. Please upgrade all nodes to {required_version}.")
+                            f"but minimum required version is {min_required_version}. Please upgrade all nodes to at least {min_required_version}.")
+
+        if new_version_clean != src_version_clean:
+            raise Exception(f"Spock version mismatch: new node has version {new_version}, "
+                            f"but source version is {src_version}. Please ensure they are the same.")
 
         # Check all existing nodes in cluster
         nodes = self.get_spock_nodes(src_dsn)
@@ -886,12 +975,18 @@ class SpockClusterManager:
                 raise Exception(f"Spock extension not found on node {node['node_name']}")
             node_version = node_version.strip()
 
-            if node_version != required_version:
+            node_version_clean = node_version.replace('-devel', '')
+            if node_version_clean < min_required_version:
                 raise Exception(f"Spock version mismatch: node {node['node_name']} has version {node_version}, "
-                                f"but required version is {required_version}. "
-                                f"All nodes must have version {required_version}.")
+                                f"but minimum required version is {min_required_version}. "
+                                f"All nodes must have version {min_required_version}.")
 
-        self.notice(f"Version check passed: All nodes running Spock version {required_version}")
+            if node_version_clean != new_version_clean:
+                raise Exception(f"Spock version mismatch: new node has version {new_version}, "
+                                f"but node version is {node_version}. Please ensure they are the same.")
+
+        self.notice(
+            f"Version check passed: All nodes running at least Spock version {min_required_version}. Source node {src_version}, new node {new_version}")
 
     def add_node(self, src_node_name: str, src_dsn: str, new_node_name: str, new_node_dsn: str,
                  new_node_location: str = "NY", new_node_country: str = "USA",
@@ -929,7 +1024,7 @@ class SpockClusterManager:
 
         # Phase 6: Wait for sync on source and new node.
         # Example: Ensure n1 and n4 are fully synchronized before continuing.
-        self.wait_for_source_node_sync(src_node_name, src_dsn, new_node_name, new_node_dsn, True)
+        self.trigger_source_sync_and_wait_on_new_node(src_node_name, src_dsn, new_node_name, new_node_dsn)
 
         # Phase 7: Check commit timestamp and advance replication slot.
         # Example: Confirm n4 is caught up to n1's latest changes.
@@ -1058,6 +1153,26 @@ class SpockClusterManager:
 
         # Check 5: Database prerequisites (for pre-check only)
         if check_type == "pre" and new_node_dsn:
+            # Check if they previously installed lolor on the destination.
+            # They should not have run CREATE EXTENSION lolor yet
+            try:
+                sql = """
+                SELECT count(*) FROM pg_tables
+                WHERE schemaname = 'lolor'
+                """
+                user_table_count = self.run_psql(new_node_dsn, sql, fetch=True, return_single=True)
+
+                if user_table_count and int(user_table_count.strip()) == 0:
+                    self.format_notice("PASS:", f"Destination database does not have signs of lolor being installed")
+                    checks_passed += 1
+                else:
+                    self.format_notice("FAIL:",
+                                       f"Destination database has the lolor extension installed or remaining lolor user data in the lolor schema.")
+                    checks_failed += 1
+            except Exception as e:
+                self.format_notice("FAIL:", f"lolor extension check - {str(e)}")
+                checks_failed += 1
+
             # Check database is empty
             try:
                 sql = """

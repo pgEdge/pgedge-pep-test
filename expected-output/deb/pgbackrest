@@ -1,0 +1,13 @@
+/etc/logrotate.d/pgedge-pgbackrest
+/etc/pgbackrest.conf
+/lib/systemd/system/pgbackrest.service
+/usr/bin/pgbackrest
+/usr/share/doc/pgedge-pgbackrest
+/usr/share/doc/pgedge-pgbackrest/README.md.gz
+/usr/share/doc/pgedge-pgbackrest/changelog.Debian.gz
+/usr/share/man/man1/pgbackrest.1.gz
+/usr/share/pgbackrest-sbom.json
+/usr/share/pgbackrest-sbom.json.asc
+/var/lib/pgbackrest
+/var/log/pgbackrest
+/var/spool/pgbackrest

@@ -1,0 +1,12 @@
+/etc/logrotate.d/pgbackrest
+/etc/pgbackrest.conf
+/usr/bin/pgbackrest
+/usr/lib/systemd/system/pgbackrest.service
+/usr/lib/tmpfiles.d/pgbackrest.conf
+/usr/share/licenses/pgedge-pgbackrest
+/usr/share/licenses/pgedge-pgbackrest/LICENSE
+/usr/share/pgbackrest-sbom.json
+/usr/share/pgbackrest-sbom.json.asc
+/var/lib/pgbackrest
+/var/log/pgbackrest
+/var/spool/pgbackrest

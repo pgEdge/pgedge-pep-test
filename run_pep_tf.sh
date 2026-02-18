@@ -51,7 +51,7 @@ OPTIONS:
                           Comma-separated for multiple: rpm,deb
 
   --components <names>    Components to test (default: all)
-                          Values: server, snowflake, pgbouncer, lolor, postgis,
+                          Values: server, snowflake, pgbouncer, pgbackrest, lolor, postgis,
                                   system_stats, vectorizer, zerodowntime, mcp, rag, ace, all
                           Comma-separated for multiple: lolor,postgis
 
@@ -130,15 +130,16 @@ else
   echo "1) server - PostgreSQL server tests"
   echo "2) snowflake - Snowflake extension tests"
   echo "3) pgbouncer - PgBouncer tests"
-  echo "4) lolor - LOLOR tests"
-  echo "5) postgis - PostGIS tests"
-  echo "6) system_stats - System Stats tests"
-  echo "7) vectorizer - Vectorizer tests"
-  echo "8) zerodowntime - Zero Downtime Integration tests"
-  echo "9) mcp - MCP (postgres-mcp, nla-cli, nla-web) tests"
-  echo "10) rag - RAG server tests"
-  echo "11) ace - ACE tests"
-  echo "12) all - All tests"
+  echo "4) pgbackrest - pgBackRest tests"
+  echo "5) lolor - LOLOR tests"
+  echo "6) postgis - PostGIS tests"
+  echo "7) system_stats - System Stats tests"
+  echo "8) vectorizer - Vectorizer tests"
+  echo "9) zerodowntime - Zero Downtime Integration tests"
+  echo "10) mcp - MCP (postgres-mcp, nla-cli, nla-web) tests"
+  echo "11) rag - RAG server tests"
+  echo "12) ace - ACE tests"
+  echo "13) all - All tests"
   echo ""
   echo "💡 You can specify multiple components separated by commas"
   echo "   Example: lolor,postgis,system_stats"
@@ -171,7 +172,7 @@ fi
 
 # Determine test types to run
 if [[ "$test_type_choice" == "all" || "$test_type_choice" == "All" ]]; then
-  test_type_list=(server snowflake pgbouncer lolor postgis system_stats vectorizer zerodowntime mcp rag ace)
+  test_type_list=(server snowflake pgbouncer pgbackrest lolor postgis system_stats vectorizer zerodowntime mcp rag ace)
 else
   # Split by comma and trim whitespace
   IFS=',' read -ra test_type_list <<< "$test_type_choice"
@@ -294,6 +295,9 @@ for env in "${env_list[@]}"; do
             pgbouncer)
               run_pytest_with_tracking "component-test/test_pep_pgbouncer.py" "$env" "rpm" "pgbouncer"
               ;;
+            pgbackrest)
+              run_pytest_with_tracking "component-test/test_pep_pgbackrest.py" "$env" "rpm" "pgbackrest"
+              ;;
             postgis)
               run_pytest_with_tracking "component-test/test_pep_postgis.py" "$env" "rpm" "postgis"
               ;;
@@ -334,6 +338,9 @@ for env in "${env_list[@]}"; do
               ;;
             pgbouncer)
               run_pytest_with_tracking "component-test/test_pep_pgbouncer.py" "$env" "deb" "pgbouncer"
+              ;;
+            pgbackrest)
+              run_pytest_with_tracking "component-test/test_pep_pgbackrest.py" "$env" "deb" "pgbackrest"
               ;;
             postgis)
               run_pytest_with_tracking "component-test/test_pep_postgis.py" "$env" "deb" "postgis"
@@ -1015,7 +1022,7 @@ cat > "test-logs/index.html" <<EOF
 EOF
 
 # Add card for each component that has reports
-for test_type in server snowflake pgbouncer lolor postgis system_stats vectorizer zerodowntime mcp rag ace; do
+for test_type in server snowflake pgbouncer pgbackrest lolor postgis system_stats vectorizer zerodowntime mcp rag ace; do
   component_dir="test-logs/${test_type}"
   if [[ -d "$component_dir" ]]; then
     # Check for any HTML reports

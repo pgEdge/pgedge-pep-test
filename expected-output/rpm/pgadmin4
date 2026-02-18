@@ -1,0 +1,14 @@
+/etc/httpd/conf.d/pgadmin4.conf
+/usr/pgadmin4/bin/setup-web.sh
+/usr/pgadmin4/sbom-web.json
+/usr/pgadmin4/sbom-web.json.asc
+/usr/pgadmin4/LICENSE
+/usr/pgadmin4/sbom-server.json
+/usr/pgadmin4/sbom-server.json.asc
+/usr/pgadmin4/web/pgAdmin4.py
+/usr/pgadmin4/web/pgAdmin4.wsgi
+/usr/pgadmin4/web/setup.py
+/usr/pgadmin4/web/version.py
+/usr/pgadmin4/web/webpack.config.js
+/usr/pgadmin4/web/webpack.shim.js
+/usr/pgadmin4/bin/LICENSE

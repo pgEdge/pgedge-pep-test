@@ -1,0 +1,12 @@
+/usr/pgadmin4/bin/LICENSE
+/usr/pgadmin4/bin/pgadmin4
+/usr/pgadmin4/LICENSE
+/usr/pgadmin4/sbom-server.json
+/usr/pgadmin4/sbom-server.json.asc
+/usr/pgadmin4/web/branding.py
+/usr/pgadmin4/web/commit_hash
+/usr/pgadmin4/web/config.py
+/etc/apache2/conf-available/pgadmin4.conf
+/usr/pgadmin4/bin/setup-web.sh
+/usr/pgadmin4/sbom-web.json
+/usr/pgadmin4/sbom-web.json.asc

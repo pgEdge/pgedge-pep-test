@@ -95,7 +95,7 @@ Run without arguments to enter interactive menu mode:
 |--------|-------------|--------|
 | `--pgver` | PostgreSQL versions to test | `16`, `17`, `18`, `all` |
 | `--platforms` | Target platforms | `rpm`, `deb`, `all` |
-| `--components` | Components to test | `server`, `snowflake`, `pgbouncer`, `lolor`, `postgis`, `system_stats`, `vectorizer`, `zerodowntime`, `mcp`, `rag`, `all` |
+| `--components` | Components to test | `server`, `snowflake`, `pgbouncer`, `pgbackrest`, `postgrest`, `lolor`, `postgis`, `system_stats`, `vectorizer`, `zerodowntime`, `mcp`, `rag`, `ace`, `all` |
 | `--repo` | Repository to use | `release`, `staging`, `daily` |
 | `--help`, `-h` | Show help message | - |
 
@@ -140,6 +140,10 @@ pgedge-pep-test/
 │   ├── test_pep_snowflake.py
 │   ├── test_pep_postgis.py
 │   ├── test_pep_pgbouncer.py
+│   ├── test_pep_pgbackrest.py
+│   ├── test_pep_postgrest.py
+│   ├── test_pep_pgadmin4.py
+│   ├── test_pep_ace.py
 │   ├── test_pep_system_stats.py
 │   ├── test_pep_vectorizer.py
 │   ├── test_pep_mcp.py
@@ -161,16 +165,35 @@ pgedge-pep-test/
 
 ## Supported Components
 
-| Component | Description |
-|-----------|-------------|
-| `server` | PostgreSQL server and contrib packages |
-| `snowflake` | Snowflake sequence generator extension |
-| `pgbouncer` | Connection pooler |
-| `lolor` | Large object logical replication |
-| `postgis` | Spatial and geographic objects |
-| `system_stats` | System statistics extension |
-| `vectorizer` | AI/ML vectorization tools |
-| `zerodowntime` | Zero downtime upgrade testing |
-| `mcp` | Model Context Protocol components |
-| `rag` | RAG server components |
+| Component      | Description                            |
+|----------------|----------------------------------------|
+| `server`       | PostgreSQL server and contrib packages |
+| `snowflake`    | Snowflake sequence generator extension |
+| `pgbouncer`    | Connection pooler                      |
+| `pgbackrest`   | Backup and restore tool                |
+| `postgrest`    | RESTful API for PostgreSQL             |
+| `pgadmin4`     | Web-based database management tool     |
+| `lolor`        | Large object logical replication       |
+| `postgis`      | Spatial and geographic objects          |
+| `system_stats` | System statistics extension            |
+| `vectorizer`   | AI/ML vectorization tools              |
+| `zerodowntime` | Zero downtime upgrade testing          |
+| `mcp`          | Model Context Protocol components      |
+| `rag`          | RAG server components                  |
+| `ace`          | ACE extension tests                    |
+
+### Pipeline (Upcoming)
+
+The following components are in the queue for test automation support:
+
+| Component      | Description                    |
+|----------------|--------------------------------|
+| `pgaudit`      | Audit logging extension        |
+| `vchord-bm25`  | BM25 vector chord search       |
+| `pg-tokenizer` | Text tokenization extension    |
+| `pg-vectorize`  | Vectorization extension        |
+| `docloader`    | Document loader utility        |
+| `anonymizer`   | Data anonymization extension   |
+| `pgmq`         | Message queue extension        |
+| `cron`         | Job scheduler extension        |
 

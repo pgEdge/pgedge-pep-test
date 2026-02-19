@@ -52,7 +52,7 @@ postgrest_service_group = "pgedge"
 postgrest_workdir = "/var/lib/pgedge/postgrest"
 postgrest_log_dir = "/var/log/pgedge/postgrest"
 postgrest_log_file = f"{postgrest_log_dir}/postgrest.log"
-postgrest_port = 3000
+postgrest_port = os.getenv("POSTGREST_SERVER_PORT", "3000")
 postgrest_ready_timeout = 30  # seconds to wait for PostgREST schema cache
 
 # RHEL-specific configuration
@@ -548,11 +548,11 @@ def test_postgrest_start_service(container_name, container_type):
 
     # Update postgrest.conf: replace default placeholders with actual values
     exit_code, output = container.exec_run(
-        f"sed -i 's/mysecretpassword/postgres/g; s/mydb/postgres/g' {postgrest_conf}",
+        f"sed -i 's/mysecretpassword/postgres/g; s/mydb/postgres/g; s/server-port = 3000/server-port = {postgrest_port}/g' {postgrest_conf}",
         user="root"
     )
     assert exit_code == 0, f"Failed to update postgrest.conf: {output.decode()}"
-    print(f"✅ Updated {postgrest_conf} (db name=postgres, password=postgres)")
+    print(f"✅ Updated {postgrest_conf} (db name=postgres, password=postgres, server-port={postgrest_port})")
 
     # Start PostgREST as pgedge user in the background, mimicking the systemd service
     exit_code, output = container.exec_run(

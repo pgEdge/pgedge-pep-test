@@ -400,7 +400,8 @@ def verify_bundled_files(
         normalized = re.sub(r'/(16|17|18)/', '/version/', normalized)
 
         # Collapse extension numeric ranges like --1.3--1.4 or --1.10--1.11 to a placeholder
-        normalized = re.sub(r'--\d+(?:\.\d+)*(?:--\d+(?:\.\d+)*)?', '--ver', normalized)
+        # Also capture trailing pre-release suffixes like dev, alpha, beta, rc
+        normalized = re.sub(r'--\d+(?:\.\d+)*(?:dev|alpha|beta|rc\d*)?(?:--\d+(?:\.\d+)*(?:dev|alpha|beta|rc\d*)?)?', '--ver', normalized)
 
         # Collapse numeric-only tokens used as version markers (e.g., file-1.2.3 -> file-ver)
         normalized = re.sub(r'(?<=[-_.])\d+(?:\.\d+)*(?=\b)', 'ver', normalized)

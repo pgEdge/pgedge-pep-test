@@ -36,7 +36,7 @@ pgport = os.getenv("PG_PORT", "5432")
 pgdata = os.getenv("PG_DATA_DIR", "/tmp/n1")
 pg_major_version = os.getenv("PG_MAJOR_VERSION", "16")
 postgis_major_version = os.getenv("POSTGIS_MAJOR_VERSION", "3")
-postgis_version = os.getenv(f"PGEDGE_POSTGIS_{pg_major_version}_VERSION", "3.5.4")
+postgis_version = os.getenv(f"PGEDGE_POSTGIS35_{pg_major_version}_VERSION", "3.5.4")
 
 # User configuration
 rhel_pguser = os.getenv("PG_USER", "postgres")

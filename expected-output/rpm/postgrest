@@ -1,0 +1,13 @@
+/etc/logrotate.d/pgedge-postgrest
+/etc/pgedge/postgrest.conf
+/usr/bin/postgrest
+/usr/lib/systemd/system/pgedge-postgrest.service
+/usr/lib/tmpfiles.d/pgedge-postgrest.conf
+/usr/share/licenses/pgedge-postgrest
+/usr/share/licenses/pgedge-postgrest/LICENSE
+/usr/share/postgrest-sbom.json
+/usr/share/postgrest-sbom.json.asc
+/var/lib/pgedge
+/var/lib/pgedge/postgrest
+/var/log/pgedge
+/var/log/pgedge/postgrest

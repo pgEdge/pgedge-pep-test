@@ -50,6 +50,9 @@ rag_binary_map = {
     "pgedge-rag-server": "/usr/bin/pgedge-rag-server",
 }
 
+# Decoupled components SBOM path
+decoupled_sbom_path = os.getenv("DECOUPLED_COMPONENTS_SBOM", "")
+
 
 def get_container_config(container_type):
     """Get configuration based on container type (rhel or deb)"""
@@ -258,6 +261,74 @@ def test_verify_bundled_files(container_name, container_type, component):
             pytest.skip(str(e))
         else:
             pytest.fail(f"Failed to verify bundled files: {str(e)}")
+
+
+@pytest.mark.parametrize("container_name,container_type", all_containers)
+def test_verify_sbom(container_name, container_type):
+    """Verify SBOM signature files located under the decoupled components SBOM directory"""
+    container_name = container_name.strip()
+    if not container_name:
+        pytest.skip("No container defined in env")
+
+    if not decoupled_sbom_path:
+        pytest.skip("DECOUPLED_COMPONENTS_SBOM not defined in env, skipping SBOM verification")
+
+    try:
+        container = client.containers.get(container_name)
+    except docker.errors.NotFound:
+        pytest.skip(f"Container {container_name} not found or not running.")
+
+    assert container.status == "running"
+
+    sbom_dir = decoupled_sbom_path
+
+    if container_type == "rhel":
+        print(f"\n--- Verifying SBOM on {container_name} (RHEL) in {sbom_dir} ---")
+
+        # Download pgedge.pub signing key into the sbom directory
+        exit_code, output = container.exec_run(
+            f"wget -q -O {sbom_dir}/pgedge.pub https://dnf.pgedge.com/keys/pgedge.pub",
+            user="root",
+        )
+        assert exit_code == 0, f"Failed to download pgedge.pub: {output.decode()}"
+        print(f"✅ Downloaded pgedge.pub to {sbom_dir}")
+
+        # Verify SBOM signature
+        exit_code, output = container.exec_run(
+            f"sh -c 'cd {sbom_dir} && sq verify "
+            f"--signature-file pgedge-rag-server-sbom.json.asc "
+            f"--signer-file pgedge.pub "
+            f"pgedge-rag-server-sbom.json'",
+            user="root",
+        )
+        output_str = output.decode().replace('\xa0', ' ')
+        assert exit_code == 0, f"SBOM verification failed: {output_str}"
+        assert "Authenticated signature made by 94B1FE8FEB921466900D46785F8C00E2DD55B1A9" in output_str, \
+            f"Expected authenticated signature not found in output:\n{output_str}"
+        assert "1 authenticated signature." in output_str, \
+            f"Expected '1 authenticated signature.' not found in output:\n{output_str}"
+        print(f"✅ SBOM signature verified on {container_name} (RHEL)")
+        print(f"   {output_str.strip()}")
+
+    else:  # deb
+        print(f"\n--- Verifying SBOM on {container_name} (Deb) in {sbom_dir} ---")
+
+        # Verify SBOM signature using the distro keyring
+        exit_code, output = container.exec_run(
+            f"sh -c 'cd {sbom_dir} && sq verify "
+            f"--signer-cert /etc/apt/keyrings/pgedge.gpg "
+            f"--detached pgedge-rag-server-sbom.json.asc "
+            f"pgedge-rag-server-sbom.json'",
+            user="root",
+        )
+        output_str = output.decode().replace('\xa0', ' ')
+        assert exit_code == 0, f"SBOM verification failed: {output_str}"
+        assert "Good signature from D1CEC3A5AD96CB7C" in output_str, \
+            f"Expected good signature not found in output:\n{output_str}"
+        assert "1 good signature." in output_str, \
+            f"Expected '1 good signature.' not found in output:\n{output_str}"
+        print(f"✅ SBOM signature verified on {container_name} (Deb)")
+        print(f"   {output_str.strip()}")
 
 
 @pytest.mark.parametrize("container_name,container_type,component", all_container_component_combinations)

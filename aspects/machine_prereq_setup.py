@@ -77,6 +77,8 @@ def setup_rhel9():
     run("sudo dnf config-manager --set-enabled codeready-builder-for-rhel-9-rhui-rpms")
     run("sudo dnf install -y file")
     run("sudo dnf install -y sequoia-sq")
+    run("sudo dnf install -y wget")
+
 
 
 
@@ -86,6 +88,8 @@ def setup_rhel10():
     run("sudo subscription-manager repos --enable codeready-builder-for-rhel-10-x86_64-rpms")
     run("sudo dnf install -y file")
     run("sudo dnf install -y sequoia-sq")
+    run("sudo dnf install -y wget")
+
 
 
 
@@ -96,6 +100,8 @@ def setup_rocky9():
     run("sudo dnf config-manager --set-enabled crb")
     run("sudo dnf install -y file")
     run("sudo dnf install -y sequoia-sq")
+    run("sudo dnf install -y wget")
+
 
 
 
@@ -106,6 +112,8 @@ def setup_rocky10():
     run("sudo dnf config-manager --set-enabled crb")
     run("sudo dnf install -y file")
     run("sudo dnf install -y sequoia-sq")
+    run("sudo dnf install -y wget")
+
 
 
 
@@ -116,6 +124,8 @@ def setup_oracle9():
     run("sudo dnf config-manager --set-enabled ol9_codeready_builder")
     run("sudo dnf install -y file")
     run("sudo dnf install -y sequoia-sq")
+    run("sudo dnf install -y wget")
+
 
 
 
@@ -126,6 +136,8 @@ def setup_oracle10():
     run("sudo dnf config-manager --set-enabled ol10_codeready_builder")
     run("sudo dnf install -y file")
     run("sudo dnf install -y sequoia-sq")
+    run("sudo dnf install -y wget")
+
 
 
 
@@ -136,6 +148,8 @@ def setup_alma9():
     run("sudo dnf config-manager --set-enabled crb")
     run("sudo dnf install -y file")
     run("sudo dnf install -y sequoia-sq")
+    run("sudo dnf install -y wget")
+
 
 
 
@@ -146,7 +160,7 @@ def setup_alma10():
     run("sudo dnf config-manager --set-enabled crb")
     run("sudo dnf install -y file")
     run("sudo dnf install -y sequoia-sq")
-
+    run("sudo dnf install -y wget")
 
 
 def install_prerequisites_on_container(container):

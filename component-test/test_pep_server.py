@@ -56,6 +56,7 @@ if server_integration_testing:
 
 # RHEL-specific configuration
 rhel_pgbin = os.getenv("PG_BIN_PATH", f"/usr/pgsql-{pg_major_version}/bin")
+rhel_pg_path = os.getenv("RHEL_PG_PATH", f"/usr/pgsql-{pg_major_version}")
 
 # Debian-specific configuration
 deb_pgbin = os.getenv("DEB_PG_BIN_PATH", f"/usr/lib/postgresql/{pg_major_version}/bin")
@@ -511,6 +512,73 @@ def test_binaries_stripped(container_name, container_type):
 
 
 @pytest.mark.parametrize("container_name,container_type", all_containers)
+def test_verify_sbom(container_name, container_type):
+    """Verify SBOM signature files located under the PostgreSQL path sbom directory"""
+    container_name = container_name.strip()
+    if not container_name:
+        pytest.skip("No container defined in env")
+
+    try:
+        container = client.containers.get(container_name)
+    except docker.errors.NotFound:
+        pytest.skip(f"Container {container_name} not found or not running.")
+
+    assert container.status == "running"
+
+    if container_type == "rhel":
+        sbom_dir = f"{rhel_pg_path}/sbom"
+
+        print(f"\n--- Verifying SBOM on {container_name} (RHEL) in {sbom_dir} ---")
+
+        # Download pgedge.pub signing key into the sbom directory
+        exit_code, output = container.exec_run(
+            f"wget -q -O {sbom_dir}/pgedge.pub https://dnf.pgedge.com/keys/pgedge.pub",
+            user="root",
+        )
+        assert exit_code == 0, f"Failed to download pgedge.pub: {output.decode()}"
+        print(f"✅ Downloaded pgedge.pub to {sbom_dir}")
+
+        # Verify SBOM signature
+        exit_code, output = container.exec_run(
+            f"sh -c 'cd {sbom_dir} && sq verify "
+            f"--signature-file postgresql-sbom.json.asc "
+            f"--signer-file pgedge.pub "
+            f"postgresql-sbom.json'",
+            user="root",
+        )
+        output_str = output.decode().replace('\xa0', ' ')
+        assert exit_code == 0, f"SBOM verification failed: {output_str}"
+        assert "Authenticated signature made by 94B1FE8FEB921466900D46785F8C00E2DD55B1A9" in output_str, \
+            f"Expected authenticated signature not found in output:\n{output_str}"
+        assert "1 authenticated signature." in output_str, \
+            f"Expected '1 authenticated signature.' not found in output:\n{output_str}"
+        print(f"✅ SBOM signature verified on {container_name} (RHEL)")
+        print(f"   {output_str.strip()}")
+
+    else:  # deb
+        sbom_dir = f"{deb_pg_path}/sbom"
+
+        print(f"\n--- Verifying SBOM on {container_name} (Deb) in {sbom_dir} ---")
+
+        # Verify SBOM signature using the distro keyring
+        exit_code, output = container.exec_run(
+            f"sh -c 'cd {sbom_dir} && sq verify "
+            f"--signer-cert /etc/apt/keyrings/pgedge.gpg "
+            f"--detached postgresql-sbom.json.asc "
+            f"postgresql-sbom.json'",
+            user="root",
+        )
+        output_str = output.decode().replace('\xa0', ' ')
+        assert exit_code == 0, f"SBOM verification failed: {output_str}"
+        assert "Good signature from D1CEC3A5AD96CB7C" in output_str, \
+            f"Expected good signature not found in output:\n{output_str}"
+        assert "1 good signature." in output_str, \
+            f"Expected '1 good signature.' not found in output:\n{output_str}"
+        print(f"✅ SBOM signature verified on {container_name} (Deb)")
+        print(f"   {output_str.strip()}")
+
+
+@pytest.mark.parametrize("container_name,container_type", all_containers)
 def test_create_pl_extensions(container_name, container_type):
     """Install PL packages and create PL extensions"""
 
@@ -638,6 +706,9 @@ def test_stop_server(container_name, container_type):
 @pytest.mark.parametrize("container_name,container_type,component", all_container_component_combinations)
 def test_component_uninstall(container_name, container_type, component):
     """Uninstall each component using package_management module"""
+    if os.getenv("SKIP_CLEANUP", "false").lower() == "true":
+        pytest.skip("Skipping uninstall because SKIP_CLEANUP=true in env")
+
     container_name = container_name.strip()
     component = component.strip()
 
@@ -666,6 +737,9 @@ def test_component_uninstall(container_name, container_type, component):
 @pytest.mark.parametrize("container_name,container_type", all_containers)
 def test_pgedge_cleanup(container_name, container_type):
     """Full cleanup using machine_cleanup module: remove all pgedge packages + leftover data"""
+    if os.getenv("SKIP_CLEANUP", "false").lower() == "true":
+        pytest.skip("Skipping cleanup because SKIP_CLEANUP=true in env")
+
     container_name = container_name.strip()
     if not container_name:
         pytest.skip("No container defined in env")

@@ -46,6 +46,9 @@ deb_enterprise_package = os.getenv("DEB_ENTERPRISE_ALL_PACKAGE", f"pgedge-enterp
 # Multi-node configuration
 no_of_nodes = int(os.getenv("NO_OF_NODES", "2"))
 base_port = int(os.getenv("BASE_PORT", "5431"))
+zodan_py = os.getenv("LATEST_ZODAN_PY", "zodan-505.py")
+zodan_sql = os.getenv("LATEST_ZODAN_SQL", "zodan-506.sql")
+zodan_execution = os.getenv("ZODAN_EXECUTION", "py").lower().strip()  # "py" or "sql"
 
 # User configuration
 rhel_pguser = os.getenv("PG_USER", "postgres")
@@ -60,7 +63,8 @@ deb_pg_path = os.getenv("DEB_PG_PATH", f"/usr/lib/postgresql/{pg_major_version}"
 
 # Spock configuration script
 from pathlib import Path
-zodan_script = (Path(__file__).parent.parent / "config" / "spock" / "zodan-505.py").resolve()
+zodan_script = (Path(__file__).parent.parent / "config" / "spock" / zodan_py).resolve()
+zodan_sql_script = (Path(__file__).parent.parent / "config" / "spock" / zodan_sql).resolve()
 
 # SQL files to run on each node
 sql_files_to_run = ["sql/postgis35.sql", "sql/lolor.sql", "sql/server-extensions.sql"]
@@ -451,7 +455,7 @@ def test_run_sql_files_on_nodes(container_name, container_type):
 
 @pytest.mark.parametrize("container_name,container_type", all_containers)
 def test_setup_cross_wiring_with_zodan(container_name, container_type):
-    """Step 9: Setup cross-wiring between nodes using zodan-50x.py"""
+    """Step 9: Setup cross-wiring between nodes using zodan-50x.py or zodan-50x.sql"""
     container_name = container_name.strip()
 
     if not container_name:
@@ -466,78 +470,186 @@ def test_setup_cross_wiring_with_zodan(container_name, container_type):
 
     config = get_container_config(container_type)
     pguser = config["pguser"]
+    pgbin = config["pgbin"]
 
-    print(f"\n--- Setting up cross-wiring between nodes ---")
+    print(f"\n--- Setting up cross-wiring between nodes (mode: {zodan_execution}) ---")
 
-    # Check if zodan script exists
-    if not zodan_script.exists():
-        pytest.skip(f"Zodan script not found at {zodan_script}")
+    if zodan_execution == "sql":
+        # ------------------------------------------------------------------ #
+        # SQL execution path: copy zodan SQL file, create dblink extension,  #
+        # load procedures, then call spock.add_node on the new node.         #
+        # ------------------------------------------------------------------ #
+        if not zodan_sql_script.exists():
+            pytest.skip(f"Zodan SQL script not found at {zodan_sql_script}")
 
-    # Copy zodan script to container
-    with zodan_script.open('r') as f:
-        zodan_content = f.read()
+        # Copy zodan SQL file to container
+        with zodan_sql_script.open('r') as f:
+            zodan_sql_content = f.read()
 
-    container_zodan_path = "/tmp/zodan-505.py"
-
-    # Use array syntax to avoid shell escaping issues with heredoc
-    exit_code, output = container.exec_run(
-        ["bash", "-c", f"cat > {container_zodan_path} << 'EOF'\n{zodan_content}\nEOF"],
-        user="root"
-    )
-
-    if exit_code != 0:
-        pytest.fail(f"Failed to copy zodan script to container: {output.decode()}")
-
-    # Verify file was written and has content
-    exit_code, output = container.exec_run(
-        ["wc", "-l", container_zodan_path],
-        user="root"
-    )
-
-    if exit_code == 0:
-        line_count = output.decode().strip().split()[0]
-        print(f"✓ Zodan script copied successfully ({line_count} lines)")
-    else:
-        pytest.fail(f"Failed to verify zodan script: {output.decode()}")
-
-    # Make executable
-    container.exec_run(["chmod", "+x", container_zodan_path], user="root")
-
-    # Setup cross-wiring from n1 to all other nodes
-    for node_num in range(2, no_of_nodes + 1):
-        src_node = "n1"
-        src_port = base_port
-        src_dsn = f"host=localhost dbname=postgres port={src_port} user={pguser} password={pg_password}"
-
-        new_node = f"n{node_num}"
-        new_port = base_port + node_num - 1
-        new_dsn = f"host=localhost dbname=postgres port={new_port} user={pguser} password={pg_password}"
-
-        print(f"\n▶️  Adding node {new_node} to {src_node}")
-
-        # Run zodan add_node command - use single quotes for bash -c to preserve double quotes in DSN
-        zodan_cmd = (
-            f'python3 {container_zodan_path} add_node '
-            f'--src-node-name {src_node} '
-            f'--src-dsn "{src_dsn}" '
-            f'--new-node-name {new_node} '
-            f'--new-node-dsn "{new_dsn}" '
-            f'--verbose'
-        )
+        container_zodan_sql_path = f"/tmp/{zodan_sql}"
 
         exit_code, output = container.exec_run(
-            ["bash", "-c", zodan_cmd],
+            ["bash", "-c", f"cat > {container_zodan_sql_path} << 'SQLEOF'\n{zodan_sql_content}\nSQLEOF"],
             user="root"
         )
 
-        output_str = output.decode()
-        print(output_str)
+        if exit_code != 0:
+            pytest.fail(f"Failed to copy zodan SQL script to container: {output.decode()}")
 
-        assert exit_code == 0, f"Failed to add node {new_node} to {src_node}: {output_str}"
-        print(f"✅ Successfully added node {new_node} to {src_node}")
+        exit_code, output = container.exec_run(
+            ["wc", "-l", container_zodan_sql_path],
+            user="root"
+        )
 
-        # Wait for replication to stabilize
-        time.sleep(2)
+        if exit_code == 0:
+            line_count = output.decode().strip().split()[0]
+            print(f"Zodan SQL script copied successfully ({line_count} lines)")
+        else:
+            pytest.fail(f"Failed to verify zodan SQL script: {output.decode()}")
+
+        # Setup cross-wiring as consecutive pairs: n1->n2, n2->n3, ...
+        for node_num in range(2, no_of_nodes + 1):
+            src_node = f"n{node_num - 1}"
+            src_port = base_port + node_num - 2
+            src_dsn = f"host=127.0.0.1 dbname=postgres port={src_port} user={pguser} password={pg_password}"
+
+            new_node = f"n{node_num}"
+            new_port = base_port + node_num - 1
+            new_dsn = f"host=127.0.0.1 dbname=postgres port={new_port} user={pguser} password={pg_password}"
+
+            print(f"\nAdding node {new_node} to {src_node} via SQL")
+
+            # Step 1: Create dblink extension on the new node
+            exit_code, output = container.exec_run(
+                ["bash", "-c",
+                 f"{pgbin}/psql -h 127.0.0.1 -p {new_port} -U {pguser} -d postgres "
+                 f"-c \"CREATE EXTENSION IF NOT EXISTS dblink;\""],
+                user="root"
+            )
+            output_str = output.decode()
+            if exit_code != 0:
+                pytest.fail(
+                    f"Failed to create dblink extension on {new_node} (port {new_port}): {output_str}"
+                )
+            print(f"dblink extension created on {new_node}")
+
+            # Step 2: Execute zodan SQL file on the new node to load procedures
+            exit_code, output = container.exec_run(
+                ["bash", "-c",
+                 f"{pgbin}/psql -h 127.0.0.1 -p {new_port} -U {pguser} -d postgres "
+                 f"-f {container_zodan_sql_path}"],
+                user="root"
+            )
+            output_str = output.decode()
+            print(output_str)
+            if exit_code != 0:
+                pytest.fail(
+                    f"Failed to execute zodan SQL on {new_node} (port {new_port}): {output_str}"
+                )
+            print(f"Zodan SQL executed successfully on {new_node}")
+
+            # Step 3: Call spock.add_node on the new node
+            add_node_sql = (
+                f"CALL spock.add_node("
+                f"'{src_node}', "
+                f"'{src_dsn}', "
+                f"'{new_node}', "
+                f"'{new_dsn}', "
+                f"true);"
+            )
+
+            exit_code, output = container.exec_run(
+                ["bash", "-c",
+                 f"{pgbin}/psql -h 127.0.0.1 -p {new_port} -U {pguser} -d postgres "
+                 f"-c \"{add_node_sql}\""],
+                user="root"
+            )
+            output_str = output.decode()
+            print(output_str)
+
+            # Step 4: Verify success message
+            assert exit_code == 0, \
+                f"spock.add_node call failed for {new_node}: {output_str}"
+            assert "Success rate: %100" in output_str, \
+                f"Expected 'NOTICE:  Success rate: %100' in output for {new_node}, got:\n{output_str}"
+
+            print(f"Successfully added node {new_node} to {src_node} via SQL")
+
+            # Wait for replication to stabilize
+            time.sleep(2)
+
+    else:
+        # ------------------------------------------------------------------ #
+        # Python execution path (default): copy zodan .py file and invoke it #
+        # ------------------------------------------------------------------ #
+        if not zodan_script.exists():
+            pytest.skip(f"Zodan script not found at {zodan_script}")
+
+        # Copy zodan script to container
+        with zodan_script.open('r') as f:
+            zodan_content = f.read()
+
+        container_zodan_path = f"/tmp/{zodan_py}"
+
+        # Use array syntax to avoid shell escaping issues with heredoc
+        exit_code, output = container.exec_run(
+            ["bash", "-c", f"cat > {container_zodan_path} << 'EOF'\n{zodan_content}\nEOF"],
+            user="root"
+        )
+
+        if exit_code != 0:
+            pytest.fail(f"Failed to copy zodan script to container: {output.decode()}")
+
+        # Verify file was written and has content
+        exit_code, output = container.exec_run(
+            ["wc", "-l", container_zodan_path],
+            user="root"
+        )
+
+        if exit_code == 0:
+            line_count = output.decode().strip().split()[0]
+            print(f"Zodan script copied successfully ({line_count} lines)")
+        else:
+            pytest.fail(f"Failed to verify zodan script: {output.decode()}")
+
+        # Make executable
+        container.exec_run(["chmod", "+x", container_zodan_path], user="root")
+
+        # Setup cross-wiring as consecutive pairs: n1->n2, n2->n3, ...
+        for node_num in range(2, no_of_nodes + 1):
+            src_node = f"n{node_num - 1}"
+            src_port = base_port + node_num - 2
+            src_dsn = f"host=localhost dbname=postgres port={src_port} user={pguser} password={pg_password}"
+
+            new_node = f"n{node_num}"
+            new_port = base_port + node_num - 1
+            new_dsn = f"host=localhost dbname=postgres port={new_port} user={pguser} password={pg_password}"
+
+            print(f"\nAdding node {new_node} to {src_node}")
+
+            # Run zodan add_node command - use single quotes for bash -c to preserve double quotes in DSN
+            zodan_cmd = (
+                f'python3 {container_zodan_path} add_node '
+                f'--src-node-name {src_node} '
+                f'--src-dsn "{src_dsn}" '
+                f'--new-node-name {new_node} '
+                f'--new-node-dsn "{new_dsn}" '
+                f'--verbose'
+            )
+
+            exit_code, output = container.exec_run(
+                ["bash", "-c", zodan_cmd],
+                user="root"
+            )
+
+            output_str = output.decode()
+            print(output_str)
+
+            assert exit_code == 0, f"Failed to add node {new_node} to {src_node}: {output_str}"
+            print(f"Successfully added node {new_node} to {src_node}")
+
+            # Wait for replication to stabilize
+            time.sleep(2)
 
 
 @pytest.mark.parametrize("container_name,container_type", all_containers)
@@ -826,6 +938,9 @@ def test_insert_node_add(container_name, container_type):
 
     if not container_name:
         pytest.skip("Invalid container")
+
+    if no_of_nodes < 3:
+        pytest.skip(f"Skipping zero-downtime node-add test: NO_OF_NODES={no_of_nodes}, requires at least 3")
 
     try:
         container = client.containers.get(container_name)

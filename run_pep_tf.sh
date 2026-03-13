@@ -52,7 +52,7 @@ OPTIONS:
 
   --components <names>    Components to test (default: all)
                           Values: server, snowflake, pgbouncer, pgbackrest, postgrest, lolor, postgis,
-                                  system_stats, vectorizer, zerodowntime, mcp, rag, ace, all
+                                  system_stats, vectorizer, zerodowntime, mcp, rag, ace, repo_health, all
                           Comma-separated for multiple: lolor,postgis
 
   --repo <repository>     Repository to use (default: staging)
@@ -140,6 +140,7 @@ else
   echo "11) mcp - MCP (postgres-mcp, nla-cli, nla-web) tests"
   echo "12) rag - RAG server tests"
   echo "13) ace - ACE tests"
+  echo "14) repo_health - Repository health tests (install all packages)"
   echo "14) all - All tests"
   echo ""
   echo "💡 You can specify multiple components separated by commas"
@@ -173,7 +174,7 @@ fi
 
 # Determine test types to run
 if [[ "$test_type_choice" == "all" || "$test_type_choice" == "All" ]]; then
-  test_type_list=(server snowflake pgbouncer pgbackrest postgrest lolor postgis system_stats vectorizer zerodowntime mcp rag ace)
+  test_type_list=(server snowflake pgbouncer pgbackrest postgrest lolor postgis system_stats vectorizer zerodowntime mcp rag ace repo_health)
 else
   # Split by comma and trim whitespace
   IFS=',' read -ra test_type_list <<< "$test_type_choice"
@@ -323,6 +324,9 @@ for env in "${env_list[@]}"; do
             ace)
               run_pytest_with_tracking "component-test/test_pep_ace.py" "$env" "rpm" "ace"
               ;;
+            repo_health)
+              run_pytest_with_tracking "component-test/test_pep_repo_health.py" "$env" "rpm" "repo_health"
+              ;;
             *)
               echo "⚠️ Unknown test type: $test_type"
               ;;
@@ -369,6 +373,9 @@ for env in "${env_list[@]}"; do
               ;;
             ace)
               run_pytest_with_tracking "component-test/test_pep_ace.py" "$env" "deb" "ace"
+              ;;
+            repo_health)
+              run_pytest_with_tracking "component-test/test_pep_repo_health.py" "$env" "deb" "repo_health"
               ;;
             *)
               echo "⚠️ Unknown test type: $test_type"

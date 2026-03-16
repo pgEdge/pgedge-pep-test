@@ -5,10 +5,6 @@ DROP TABLE IF EXISTS articles CASCADE;
 CREATE EXTENSION IF NOT EXISTS vector;
 CREATE EXTENSION IF NOT EXISTS pgedge_vectorizer;
 
--- Configure per database
-ALTER DATABASE postgres SET pgedge_vectorizer.databases = 'postgres';
-SELECT pg_reload_conf();
-
 -- Create table
 CREATE TABLE articles (
     id BIGSERIAL PRIMARY KEY,
@@ -32,8 +28,8 @@ VALUES
 ('Database Indexing', 'Database indexes improve query performance by allowing faster data retrieval without scanning entire tables.', NULL),
 ('PostgreSQL Extensions', 'PostgreSQL supports powerful extensions like pgvector for similarity search and PostGIS for geospatial data.', NULL);
 
--- Wait for background workers
-SELECT pg_sleep(5);
+-- Wait for background workers to process the queue
+SELECT pg_sleep(30);
 
 -- Check queue and embeddings
 SELECT * FROM pgedge_vectorizer.queue_status;

@@ -3,8 +3,10 @@
 Generic file management module for copying files to containers.
 Handles file copying, ownership, and permissions.
 """
+import io
 import os
 import subprocess
+import tarfile
 from pathlib import Path
 
 
@@ -734,16 +736,17 @@ def copy_file_to_container(
             print(f"❌ {message}")
             return False, message
 
-    # Copy file content to container using heredoc
+    # Copy file content to container using put_archive (avoids shell quoting/heredoc issues)
     try:
-        exit_code, output = container.exec_run(
-            f"bash -c \"cat > {container_file_path} << 'EOFILE'\n{file_content}\nEOFILE\"",
-            user="root"
-        )
-        if exit_code != 0:
-            message = f"Failed to write file to container: {output.decode()}"
-            print(f"❌ {message}")
-            return False, message
+        content_bytes = file_content.encode()
+        tarstream = io.BytesIO()
+        filename = os.path.basename(container_file_path)
+        with tarfile.open(fileobj=tarstream, mode='w') as tar:
+            info = tarfile.TarInfo(name=filename)
+            info.size = len(content_bytes)
+            tar.addfile(info, io.BytesIO(content_bytes))
+        tarstream.seek(0)
+        container.put_archive(parent_dir or '/', tarstream)
         print(f"✓ File written to container")
     except Exception as e:
         message = f"Failed to copy file to container: {str(e)}"

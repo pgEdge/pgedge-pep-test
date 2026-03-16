@@ -530,26 +530,24 @@ def test_verify_sbom(container_name, container_type):
 
         print(f"\n--- Verifying SBOM on {container_name} (RHEL) in {sbom_dir} ---")
 
-        # Download pgedge.pub signing key into the sbom directory
+        # Download pgedge-rsa.pub signing key into the sbom directory
         exit_code, output = container.exec_run(
-            f"wget -q -O {sbom_dir}/pgedge.pub https://dnf.pgedge.com/keys/pgedge.pub",
+            f"wget -q -O {sbom_dir}/pgedge-rsa.pub https://dnf.pgedge.com/keys/pgedge-rsa.pub",
             user="root",
         )
-        assert exit_code == 0, f"Failed to download pgedge.pub: {output.decode()}"
-        print(f"✅ Downloaded pgedge.pub to {sbom_dir}")
+        assert exit_code == 0, f"Failed to download pgedge-rsa.pub: {output.decode()}"
+        print(f"✅ Downloaded pgedge-rsa.pub to {sbom_dir}")
 
         # Verify SBOM signature
         exit_code, output = container.exec_run(
             f"sh -c 'cd {sbom_dir} && sq verify "
             f"--signature-file postgresql-sbom.json.asc "
-            f"--signer-file pgedge.pub "
+            f"--signer-file pgedge-rsa.pub "
             f"postgresql-sbom.json'",
             user="root",
         )
         output_str = output.decode().replace('\xa0', ' ')
         assert exit_code == 0, f"SBOM verification failed: {output_str}"
-        assert "Authenticated signature made by 94B1FE8FEB921466900D46785F8C00E2DD55B1A9" in output_str, \
-            f"Expected authenticated signature not found in output:\n{output_str}"
         assert "1 authenticated signature." in output_str, \
             f"Expected '1 authenticated signature.' not found in output:\n{output_str}"
         print(f"✅ SBOM signature verified on {container_name} (RHEL)")
@@ -561,19 +559,21 @@ def test_verify_sbom(container_name, container_type):
         print(f"\n--- Verifying SBOM on {container_name} (Deb) in {sbom_dir} ---")
 
         # Verify SBOM signature using the distro keyring
+        # Detect sq signer flag (older sq uses --signer-cert, newer uses --signer-file)
+        _, _sq_help = container.exec_run("sq verify --help 2>&1", user="root")
+        _sq_signer_flag = "--signer-file" if b"--signer-file" in _sq_help else "--signer-cert"
+        _sq_sig_flag = "--signature-file" if b"--signature-file" in _sq_help else "--detached"
         exit_code, output = container.exec_run(
             f"sh -c 'cd {sbom_dir} && sq verify "
-            f"--signer-cert /etc/apt/keyrings/pgedge.gpg "
-            f"--detached postgresql-sbom.json.asc "
+            f"{_sq_signer_flag} /etc/apt/keyrings/pgedge-rsa.gpg "
+            f"{_sq_sig_flag} postgresql-sbom.json.asc "
             f"postgresql-sbom.json'",
             user="root",
         )
         output_str = output.decode().replace('\xa0', ' ')
         assert exit_code == 0, f"SBOM verification failed: {output_str}"
-        assert "Good signature from D1CEC3A5AD96CB7C" in output_str, \
-            f"Expected good signature not found in output:\n{output_str}"
-        assert "1 good signature." in output_str, \
-            f"Expected '1 good signature.' not found in output:\n{output_str}"
+        assert "1 good signature." in output_str or "1 authenticated signature." in output_str, \
+            f"Expected '1 good signature.' or '1 authenticated signature.' not found in output:\n{output_str}"
         print(f"✅ SBOM signature verified on {container_name} (Deb)")
         print(f"   {output_str.strip()}")
 

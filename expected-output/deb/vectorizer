@@ -17,7 +17,10 @@
 /usr/lib/postgresql/17/sbom/pgedge-vectorizer-sbom.json.asc
 /usr/share/doc/pgedge-postgresql-17-vectorizer/README.md.gz
 /usr/share/doc/pgedge-postgresql-17-vectorizer/changelog.Debian.gz
-/usr/share/doc/pgedge-postgresql-17-vectorizer/changelog.gz
-/usr/share/postgresql/18/extension/pgedge_vectorizer--1.0-beta1--1.0-beta2.sql
-/usr/share/postgresql/18/extension/pgedge_vectorizer--1.0-beta2.sql
+/usr/share/postgresql/17/extension/pgedge_vectorizer--1.0-beta1--1.0-beta2.sql
+/usr/share/postgresql/17/extension/pgedge_vectorizer--1.0-beta2--1.0-beta3.sql
+/usr/share/postgresql/17/extension/pgedge_vectorizer--1.0-beta2.sql
+/usr/share/postgresql/17/extension/pgedge_vectorizer--1.0-beta3--1.0.sql
+/usr/share/postgresql/17/extension/pgedge_vectorizer--1.0-beta3.sql
+/usr/share/postgresql/17/extension/pgedge_vectorizer--1.0.sql
 /usr/share/postgresql/17/extension/pgedge_vectorizer.control

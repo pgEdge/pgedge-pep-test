@@ -2,7 +2,11 @@
 /usr/pgsql-17/sbom/pgedge-vectorizer-sbom.json
 /usr/pgsql-17/sbom/pgedge-vectorizer-sbom.json.asc
 /usr/pgsql-17/share/extension/pgedge_vectorizer--1.0-beta1--1.0-beta2.sql
+/usr/pgsql-17/share/extension/pgedge_vectorizer--1.0-beta2--1.0-beta3.sql
 /usr/pgsql-17/share/extension/pgedge_vectorizer--1.0-beta2.sql
+/usr/pgsql-17/share/extension/pgedge_vectorizer--1.0-beta3--1.0.sql
+/usr/pgsql-17/share/extension/pgedge_vectorizer--1.0-beta3.sql
+/usr/pgsql-17/share/extension/pgedge_vectorizer--1.0.sql
 /usr/pgsql-17/share/extension/pgedge_vectorizer.control
 /usr/share/doc/pgedge-vectorizer_17/README.md
 /usr/share/licenses/pgedge-vectorizer_17/LICENCE.md

@@ -17,6 +17,7 @@ A pytest-based testing framework for validating pgEdge Enterprise Postgres nativ
   - [Test Reports](#test-reports)
   - [Actual Output Files](#actual-output-files)
 - [Project Structure](#project-structure)
+- [Supported Platforms](#supported-platforms)
 - [Supported Components](#supported-components)
 
 ## Prerequisites
@@ -95,7 +96,7 @@ Run without arguments to enter interactive menu mode:
 |--------|-------------|--------|
 | `--pgver` | PostgreSQL versions to test | `16`, `17`, `18`, `all` |
 | `--platforms` | Target platforms | `rpm`, `deb`, `all` |
-| `--components` | Components to test | `server`, `snowflake`, `pgbouncer`, `pgbackrest`, `postgrest`, `lolor`, `postgis`, `system_stats`, `vectorizer`, `zerodowntime`, `mcp`, `rag`, `ace`, `all` |
+| `--components` | Components to test | `server`, `snowflake`, `pgbouncer`, `pgbackrest`, `postgrest`, `lolor`, `postgis`, `system_stats`, `vectorizer`, `zerodowntime`, `mcp`, `rag`, `ace`, `repo_health`, `docloader`, `anonymizer`, `pg_vectorize`, `pg_tokenizer`, `vchord_bm25`, `pgaudit`, `all` |
 | `--repo` | Repository to use | `release`, `staging`, `daily` |
 | `--help`, `-h` | Show help message | - |
 
@@ -148,6 +149,13 @@ pgedge-pep-test/
 │   ├── test_pep_vectorizer.py
 │   ├── test_pep_mcp.py
 │   ├── test_pep_rag.py
+│   ├── test_pep_repo_health.py
+│   ├── test_pep_docloader.py
+│   ├── test_pep_anonymizer.py
+│   ├── test_pep_pg_vectorize.py
+│   ├── test_pep_pg_tokenizer.py
+│   ├── test_pep_vchord_bm25.py
+│   ├── test_pep_pgaudit.py
 │   └── test_integration_zerodowntime.py
 ├── configuration/           # Environment configuration files
 │   ├── config16.env
@@ -163,37 +171,50 @@ pgedge-pep-test/
 └── requirements.txt         # Python dependencies
 ```
 
+## Supported Platforms
+
+### RPM-based Linux (versions 9 and 10)
+
+| Distribution                        | Version | Architecture  |
+|-------------------------------------|---------|---------------|
+| Red Hat Enterprise Linux (RHEL)     | 9, 10   | AMD64, ARM64  |
+| Alma Linux                          | 9, 10   | AMD64, ARM64  |
+| Rocky Linux                         | 9, 10   | AMD64, ARM64  |
+| Oracle Enterprise Linux (OEL)       | 9, 10   | AMD64, ARM64  |
+
+### Debian-based Linux
+
+| Distribution | Version                | Architecture  |
+|--------------|------------------------|---------------|
+| Ubuntu       | 22.04 LTS (Jammy)      | AMD64, ARM64  |
+| Ubuntu       | 24.04 LTS (Noble)      | AMD64, ARM64  |
+| Debian       | 11 (Bullseye)          | AMD64, ARM64  |
+| Debian       | 12 (Bookworm)          | AMD64, ARM64  |
+| Debian       | 13 (Trixie)            | AMD64, ARM64  |
+
 ## Supported Components
 
-| Component      | Description                            |
-|----------------|----------------------------------------|
-| `server`       | PostgreSQL server and contrib packages |
-| `snowflake`    | Snowflake sequence generator extension |
-| `pgbouncer`    | Connection pooler                      |
-| `pgbackrest`   | Backup and restore tool                |
-| `postgrest`    | RESTful API for PostgreSQL             |
-| `pgadmin4`     | Web-based database management tool     |
-| `lolor`        | Large object logical replication       |
-| `postgis`      | Spatial and geographic objects          |
-| `system_stats` | System statistics extension            |
-| `vectorizer`   | AI/ML vectorization tools              |
-| `zerodowntime` | Zero downtime upgrade testing          |
-| `mcp`          | Model Context Protocol components      |
-| `rag`          | RAG server components                  |
-| `ace`          | ACE extension tests                    |
-
-### Pipeline (Upcoming)
-
-The following components are in the queue for test automation support:
-
-| Component      | Description                    |
-|----------------|--------------------------------|
-| `pgaudit`      | Audit logging extension        |
-| `vchord-bm25`  | BM25 vector chord search       |
-| `pg-tokenizer` | Text tokenization extension    |
-| `pg-vectorize`  | Vectorization extension        |
-| `docloader`    | Document loader utility        |
-| `anonymizer`   | Data anonymization extension   |
-| `pgmq`         | Message queue extension        |
-| `cron`         | Job scheduler extension        |
+| Component      | Description                              |
+|----------------|------------------------------------------|
+| `server`       | PostgreSQL server and contrib packages   |
+| `snowflake`    | Snowflake sequence generator extension   |
+| `pgbouncer`    | Connection pooler                        |
+| `pgbackrest`   | Backup and restore tool                  |
+| `postgrest`    | RESTful API for PostgreSQL               |
+| `pgadmin4`     | Web-based database management tool       |
+| `lolor`        | Large object logical replication         |
+| `postgis`      | Spatial and geographic objects           |
+| `system_stats` | System statistics extension              |
+| `vectorizer`   | AI/ML vectorization tools                |
+| `zerodowntime` | Zero downtime upgrade testing            |
+| `mcp`          | Model Context Protocol components        |
+| `rag`          | RAG server components                    |
+| `ace`          | ACE extension tests                      |
+| `repo_health`  | Repository health (install all packages) |
+| `docloader`    | Document loader utility                  |
+| `anonymizer`   | Data anonymization extension             |
+| `pg_vectorize` | Vectorization extension                  |
+| `pg_tokenizer` | Text tokenization extension              |
+| `vchord_bm25`  | BM25 vector chord search                 |
+| `pgaudit`      | Audit logging extension                  |
 

@@ -1,0 +1,7 @@
+/usr/pgsql-17/doc/extension/README-pgaudit.md
+/usr/pgsql-17/lib/pgaudit.so
+/usr/pgsql-17/sbom/pgaudit-sbom.json
+/usr/pgsql-17/sbom/pgaudit-sbom.json.asc
+/usr/pgsql-17/share/extension/pgaudit--17.0--17.1.sql
+/usr/pgsql-17/share/extension/pgaudit--17.1.sql
+/usr/pgsql-17/share/extension/pgaudit.control

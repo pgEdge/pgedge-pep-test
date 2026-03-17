@@ -82,6 +82,60 @@ def detect_component_from_test_file(config):
             'rhel_package_default': 'pgedge-enterprise-all_16',
             'deb_package_env': 'DEB_ENTERPRISE_ALL_PACKAGE',
             'deb_package_default': 'pgedge-enterprise-all-16'
+        },
+        'test_pep_docloader': {
+            'name': 'Docloader',
+            'version_env': 'PGEDGE_DOCLOADER_VERSION',
+            'version_default': '',
+            'rhel_package_env': 'DOCLOADER_PACKAGE',
+            'rhel_package_default': 'pgedge-docloader',
+            'deb_package_env': 'DEB_DOCLOADER_PACKAGE',
+            'deb_package_default': 'pgedge-docloader'
+        },
+        'test_pep_anonymizer': {
+            'name': 'Anonymizer',
+            'version_env': 'PGEDGE_ANONYMIZER_VERSION',
+            'version_default': '',
+            'rhel_package_env': 'ANONYMIZER_PACKAGE',
+            'rhel_package_default': 'pgedge-anonymizer',
+            'deb_package_env': 'DEB_ANONYMIZER_PACKAGE',
+            'deb_package_default': 'pgedge-anonymizer'
+        },
+        'test_pep_pg_vectorize': {
+            'name': 'pg-vectorize',
+            'version_env': f'PGEDGE_PG_VECTORIZE_{os.getenv("PG_MAJOR_VERSION", "16")}_VERSION',
+            'version_default': '',
+            'rhel_package_env': 'PG_VECTORIZE_PACKAGE',
+            'rhel_package_default': f'pgedge-pg-vectorize_{os.getenv("PG_MAJOR_VERSION", "16")}',
+            'deb_package_env': 'DEB_PG_VECTORIZE_PACKAGE',
+            'deb_package_default': f'pgedge-postgresql-{os.getenv("PG_MAJOR_VERSION", "16")}-pg-vectorize'
+        },
+        'test_pep_pg_tokenizer': {
+            'name': 'pg-tokenizer',
+            'version_env': f'PGEDGE_PG_TOKENIZER_{os.getenv("PG_MAJOR_VERSION", "16")}_VERSION',
+            'version_default': '',
+            'rhel_package_env': 'PG_TOKENIZER_PACKAGE',
+            'rhel_package_default': f'pgedge-pg-tokenizer_{os.getenv("PG_MAJOR_VERSION", "16")}',
+            'deb_package_env': 'DEB_PG_TOKENIZER_PACKAGE',
+            'deb_package_default': f'pgedge-postgresql-{os.getenv("PG_MAJOR_VERSION", "16")}-pg-tokenizer'
+        },
+        'test_pep_vchord_bm25': {
+            'name': 'vchord-bm25',
+            'version_env': f'PGEDGE_VCHORD_BM25_{os.getenv("PG_MAJOR_VERSION", "16")}_VERSION',
+            'version_default': '',
+            'rhel_package_env': 'VCHORD_BM25_PACKAGE',
+            'rhel_package_default': f'pgedge-vchord-bm25_{os.getenv("PG_MAJOR_VERSION", "16")}',
+            'deb_package_env': 'DEB_VCHORD_BM25_PACKAGE',
+            'deb_package_default': f'pgedge-postgresql-{os.getenv("PG_MAJOR_VERSION", "16")}-vchord-bm25'
+        },
+        'test_pep_pgaudit': {
+            'name': 'pgaudit',
+            'version_env': f'PGEDGE_PGAUDIT_{os.getenv("PG_MAJOR_VERSION", "16")}_VERSION',
+            'version_default': '',
+            'rhel_package_env': 'PGAUDIT_PACKAGE',
+            'rhel_package_default': f'pgedge-pgaudit_{os.getenv("PG_MAJOR_VERSION", "16")}',
+            'deb_package_env': 'DEB_PGAUDIT_PACKAGE',
+            'deb_package_default': f'pgedge-postgresql-{os.getenv("PG_MAJOR_VERSION", "16")}-pgaudit'
         }
     }
 

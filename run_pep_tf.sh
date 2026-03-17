@@ -52,7 +52,8 @@ OPTIONS:
 
   --components <names>    Components to test (default: all)
                           Values: server, snowflake, pgbouncer, pgbackrest, postgrest, lolor, postgis,
-                                  system_stats, vectorizer, zerodowntime, mcp, rag, ace, repo_health, all
+                                  system_stats, vectorizer, zerodowntime, mcp, rag, ace, repo_health,
+                                  docloader, anonymizer, pg_vectorize, pg_tokenizer, vchord_bm25, pgaudit, all
                           Comma-separated for multiple: lolor,postgis
 
   --repo <repository>     Repository to use (default: staging)
@@ -141,7 +142,13 @@ else
   echo "12) rag - RAG server tests"
   echo "13) ace - ACE tests"
   echo "14) repo_health - Repository health tests (install all packages)"
-  echo "14) all - All tests"
+  echo "15) docloader - Docloader tests"
+  echo "16) anonymizer - Anonymizer tests"
+  echo "17) pg_vectorize - pg-vectorize extension tests"
+  echo "18) pg_tokenizer - pg-tokenizer extension tests"
+  echo "19) vchord_bm25 - vchord-bm25 extension tests"
+  echo "20) pgaudit - pgaudit extension tests"
+  echo "21) all - All tests"
   echo ""
   echo "💡 You can specify multiple components separated by commas"
   echo "   Example: lolor,postgis,system_stats"
@@ -174,7 +181,7 @@ fi
 
 # Determine test types to run
 if [[ "$test_type_choice" == "all" || "$test_type_choice" == "All" ]]; then
-  test_type_list=(server snowflake pgbouncer pgbackrest postgrest lolor postgis system_stats vectorizer zerodowntime mcp rag ace repo_health)
+  test_type_list=(server snowflake pgbouncer pgbackrest postgrest lolor postgis system_stats vectorizer zerodowntime mcp rag ace repo_health docloader anonymizer pg_vectorize pg_tokenizer vchord_bm25 pgaudit)
 else
   # Split by comma and trim whitespace
   IFS=',' read -ra test_type_list <<< "$test_type_choice"
@@ -327,6 +334,24 @@ for env in "${env_list[@]}"; do
             repo_health)
               run_pytest_with_tracking "component-test/test_pep_repo_health.py" "$env" "rpm" "repo_health"
               ;;
+            docloader)
+              run_pytest_with_tracking "component-test/test_pep_docloader.py" "$env" "rpm" "docloader"
+              ;;
+            anonymizer)
+              run_pytest_with_tracking "component-test/test_pep_anonymizer.py" "$env" "rpm" "anonymizer"
+              ;;
+            pg_vectorize)
+              run_pytest_with_tracking "component-test/test_pep_pg_vectorize.py" "$env" "rpm" "pg_vectorize"
+              ;;
+            pg_tokenizer)
+              run_pytest_with_tracking "component-test/test_pep_pg_tokenizer.py" "$env" "rpm" "pg_tokenizer"
+              ;;
+            vchord_bm25)
+              run_pytest_with_tracking "component-test/test_pep_vchord_bm25.py" "$env" "rpm" "vchord_bm25"
+              ;;
+            pgaudit)
+              run_pytest_with_tracking "component-test/test_pep_pgaudit.py" "$env" "rpm" "pgaudit"
+              ;;
             *)
               echo "⚠️ Unknown test type: $test_type"
               ;;
@@ -376,6 +401,24 @@ for env in "${env_list[@]}"; do
               ;;
             repo_health)
               run_pytest_with_tracking "component-test/test_pep_repo_health.py" "$env" "deb" "repo_health"
+              ;;
+            docloader)
+              run_pytest_with_tracking "component-test/test_pep_docloader.py" "$env" "deb" "docloader"
+              ;;
+            anonymizer)
+              run_pytest_with_tracking "component-test/test_pep_anonymizer.py" "$env" "deb" "anonymizer"
+              ;;
+            pg_vectorize)
+              run_pytest_with_tracking "component-test/test_pep_pg_vectorize.py" "$env" "deb" "pg_vectorize"
+              ;;
+            pg_tokenizer)
+              run_pytest_with_tracking "component-test/test_pep_pg_tokenizer.py" "$env" "deb" "pg_tokenizer"
+              ;;
+            vchord_bm25)
+              run_pytest_with_tracking "component-test/test_pep_vchord_bm25.py" "$env" "deb" "vchord_bm25"
+              ;;
+            pgaudit)
+              run_pytest_with_tracking "component-test/test_pep_pgaudit.py" "$env" "deb" "pgaudit"
               ;;
             *)
               echo "⚠️ Unknown test type: $test_type"
@@ -1036,7 +1079,7 @@ cat > "test-logs/index.html" <<EOF
 EOF
 
 # Add card for each component that has reports
-for test_type in server snowflake pgbouncer pgbackrest postgrest lolor postgis system_stats vectorizer zerodowntime mcp rag ace; do
+for test_type in server snowflake pgbouncer pgbackrest postgrest lolor postgis system_stats vectorizer zerodowntime mcp rag ace repo_health docloader anonymizer pg_vectorize pg_tokenizer vchord_bm25 pgaudit; do
   component_dir="test-logs/${test_type}"
   if [[ -d "$component_dir" ]]; then
     # Check for any HTML reports

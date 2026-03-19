@@ -121,6 +121,19 @@ def get_container_config(container_type):
         }
 
 
+def generate_container_package_combinations():
+    """Generate (container_name, container_type, package) for each platform's package list"""
+    combinations = []
+    for container_name, container_type in all_containers:
+        packages = rhel_all_packages if container_type == "rhel" else deb_all_packages
+        for pkg in packages:
+            combinations.append((container_name, container_type, pkg))
+    return combinations
+
+
+all_container_package_combinations = generate_container_package_combinations()
+
+
 # ============================================================================
 # Test Functions
 # ============================================================================
@@ -221,18 +234,14 @@ def test_configure_repository(container_name, container_type):
             pytest.fail(f"Failed to configure repository: {str(e)}")
 
 
-@pytest.mark.parametrize("container_name,container_type", all_containers)
-def test_install_all_packages(container_name, container_type):
-    """Step 2: Install all packages defined in ALL_PACKAGES / DEB_ALL_PACKAGES"""
+@pytest.mark.parametrize("container_name,container_type,package", all_container_package_combinations)
+def test_install_all_packages(container_name, container_type, package):
+    """Step 2: Install each package from ALL_PACKAGES / DEB_ALL_PACKAGES as a separate test"""
     container_name = container_name.strip()
-    if not container_name:
-        pytest.skip("No container defined in env")
+    package = package.strip()
 
-    config = get_container_config(container_type)
-    packages = config["all_packages"]
-
-    if not packages:
-        pytest.skip(f"No packages defined for {container_type}")
+    if not container_name or not package:
+        pytest.skip("No container or package defined")
 
     try:
         container = client.containers.get(container_name)
@@ -241,27 +250,15 @@ def test_install_all_packages(container_name, container_type):
 
     assert container.status == "running"
 
-    print(f"\n--- Installing {len(packages)} packages on {container_name} ({container_type}) ---")
+    print(f"\n--- Installing {package} on {container_name} ({container_type}) ---")
 
-    failed_packages = []
-    for pkg in packages:
-        print(f"   Installing {pkg}...")
-        try:
-            success, platform, message = package_management.install_package(container, pkg)
-            if success:
-                print(f"   ✅ {pkg}: {message}")
-            else:
-                print(f"   ❌ {pkg}: {message}")
-                failed_packages.append(pkg)
-        except Exception as e:
-            print(f"   ❌ {pkg}: {str(e)}")
-            failed_packages.append(pkg)
-
-    assert not failed_packages, (
-        f"Failed to install the following packages on {container_name}: "
-        f"{', '.join(failed_packages)}"
-    )
-    print(f"✅ All {len(packages)} packages installed successfully on {container_name}")
+    try:
+        success, platform, message = package_management.install_package(container, package)
+        assert success, f"Package installation failed: {message}"
+        print(f"✅ {message}")
+        print(f"✅ Platform detected: {platform}")
+    except Exception as e:
+        pytest.fail(f"Failed to install {package}: {str(e)}")
 
 
 @pytest.mark.parametrize("container_name,container_type", all_containers)
@@ -455,21 +452,17 @@ def test_stop_server(container_name, container_type):
         pytest.fail(f"Failed to stop PostgreSQL server: {str(e)}")
 
 
-@pytest.mark.parametrize("container_name,container_type", all_containers)
-def test_package_uninstall(container_name, container_type):
-    """Step 8: Uninstall all installed packages"""
+@pytest.mark.parametrize("container_name,container_type,package", all_container_package_combinations)
+def test_package_uninstall(container_name, container_type, package):
+    """Step 8: Uninstall each package from ALL_PACKAGES / DEB_ALL_PACKAGES as a separate test"""
     if skip_cleanup:
         pytest.skip("Skipping uninstall: SKIP_CLEANUP=true")
 
     container_name = container_name.strip()
-    if not container_name:
-        pytest.skip("No container defined in env")
+    package = package.strip()
 
-    config = get_container_config(container_type)
-    packages = config["all_packages"]
-
-    if not packages:
-        pytest.skip(f"No packages defined for {container_type}")
+    if not container_name or not package:
+        pytest.skip("No container or package defined")
 
     try:
         container = client.containers.get(container_name)
@@ -478,27 +471,15 @@ def test_package_uninstall(container_name, container_type):
 
     assert container.status == "running"
 
-    print(f"\n--- Uninstalling {len(packages)} packages on {container_name} ({container_type}) ---")
+    print(f"\n--- Uninstalling {package} on {container_name} ({container_type}) ---")
 
-    failed_packages = []
-    for pkg in packages:
-        print(f"   Uninstalling {pkg}...")
-        try:
-            success, platform, message = package_management.uninstall_package(container, pkg)
-            if success:
-                print(f"   ✅ {pkg}: {message}")
-            else:
-                print(f"   ❌ {pkg}: {message}")
-                failed_packages.append(pkg)
-        except Exception as e:
-            print(f"   ❌ {pkg}: {str(e)}")
-            failed_packages.append(pkg)
-
-    assert not failed_packages, (
-        f"Failed to uninstall the following packages on {container_name}: "
-        f"{', '.join(failed_packages)}"
-    )
-    print(f"✅ All {len(packages)} packages uninstalled successfully on {container_name}")
+    try:
+        success, platform, message = package_management.uninstall_package(container, package)
+        assert success, f"Package uninstallation failed: {message}"
+        print(f"✅ {message}")
+        print(f"✅ Platform detected: {platform}")
+    except Exception as e:
+        pytest.fail(f"Failed to uninstall {package}: {str(e)}")
 
 
 @pytest.mark.parametrize("container_name,container_type", all_containers)

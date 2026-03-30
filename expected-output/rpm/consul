@@ -1,0 +1,9 @@
+/etc/consul.d/consul.json-dist.hcl
+/etc/sysconfig/consul
+/usr/bin/consul
+/usr/lib/systemd/system/consul.service
+/usr/lib/sysusers.d/consul-pgedge.conf
+/usr/lib/tmpfiles.d/consul.conf
+/usr/share/consul-sbom.json
+/usr/share/consul-sbom.json.asc
+/var/lib/consul

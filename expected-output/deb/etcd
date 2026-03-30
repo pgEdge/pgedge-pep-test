@@ -1,0 +1,11 @@
+/etc/etcd/etcd.conf
+/etc/logrotate.d/etcd
+/usr/bin/etcd
+/usr/bin/etcdctl
+/usr/bin/etcdutl
+/usr/lib/systemd/system/etcd.service
+/usr/lib/tmpfiles.d/etcd.conf
+/usr/share/doc/pgedge-etcd
+/usr/share/doc/pgedge-etcd/changelog.Debian.gz
+/usr/share/pgedge-etcd/etcd-sbom.json
+/usr/share/pgedge-etcd/etcd-sbom.json.asc

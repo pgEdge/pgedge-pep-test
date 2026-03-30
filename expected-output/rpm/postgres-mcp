@@ -4,7 +4,7 @@
 /usr/bin/pgedge-nla-kb-builder
 /usr/bin/pgedge-postgres-mcp
 /usr/lib/systemd/system/pgedge-postgres-mcp.service
-/usr/share/doc/pgedge-postgres-mcp/LICENCE.md
+/usr/share/doc/pgedge-postgres-mcp/LICENSE.md
 /usr/share/doc/pgedge-postgres-mcp/README.md
 /usr/share/pgedge-nla-kb-builder-sbom.json
 /usr/share/pgedge-nla-kb-builder-sbom.json.asc

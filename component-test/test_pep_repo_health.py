@@ -280,10 +280,15 @@ def test_verify_package_versions(container_name, container_type):
 
     print(f"\n--- Verifying package versions on {container_name} ({container_type}) ---")
 
+    # Only verify packages that were actually installed
+    installed_packages = set(config["all_packages"])
+
     failed_verifications = []
     skipped_packages = []
 
     for pkg, expected_version in version_map.items():
+        if pkg not in installed_packages:
+            continue
         if not expected_version:
             skipped_packages.append(pkg)
             continue

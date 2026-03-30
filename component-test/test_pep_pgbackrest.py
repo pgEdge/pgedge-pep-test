@@ -592,6 +592,16 @@ def test_pgbackrest_stanza_create(container_name, container_type):
 
     print(f"\n--- Creating pgBackRest stanza on {container_name} ---")
 
+    # Clean up any stale repository data from previous runs to prevent
+    # "backup and archive info files exist but do not match the database" error
+    container.exec_run(
+        f"bash -c 'rm -rf {pgbackrest_repo_path}/* && "
+        f"mkdir -p {pgbackrest_repo_path} && "
+        f"chown -R {pguser_val}:{pguser_val} {pgbackrest_repo_path}'",
+        user="root"
+    )
+    print(f"   Cleared stale pgBackRest repo at {pgbackrest_repo_path}")
+
     exit_code, output = container.exec_run(
         f"pgbackrest --stanza={pgbackrest_stanza} stanza-create",
         user=pguser_val

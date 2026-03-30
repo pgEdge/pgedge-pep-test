@@ -32,6 +32,7 @@ elif platform_filter == "deb":
 
 # Common configuration
 repo = os.getenv("REPO", "release")
+upgrade_repo = os.getenv("UPGRADE_REPO", "staging")
 skip_cleanup = os.getenv("SKIP_CLEANUP", "false").lower() == "true"
 
 # RAG Components - standalone packages (no PG version suffix)
@@ -170,6 +171,46 @@ def test_rag_component_install(container_name, container_type, component):
         print(f"✅ Platform detected: {platform}")
     except Exception as e:
         pytest.fail(f"Failed to install {component}: {str(e)}")
+
+
+@pytest.mark.parametrize("container_name,container_type,component", all_container_component_combinations)
+def test_rag_component_upgrade(container_name, container_type, component):
+    """Upgrade RAG component if UPGRADE=true"""
+    if os.getenv("UPGRADE", "false").lower() != "true":
+        pytest.skip("Skipping upgrade tests because UPGRADE=false in env")
+
+    container_name = container_name.strip()
+    component = component.strip()
+
+    if not container_name or not component:
+        pytest.skip("No container or component defined")
+
+    try:
+        container = client.containers.get(container_name)
+    except docker.errors.NotFound:
+        pytest.skip(f"Container {container_name} not found or not running.")
+
+    assert container.status == "running"
+
+    print(f"\n--- Upgrading {component} on {container_name} ({container_type}) ---")
+
+    # Switch to upgrade repo if needed
+    if upgrade_repo in ["staging", "daily"]:
+        try:
+            configure_repository.configure_pgedge_repository(container, upgrade_repo)
+        except Exception as e:
+            print(f"Warning: Could not switch to upgrade repo: {e}")
+
+    try:
+        success, platform, message = package_management.upgrade_package(container, component)
+        if not success:
+            if "already" in message.lower() or "newest" in message.lower():
+                pytest.skip(f"{component} is already at newest version")
+        assert success, f"Package upgrade failed: {message}"
+        print(f"✅ {message}")
+        print(f"✅ Platform detected: {platform}")
+    except Exception as e:
+        pytest.fail(f"Failed to upgrade {component}: {str(e)}")
 
 
 @pytest.mark.parametrize("container_name,container_type,component", all_container_component_combinations)

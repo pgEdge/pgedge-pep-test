@@ -32,6 +32,7 @@ elif platform_filter == "deb":
 
 # Common configuration
 repo = os.getenv("REPO", "release")
+upgrade_repo = os.getenv("UPGRADE_REPO", "staging")
 skip_cleanup = os.getenv("SKIP_CLEANUP", "false").lower() == "true"
 ace_version = os.getenv("PGEDGE_ACE_VERSION", "")
 
@@ -157,6 +158,49 @@ def test_component_install(container_name, container_type):
         print(f"✅ Platform detected: {platform}")
     except Exception as e:
         pytest.fail(f"Failed to install {ace_package}: {str(e)}")
+
+
+@pytest.mark.parametrize("container_name,container_type", all_containers)
+def test_component_upgrade(container_name, container_type):
+    """Upgrade component package if UPGRADE=true"""
+    if os.getenv("UPGRADE", "false").lower() != "true":
+        pytest.skip("Skipping upgrade tests because UPGRADE=false in env")
+
+    container_name = container_name.strip()
+    if not container_name:
+        pytest.skip("No container defined in env")
+
+    # Get container-specific configuration
+    config = get_container_config(container_type)
+    ace_package = config["ace_package"]
+
+    try:
+        container = client.containers.get(container_name)
+    except docker.errors.NotFound:
+        pytest.skip(f"Container {container_name} not found or not running.")
+
+    assert container.status == "running"
+
+    print(f"\n--- Upgrading {ace_package} on {container_name} ({container_type}) ---")
+
+    # Switch to upgrade repo if needed
+    if upgrade_repo in ["staging", "daily"]:
+        try:
+            configure_repository.configure_pgedge_repository(container, upgrade_repo)
+        except Exception as e:
+            print(f"Warning: Could not switch to upgrade repo: {e}")
+
+    # Use the package_management module to upgrade the package
+    try:
+        success, platform, message = package_management.upgrade_package(container, ace_package)
+        if not success:
+            if "already" in message.lower() or "newest" in message.lower():
+                pytest.skip(f"{ace_package} is already at newest version")
+        assert success, f"Package upgrade failed: {message}"
+        print(f"✅ {message}")
+        print(f"✅ Platform detected: {platform}")
+    except Exception as e:
+        pytest.fail(f"Failed to upgrade {ace_package}: {str(e)}")
 
 
 @pytest.mark.parametrize("container_name,container_type", all_containers)

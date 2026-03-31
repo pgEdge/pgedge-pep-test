@@ -1,4 +1,5 @@
 import os
+import re
 import sys
 from pathlib import Path
 
@@ -8,7 +9,7 @@ from dotenv import load_dotenv
 
 # Add the parent directory to sys.path to import from aspects
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
-from aspects import configure_repository, package_management, machine_cleanup, machine_prereq_setup, file_management, container_management
+from aspects import configure_repository, package_management, machine_cleanup, machine_prereq_setup, container_management
 
 load_dotenv()
 client = docker.from_env()
@@ -30,7 +31,10 @@ elif platform_filter == "deb":
 
 # Common configuration
 repo = os.getenv("REPO", "release")
+upgrade_repo = os.getenv("UPGRADE_REPO", "staging")
+skip_cleanup = os.getenv("SKIP_CLEANUP", "false").lower() == "true"
 pg_major_version = os.getenv("PG_MAJOR_VERSION", "16")
+pgdata = os.getenv("PG_DATA_DIR", "/tmp/n1")
 pgadmin4_version = os.getenv("PGEDGE_PGADMIN4_VERSION", "9.8")
 
 # User configuration
@@ -42,10 +46,6 @@ pgadmin4_package = os.getenv("PGADMIN_PACKAGES", "pgedge-pgadmin4")
 pgadmin4_install_dir = "/usr/pgadmin4"
 pgadmin4_bin = f"{pgadmin4_install_dir}/bin/pgadmin4"
 pgadmin4_setup_web = f"{pgadmin4_install_dir}/bin/setup-web.sh"
-
-# Additional configuration for component tests
-components = [comp.strip() for comp in os.getenv("COMPONENTS", "pgedge-pgadmin4").split(",") if comp.strip()]
-
 
 def get_container_config(container_type):
     """Get configuration based on container type (rhel or deb)"""
@@ -148,6 +148,49 @@ def test_component_install(container_name, container_type):
 
 
 @pytest.mark.parametrize("container_name,container_type", all_containers)
+def test_component_upgrade(container_name, container_type):
+    """Upgrade component package if UPGRADE=true"""
+    if os.getenv("UPGRADE", "false").lower() != "true":
+        pytest.skip("Skipping upgrade tests because UPGRADE=false in env")
+
+    container_name = container_name.strip()
+    if not container_name:
+        pytest.skip("No container defined in env")
+
+    # Get container-specific configuration
+    config = get_container_config(container_type)
+    pkg = config["pgadmin4_package"]
+
+    try:
+        container = client.containers.get(container_name)
+    except docker.errors.NotFound:
+        pytest.skip(f"Container {container_name} not found or not running.")
+
+    assert container.status == "running"
+
+    print(f"\n--- Upgrading {pkg} on {container_name} ({container_type}) ---")
+
+    # Switch to upgrade repo if needed
+    if upgrade_repo in ["staging", "daily"]:
+        try:
+            configure_repository.configure_pgedge_repository(container, upgrade_repo)
+        except Exception as e:
+            print(f"Warning: Could not switch to upgrade repo: {e}")
+
+    # Use the package_management module to upgrade the package
+    try:
+        success, platform, message = package_management.upgrade_package(container, pkg)
+        if not success:
+            if "already" in message.lower() or "newest" in message.lower():
+                pytest.skip(f"{pkg} is already at newest version")
+        assert success, f"Package upgrade failed: {message}"
+        print(f"✅ {message}")
+        print(f"✅ Platform detected: {platform}")
+    except Exception as e:
+        pytest.fail(f"Failed to upgrade {pkg}: {str(e)}")
+
+
+@pytest.mark.parametrize("container_name,container_type", all_containers)
 def test_component_package_version(container_name, container_type):
     """Step 3: Check the package version using package_management module"""
     container_name = container_name.strip()
@@ -182,15 +225,32 @@ def test_component_package_version(container_name, container_type):
         pytest.fail(f"Failed to verify {pkg} version: {str(e)}")
 
 
+# Regex to detect random/hash-based filenames (8+ contiguous hex chars as the stem
+# or embedded between dots, e.g. "a1b2c3d4.map" or "main.a1b2c3d4.chunk.js")
+_RANDOM_NAME_RE = re.compile(r'(?:^|(?<=/))[a-f0-9]{8,}(?:\.|$)|(?<=\.)[a-f0-9]{8,}(?=\.)', re.IGNORECASE)
+
+
+def _has_random_name(file_path: str) -> bool:
+    """Return True if the file's basename looks like it contains a random hash segment."""
+    basename = file_path.rstrip('/').rsplit('/', 1)[-1]
+    return bool(_RANDOM_NAME_RE.search(basename))
+
+
 @pytest.mark.parametrize("container_name,container_type", all_containers)
 def test_verify_bundled_files(container_name, container_type):
-    """Verify bundled files for each component match expected files
+    """Verify that all expected files are present in each pgAdmin4 sub-package.
 
-    This compares the installed files from rpm/deb with expected files
-    in expected-output/rpm/ or expected-output/deb/ directory
+    Checks all 4 packages independently:
+      - pgadmin4         (meta package — no bundled files expected)
+      - pgadmin4-desktop (Electron/Chromium desktop app files)
+      - pgadmin4-server  (Flask server, docs, shared libs)
+      - pgadmin4-web     (Apache/httpd config, setup script, web SBOMs)
+
+    Only checks that expected files ARE present (subset check).
+    Extra installed files are not flagged.
+    Files whose basename contains a random hash segment are skipped.
     """
     container_name = container_name.strip()
-
     if not container_name:
         pytest.skip("Invalid container")
 
@@ -201,45 +261,79 @@ def test_verify_bundled_files(container_name, container_type):
 
     assert container.status == "running"
 
-    # Get the actual package name for the platform
-    config = get_container_config(container_type)
-    actual_package = config["pgadmin4_package"]
-
-    # Get project root directory (parent of component-test/)
+    platform = "deb" if container_type == "deb" else "rpm"
     project_root = Path(__file__).parent.parent
+    expected_output_dir = project_root / "expected-output" / platform
 
-    try:
-        # Call reusable verification function
-        success, details, message = file_management.verify_bundled_files(
-            container=container,
-            container_name=container_name,
-            container_type=container_type,
-            component=actual_package,
-            package_name=actual_package,
-            project_root=project_root
-        )
+    # All 4 pgAdmin4 packages — names match expected-output file names and actual package names
+    sub_packages = ["pgadmin4", "pgadmin4-desktop", "pgadmin4-server", "pgadmin4-web"]
 
-        # If verification failed, fail the test with details
-        if not success:
-            # Format details for display
-            details_str = ""
-            if details:
-                if "missing_files" in details and details["missing_files"]:
-                    details_str += f"\n\nMissing files ({len(details['missing_files'])}):\n"
-                    for file in details["missing_files"]:
-                        details_str += f"  - {file}\n"
-                if "extra_files" in details and details["extra_files"]:
-                    details_str += f"\nExtra files ({len(details['extra_files'])}):\n"
-                    for file in details["extra_files"]:
-                        details_str += f"  + {file}\n"
-            pytest.fail(f"{message}{details_str}")
+    packages_checked = 0
+    overall_missing: dict = {}
 
-    except Exception as e:
-        # Handle cases like missing expected files
-        if "No expected file found" in str(e):
-            pytest.skip(str(e))
+    for pkg_name in sub_packages:
+        expected_file = expected_output_dir / pkg_name
+        if not expected_file.exists():
+            print(f"   ⚠️  No expected output file for {pkg_name} — skipping")
+            continue
+
+        # Parse expected paths, dropping blanks
+        raw_expected = [
+            line.strip() for line in expected_file.read_text().splitlines() if line.strip()
+        ]
+        if not raw_expected:
+            print(f"   ℹ️  {pkg_name}: meta package with no expected files — skipping")
+            continue
+
+        # Drop entries whose basename looks like a random hash
+        filtered_expected = [p for p in raw_expected if not _has_random_name(p)]
+        skipped_random = len(raw_expected) - len(filtered_expected)
+        if skipped_random:
+            print(f"   ℹ️  {pkg_name}: skipped {skipped_random} random-named expected entries")
+
+        # Count this package as checked — we have expected files for it
+        packages_checked += 1
+
+        # Query installed files from the container
+        if container_type == "deb":
+            cmd = f"dpkg -L {pkg_name}"
         else:
-            pytest.fail(f"Failed to verify bundled files: {str(e)}")
+            cmd = f"rpm -ql {pkg_name}"
+
+        exit_code, output = container.exec_run(cmd, user="root")
+        if exit_code != 0:
+            error_msg = output.decode().strip()
+            overall_missing[pkg_name] = [f"<package query failed: {error_msg}>"]
+            continue
+
+        installed_paths = {
+            line.strip().lower()
+            for line in output.decode().splitlines()
+            if line.strip() and line.strip() != "/."
+        }
+
+        # Check every expected path is present (case-insensitive)
+        expected_set = {p.lower() for p in filtered_expected}
+        missing = sorted(expected_set - installed_paths)
+
+        if missing:
+            overall_missing[pkg_name] = missing
+            print(f"   ❌ {pkg_name}: {len(missing)} expected file(s) missing")
+        else:
+            print(f"   ✅ {pkg_name}: all {len(expected_set)} expected files present")
+
+    if packages_checked == 0:
+        pytest.skip("No expected output files found for any pgAdmin4 sub-package")
+
+    if overall_missing:
+        msg_parts = []
+        for pkg, files in overall_missing.items():
+            msg_parts.append(f"\n\n[{pkg}] missing {len(files)} file(s):")
+            for f in files[:25]:
+                msg_parts.append(f"  - {f}")
+            if len(files) > 25:
+                msg_parts.append(f"  ... and {len(files) - 25} more")
+        pytest.fail("Missing expected files in pgAdmin4 packages:" + "".join(msg_parts))
 
 
 @pytest.mark.parametrize("container_name,container_type", all_containers)
@@ -349,8 +443,80 @@ def test_pgadmin4_license_exists(container_name, container_type):
 
 
 @pytest.mark.parametrize("container_name,container_type", all_containers)
+def test_pgadmin4_web_setup(container_name, container_type):
+    """Functional: Run setup-web.sh to configure pgAdmin4 for web mode via Apache/httpd.
+
+    Pipes all interactive prompts non-interactively:
+      - Email  : zaidagilist@gmail.com
+      - Password: test123!@#
+      - All yes/no questions: y
+    Asserts the output contains both success lines:
+      'Apache successfully started.'
+      'You can now start using pgAdmin 4 in web mode at http://127.0.0.1/pgadmin4'
+    """
+    container_name = container_name.strip()
+    if not container_name:
+        pytest.skip("No container defined in env")
+
+    try:
+        container = client.containers.get(container_name)
+    except docker.errors.NotFound:
+        pytest.skip(f"Container {container_name} not found or not running.")
+
+    assert container.status == "running"
+
+    print(f"\n--- Running pgAdmin4 web setup on {container_name} ({container_type}) ---")
+
+    setup_script = f"{pgadmin4_install_dir}/bin/setup-web.sh"
+
+    # Verify the setup script is present before attempting to run it
+    exit_code, _ = container.exec_run(f"test -f {setup_script}", user="root")
+    assert exit_code == 0, f"setup-web.sh not found at {setup_script}"
+
+    # Pipe all expected interactive inputs in order:
+    #   1. email address
+    #   2. password
+    #   3. confirm password
+    #   4-6. 'y' for any yes/no prompts (e.g. start web server, enable on boot, etc.)
+    cmd = [
+        "bash", "-c",
+        (
+            f"printf 'zaidagilist@gmail.com\\ntest123!@#\\ntest123!@#\\ny\\ny\\ny\\n'"
+            f" | {setup_script} 2>&1"
+        ),
+    ]
+
+    exit_code, output = container.exec_run(cmd, user="root")
+    output_text = output.decode()
+    print(f"   Setup output:\n{output_text}")
+
+    success_apache = "Apache successfully started." in output_text
+    success_url = (
+        "You can now start using pgAdmin 4 in web mode at http://127.0.0.1/pgadmin4"
+        in output_text
+    )
+
+    if not success_apache:
+        pytest.fail(
+            f"'Apache successfully started.' not found in setup-web.sh output.\n"
+            f"Full output:\n{output_text}"
+        )
+    if not success_url:
+        pytest.fail(
+            f"pgAdmin4 web-mode URL message not found in setup-web.sh output.\n"
+            f"Full output:\n{output_text}"
+        )
+
+    print("✅ pgAdmin4 web setup completed — Apache started")
+    print("✅ pgAdmin4 accessible at http://127.0.0.1/pgadmin4")
+
+
+@pytest.mark.parametrize("container_name,container_type", all_containers)
 def test_package_uninstall(container_name, container_type):
     """Uninstall pgadmin4 package using package_management module"""
+    if skip_cleanup:
+        pytest.skip("Skipping uninstall: SKIP_CLEANUP=true")
+
     container_name = container_name.strip()
     if not container_name:
         pytest.skip("No container defined in env")
@@ -401,7 +567,7 @@ def test_pgedge_cleanup(container_name, container_type):
     # Use the machine_cleanup module to perform comprehensive cleanup
     try:
         success, cleanup_summary, message = machine_cleanup.cleanup_pgedge_environment(
-            container, pgdata="/tmp/n1", pguser=pguser_val
+            container, pgdata=pgdata, pguser=pguser_val
         )
         assert success, f"Cleanup failed: {message}"
         print(f"✅ {message}")

@@ -1,0 +1,4 @@
+/etc/httpd/conf.d/pgadmin4.conf
+/usr/pgadmin4/bin/setup-web.sh
+/usr/pgadmin4/sbom-web.json
+/usr/pgadmin4/sbom-web.json.asc

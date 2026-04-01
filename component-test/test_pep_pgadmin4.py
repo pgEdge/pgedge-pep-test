@@ -229,11 +229,24 @@ def test_component_package_version(container_name, container_type):
 # or embedded between dots, e.g. "a1b2c3d4.map" or "main.a1b2c3d4.chunk.js")
 _RANDOM_NAME_RE = re.compile(r'(?:^|(?<=/))[a-f0-9]{8,}(?:\.|$)|(?<=\.)[a-f0-9]{8,}(?=\.)', re.IGNORECASE)
 
+# Regex to detect Python-version-specific paths inside the venv
+# e.g. /usr/pgadmin4/venv/lib/python3.13/... or /usr/pgadmin4/venv/bin/pip3.13
+_PYTHON_VERSION_RE = re.compile(r'/python3\.\d+(?:[/_.]|$)', re.IGNORECASE)
+
 
 def _has_random_name(file_path: str) -> bool:
     """Return True if the file's basename looks like it contains a random hash segment."""
     basename = file_path.rstrip('/').rsplit('/', 1)[-1]
     return bool(_RANDOM_NAME_RE.search(basename))
+
+
+def _has_python_version_path(file_path: str) -> bool:
+    """Return True if the path contains a Python minor-version component (e.g. python3.13).
+
+    These paths are venv implementation details that change with every Python minor
+    version bump and should not be part of the stable expected-output check.
+    """
+    return bool(_PYTHON_VERSION_RE.search(file_path))
 
 
 @pytest.mark.parametrize("container_name,container_type", all_containers)
@@ -265,16 +278,22 @@ def test_verify_bundled_files(container_name, container_type):
     project_root = Path(__file__).parent.parent
     expected_output_dir = project_root / "expected-output" / platform
 
-    # All 4 pgAdmin4 packages — names match expected-output file names and actual package names
-    sub_packages = ["pgadmin4", "pgadmin4-desktop", "pgadmin4-server", "pgadmin4-web"]
+    # Mapping: expected-output filename -> actual installed package name
+    # The pgedge packages use a "pgedge-" prefix that the expected-output filenames omit.
+    sub_packages = [
+        ("pgadmin4",         "pgedge-pgadmin4"),
+        ("pgadmin4-desktop", "pgedge-pgadmin4-desktop"),
+        ("pgadmin4-server",  "pgedge-pgadmin4-server"),
+        ("pgadmin4-web",     "pgedge-pgadmin4-web"),
+    ]
 
     packages_checked = 0
     overall_missing: dict = {}
 
-    for pkg_name in sub_packages:
-        expected_file = expected_output_dir / pkg_name
+    for expected_name, pkg_name in sub_packages:
+        expected_file = expected_output_dir / expected_name
         if not expected_file.exists():
-            print(f"   ⚠️  No expected output file for {pkg_name} — skipping")
+            print(f"   ⚠️  No expected output file for {expected_name} — skipping")
             continue
 
         # Parse expected paths, dropping blanks
@@ -282,19 +301,24 @@ def test_verify_bundled_files(container_name, container_type):
             line.strip() for line in expected_file.read_text().splitlines() if line.strip()
         ]
         if not raw_expected:
-            print(f"   ℹ️  {pkg_name}: meta package with no expected files — skipping")
+            print(f"   ℹ️  {expected_name}: meta package with no expected files — skipping")
             continue
 
-        # Drop entries whose basename looks like a random hash
-        filtered_expected = [p for p in raw_expected if not _has_random_name(p)]
+        # Drop entries whose basename looks like a random hash or contain a
+        # Python minor-version component (e.g. venv/lib/python3.13/...) — these
+        # change with every Python version bump and are not stable expected paths.
+        filtered_expected = [
+            p for p in raw_expected
+            if not _has_random_name(p) and not _has_python_version_path(p)
+        ]
         skipped_random = len(raw_expected) - len(filtered_expected)
         if skipped_random:
-            print(f"   ℹ️  {pkg_name}: skipped {skipped_random} random-named expected entries")
+            print(f"   ℹ️  {expected_name}: skipped {skipped_random} version-specific or random-named expected entries")
 
         # Count this package as checked — we have expected files for it
         packages_checked += 1
 
-        # Query installed files from the container
+        # Query installed files from the container using the real package name
         if container_type == "deb":
             cmd = f"dpkg -L {pkg_name}"
         else:
@@ -318,9 +342,9 @@ def test_verify_bundled_files(container_name, container_type):
 
         if missing:
             overall_missing[pkg_name] = missing
-            print(f"   ❌ {pkg_name}: {len(missing)} expected file(s) missing")
+            print(f"   ❌ {pkg_name} ({expected_name}): {len(missing)} expected file(s) missing")
         else:
-            print(f"   ✅ {pkg_name}: all {len(expected_set)} expected files present")
+            print(f"   ✅ {pkg_name} ({expected_name}): all {len(expected_set)} expected files present")
 
     if packages_checked == 0:
         pytest.skip("No expected output files found for any pgAdmin4 sub-package")

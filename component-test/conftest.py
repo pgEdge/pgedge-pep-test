@@ -136,6 +136,15 @@ def detect_component_from_test_file(config):
             'rhel_package_default': f'pgedge-pgaudit_{os.getenv("PG_MAJOR_VERSION", "16")}',
             'deb_package_env': 'DEB_PGAUDIT_PACKAGE',
             'deb_package_default': f'pgedge-postgresql-{os.getenv("PG_MAJOR_VERSION", "16")}-pgaudit'
+        },
+        'test_pep_pgadmin4': {
+            'name': 'pgAdmin4',
+            'version_env': 'PGEDGE_PGADMIN4_VERSION',
+            'version_default': '',
+            'rhel_package_env': 'PGADMIN_PACKAGES',
+            'rhel_package_default': 'pgedge-pgadmin4',
+            'deb_package_env': 'PGADMIN_PACKAGES',
+            'deb_package_default': 'pgedge-pgadmin4'
         }
     }
 

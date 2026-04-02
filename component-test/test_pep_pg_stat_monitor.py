@@ -37,15 +37,13 @@ skip_cleanup = os.getenv("SKIP_CLEANUP", "false").lower() == "true"
 pgport = os.getenv("PG_PORT", "5432")
 pgdata = os.getenv("PG_DATA_DIR", "/tmp/n1")
 pg_major_version = os.getenv("PG_MAJOR_VERSION", "16")
-lolor_version = os.getenv(f"PGEDGE_LOLOR_{pg_major_version}_VERSION", "1.2.2")
+pg_stat_monitor_version = os.getenv(f"PGEDGE_PG_STAT_MONITOR_{pg_major_version}_VERSION", "")
 
 # Binary tests — set these when the component ships a standalone binary in /usr/bin.
 # If the component does not ship a binary, leave these as empty strings and the
 # test_binary_version / test_binary_stripped tests will be skipped automatically.
-# Example:  component_binary = "/usr/bin/pgedge-anonymizer"
-#           component_version = os.getenv("PGEDGE_ANONYMIZER_VERSION", "")
-component_binary = os.getenv("COMPONENT_BINARY", "")        # e.g. "/usr/bin/pgedge-anonymizer"
-component_version = os.getenv("COMPONENT_BINARY_VERSION", "")  # e.g. "1.0.0-beta2"
+component_binary = os.getenv("COMPONENT_BINARY", "")
+component_version = os.getenv("COMPONENT_BINARY_VERSION", "")
 
 # User configuration
 rhel_pguser = os.getenv("PG_USER", "postgres")
@@ -54,28 +52,26 @@ deb_pguser = os.getenv("DEB_PG_USER", "postgres")
 # RHEL-specific configuration
 rhel_pgbin = os.getenv("PG_BIN_PATH", f"/usr/pgsql-{pg_major_version}/bin")
 rhel_pg_path = os.getenv("RHEL_PG_PATH", f"/usr/pgsql-{pg_major_version}")
-# component specific change required.
-# In case of any decoupled component we don't required _{pg_major_version} postfix
-rhel_lolor_package = os.getenv("LOLOR_PACKAGE", f"pgedge-lolor_{pg_major_version}")
+rhel_pg_stat_monitor_package = os.getenv("PG_STAT_MONITOR_PACKAGE", f"pgedge-pg-stat-monitor_{pg_major_version}")
 rhel_bundled_files = os.getenv(
-    "LOLOR_BUNDLED_FILES",
-    f"/usr/pgsql-{pg_major_version}/lib/lolor.so,/usr/pgsql-{pg_major_version}/share/extension/lolor--1.0--1.1.sql,/usr/pgsql-{pg_major_version}/share/extension/lolor--1.0.sql,/usr/pgsql-{pg_major_version}/share/extension/lolor--1.1--1.2.sql,/usr/pgsql-{pg_major_version}/share/extension/lolor--1.1.sql,/usr/pgsql-{pg_major_version}/share/extension/lolor--1.2.sql,/usr/pgsql-{pg_major_version}/share/extension/lolor.control"
+    "PG_STAT_MONITOR_BUNDLED_FILES",
+    ""
 ).split(",")
 
 # Debian-specific configuration
 deb_pgbin = os.getenv("DEB_PG_BIN_PATH", f"/usr/lib/postgresql/{pg_major_version}/bin")
 deb_pg_path = os.getenv("DEB_PG_PATH", f"/usr/lib/postgresql/{pg_major_version}")
 deb_pg_share_path = os.getenv("DEB_PG_SHARE_PATH", f"/usr/share/postgresql/{pg_major_version}")
-deb_lolor_package = os.getenv("DEB_LOLOR_PACKAGE", f"pgedge-postgresql-{pg_major_version}-lolor")
+deb_pg_stat_monitor_package = os.getenv("DEB_PG_STAT_MONITOR_PACKAGE", f"pgedge-postgresql-{pg_major_version}-pg-stat-monitor")
 deb_bundled_files = os.getenv(
-    "DEB_LOLOR_BUNDLED_FILES",
-    f"{deb_pg_path}/lib/lolor.so,{deb_pg_share_path}/extension/lolor--1.0--1.1.sql,{deb_pg_share_path}/extension/lolor--1.0.sql,{deb_pg_share_path}/extension/lolor--1.1--1.2.sql,{deb_pg_share_path}/extension/lolor--1.1.sql,{deb_pg_share_path}/extension/lolor--1.2.sql,{deb_pg_share_path}/extension/lolor.control"
+    "DEB_PG_STAT_MONITOR_BUNDLED_FILES",
+    ""
 ).split(",")
 
 # Additional configuration for extension tests
 check_extensions = os.getenv("CHECK_EXTENSIONS", "true").lower() == "true"
-base_extensions = [ext.strip() for ext in os.getenv("BASE_EXTENSIONS", "lolor").split(",") if ext.strip()]
-components = [comp.strip() for comp in os.getenv("COMPONENTS", f"pgedge-lolor_{pg_major_version}").split(",") if comp.strip()]
+base_extensions = [ext.strip() for ext in os.getenv("BASE_EXTENSIONS", "pg_stat_monitor").split(",") if ext.strip()]
+components = [comp.strip() for comp in os.getenv("COMPONENTS", f"pgedge-pg-stat-monitor_{pg_major_version}").split(",") if comp.strip()]
 
 
 def get_container_config(container_type):
@@ -84,14 +80,14 @@ def get_container_config(container_type):
         return {
             "pgbin": rhel_pgbin.rstrip('/'),
             "pguser": rhel_pguser,
-            "lolor_package": rhel_lolor_package,
+            "pg_stat_monitor_package": rhel_pg_stat_monitor_package,
             "bundled_files": rhel_bundled_files
         }
     else:  # deb
         return {
             "pgbin": deb_pgbin.rstrip('/'),
             "pguser": deb_pguser,
-            "lolor_package": deb_lolor_package,
+            "pg_stat_monitor_package": deb_pg_stat_monitor_package,
             "bundled_files": deb_bundled_files
         }
 
@@ -154,14 +150,14 @@ def test_configure_repository(container_name, container_type):
 
 @pytest.mark.parametrize("container_name,container_type", all_containers)
 def test_component_install(container_name, container_type):
-    """Step 2: Install pgedge-lolor using package_management module"""
+    """Step 2: Install pgedge-pg-stat-monitor using package_management module"""
     container_name = container_name.strip()
     if not container_name:
         pytest.skip("No container defined in env")
 
     # Get container-specific configuration
     config = get_container_config(container_type)
-    lolor_package = config["lolor_package"]
+    pg_stat_monitor_package = config["pg_stat_monitor_package"]
 
     try:
         container = client.containers.get(container_name)
@@ -170,16 +166,16 @@ def test_component_install(container_name, container_type):
 
     assert container.status == "running"
 
-    print(f"\n--- Installing {lolor_package} on {container_name} ({container_type}) ---")
+    print(f"\n--- Installing {pg_stat_monitor_package} on {container_name} ({container_type}) ---")
 
     # Use the package_management module to install the package
     try:
-        success, platform, message = package_management.install_package(container, lolor_package)
+        success, platform, message = package_management.install_package(container, pg_stat_monitor_package)
         assert success, f"Package installation failed: {message}"
         print(f"✅ {message}")
         print(f"✅ Platform detected: {platform}")
     except Exception as e:
-        pytest.fail(f"Failed to install {lolor_package}: {str(e)}")
+        pytest.fail(f"Failed to install {pg_stat_monitor_package}: {str(e)}")
 
 
 @pytest.mark.parametrize("container_name,container_type", all_containers)
@@ -194,7 +190,7 @@ def test_component_upgrade(container_name, container_type):
 
     # Get container-specific configuration
     config = get_container_config(container_type)
-    lolor_package = config["lolor_package"]
+    pg_stat_monitor_package = config["pg_stat_monitor_package"]
 
     try:
         container = client.containers.get(container_name)
@@ -203,7 +199,7 @@ def test_component_upgrade(container_name, container_type):
 
     assert container.status == "running"
 
-    print(f"\n--- Upgrading {lolor_package} on {container_name} ({container_type}) ---")
+    print(f"\n--- Upgrading {pg_stat_monitor_package} on {container_name} ({container_type}) ---")
 
     # Switch to upgrade repo if needed
     if upgrade_repo in ["staging", "daily"]:
@@ -214,15 +210,15 @@ def test_component_upgrade(container_name, container_type):
 
     # Use the package_management module to upgrade the package
     try:
-        success, platform, message = package_management.upgrade_package(container, lolor_package)
+        success, platform, message = package_management.upgrade_package(container, pg_stat_monitor_package)
         if not success:
             if "already" in message.lower() or "newest" in message.lower():
-                pytest.skip(f"{lolor_package} is already at newest version")
+                pytest.skip(f"{pg_stat_monitor_package} is already at newest version")
         assert success, f"Package upgrade failed: {message}"
         print(f"✅ {message}")
         print(f"✅ Platform detected: {platform}")
     except Exception as e:
-        pytest.fail(f"Failed to upgrade {lolor_package}: {str(e)}")
+        pytest.fail(f"Failed to upgrade {pg_stat_monitor_package}: {str(e)}")
 
 
 @pytest.mark.parametrize("container_name,container_type", all_containers)
@@ -232,12 +228,12 @@ def test_component_package_version(container_name, container_type):
     if not container_name:
         pytest.skip("No container defined in env")
 
-    if not lolor_version:
-        pytest.skip("No LOLOR_VERSION defined in env, skipping version check")
+    if not pg_stat_monitor_version:
+        pytest.skip("No PG_STAT_MONITOR_VERSION defined in env, skipping version check")
 
     # Get container-specific configuration
     config = get_container_config(container_type)
-    lolor_package = config["lolor_package"]
+    pg_stat_monitor_package = config["pg_stat_monitor_package"]
 
     try:
         container = client.containers.get(container_name)
@@ -246,18 +242,18 @@ def test_component_package_version(container_name, container_type):
 
     assert container.status == "running"
 
-    print(f"\n--- Verifying {lolor_package} version on {container_name} ({container_type}) ---")
+    print(f"\n--- Verifying {pg_stat_monitor_package} version on {container_name} ({container_type}) ---")
 
     # Use the package_management module to verify the package version
     try:
         success, platform, installed_version, message = package_management.verify_package_version(
-            container, lolor_package, lolor_version
+            container, pg_stat_monitor_package, pg_stat_monitor_version
         )
         assert success, f"Version verification failed: {message}"
         print(f"✅ {message}")
         print(f"✅ Platform detected: {platform}")
     except Exception as e:
-        pytest.fail(f"Failed to verify {lolor_package} version: {str(e)}")
+        pytest.fail(f"Failed to verify {pg_stat_monitor_package} version: {str(e)}")
 
 @pytest.mark.parametrize("container_name,container_type", all_containers)
 def test_verify_bundled_files(container_name, container_type):
@@ -280,7 +276,7 @@ def test_verify_bundled_files(container_name, container_type):
 
     # Get the actual package name for the platform
     config = get_container_config(container_type)
-    actual_package = config["lolor_package"]
+    actual_package = config["pg_stat_monitor_package"]
 
     # Get project root directory (parent of component-test/)
     project_root = Path(__file__).parent.parent
@@ -388,7 +384,7 @@ def test_verify_sbom(container_name, container_type):
 
 @pytest.mark.parametrize("container_name,container_type", all_containers)
 def test_init_cluster(container_name, container_type):
-    """Initialize PostgreSQL cluster with LOLOR-specific GUC parameters using pg_server_management module"""
+    """Initialize PostgreSQL cluster with Pg Stat Monitor-specific GUC parameters using pg_server_management module"""
     container_name = container_name.strip()
     if not container_name:
         pytest.skip("No container defined in env")
@@ -407,12 +403,9 @@ def test_init_cluster(container_name, container_type):
 
     print(f"\n--- Initializing cluster on {container_name} ---")
 
-    # Define LOLOR-specific GUC parameters
+    # Define Pg Stat Monitor-specific GUC parameters
     guc_parameters = {
-        "shared_preload_libraries": "'lolor'",
-        "wal_level": "logical",
-        "max_replication_slots": "10",
-        "max_wal_senders": "10"
+        "shared_preload_libraries": "'pg_stat_monitor'"
     }
 
     # Use the pg_server_management module to initialize cluster
@@ -537,7 +530,7 @@ def test_extension_version(container_name, container_type, extension):
     """Verify the installed extension version matches the expected version via \\dx in psql.
 
     Runs psql \\dx and greps for the extension name, then checks that the
-    reported version column matches lolor_version.
+    reported version column matches pg_stat_monitor_version.
     Skipped when extension check is disabled.
     """
     if not check_extensions:
@@ -581,11 +574,11 @@ def test_extension_version(container_name, container_type, extension):
     assert len(columns) >= 2, f"Unexpected \\dx row format: {ext_line}"
     installed_version = columns[1].strip()
 
-    assert lolor_version in installed_version, (
+    assert pg_stat_monitor_version in installed_version, (
         f"Extension '{extension}' version mismatch: "
-        f"expected '{lolor_version}', got '{installed_version}'"
+        f"expected '{pg_stat_monitor_version}', got '{installed_version}'"
     )
-    print(f"✅ Extension '{extension}' version {installed_version} matches expected {lolor_version}")
+    print(f"✅ Extension '{extension}' version {installed_version} matches expected {pg_stat_monitor_version}")
 
 
 @pytest.mark.parametrize("container_name,container_type", all_containers)
@@ -706,7 +699,7 @@ def test_stop_server(container_name, container_type):
 
 @pytest.mark.parametrize("container_name,container_type", all_containers)
 def test_package_uninstall(container_name, container_type):
-    """Uninstall lolor package using package_management module"""
+    """Uninstall pg_stat_monitor package using package_management module"""
     if skip_cleanup:
         pytest.skip("Skipping uninstall: SKIP_CLEANUP=true")
 
@@ -716,7 +709,7 @@ def test_package_uninstall(container_name, container_type):
 
     # Get container-specific configuration
     config = get_container_config(container_type)
-    lolor_package = config["lolor_package"]
+    pg_stat_monitor_package = config["pg_stat_monitor_package"]
 
     try:
         container = client.containers.get(container_name)
@@ -725,16 +718,16 @@ def test_package_uninstall(container_name, container_type):
 
     assert container.status == "running"
 
-    print(f"\n--- Uninstalling {lolor_package} on {container_name} ({container_type}) ---")
+    print(f"\n--- Uninstalling {pg_stat_monitor_package} on {container_name} ({container_type}) ---")
 
     # Use the package_management module to uninstall the package
     try:
-        success, platform, message = package_management.uninstall_package(container, lolor_package)
+        success, platform, message = package_management.uninstall_package(container, pg_stat_monitor_package)
         assert success, f"Package uninstallation failed: {message}"
         print(f"✅ {message}")
         print(f"✅ Platform detected: {platform}")
     except Exception as e:
-        pytest.fail(f"Failed to uninstall {lolor_package}: {str(e)}")
+        pytest.fail(f"Failed to uninstall {pg_stat_monitor_package}: {str(e)}")
 
 
 @pytest.mark.parametrize("container_name,container_type", all_containers)

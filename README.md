@@ -96,7 +96,7 @@ Run without arguments to enter interactive menu mode:
 |--------|-------------|--------|
 | `--pgver` | PostgreSQL versions to test | `16`, `17`, `18`, `all` |
 | `--platforms` | Target platforms | `rpm`, `deb`, `all` |
-| `--components` | Components to test | `server`, `snowflake`, `pgbouncer`, `pgbackrest`, `postgrest`, `lolor`, `postgis`, `system_stats`, `vectorizer`, `zerodowntime`, `mcp`, `rag`, `ace`, `repo_health`, `docloader`, `anonymizer`, `pg_vectorize`, `pg_tokenizer`, `vchord_bm25`, `pgaudit`, `pgadmin4`, `patroni`, `all` |
+| `--components` | Components to test | `server`, `snowflake`, `pgbouncer`, `pgbackrest`, `postgrest`, `lolor`, `postgis`, `system_stats`, `vectorizer`, `zerodowntime`, `mcp`, `rag`, `ace`, `repo_health`, `docloader`, `anonymizer`, `pg_vectorize`, `pg_tokenizer`, `vchord_bm25`, `pgaudit`, `pgadmin4`, `patroni`, `pg_stat_monitor`, `all` |
 | `--repo` | Repository to use | `release`, `staging`, `daily` |
 | `--help`, `-h` | Show help message | - |
 
@@ -157,6 +157,7 @@ pgedge-pep-test/
 │   ├── test_pep_vchord_bm25.py
 │   ├── test_pep_pgaudit.py
 │   ├── test_pep_patroni.py
+│   ├── test_pep_pg_stat_monitor.py
 │   └── test_integration_zerodowntime.py
 ├── configuration/           # Environment configuration files
 │   ├── config16.env
@@ -219,4 +220,5 @@ pgedge-pep-test/
 | `vchord_bm25`  | BM25 vector chord search                 |
 | `pgaudit`      | Audit logging extension                  |
 | `patroni`      | High-availability solution for PostgreSQL |
+| `pg_stat_monitor` | PostgreSQL query performance monitoring extension |
 

@@ -53,7 +53,7 @@ OPTIONS:
   --components <names>    Components to test (default: all)
                           Values: server, snowflake, pgbouncer, pgbackrest, postgrest, lolor, postgis,
                                   system_stats, vectorizer, zerodowntime, mcp, rag, ace, repo_health,
-                                  docloader, anonymizer, pg_vectorize, pg_tokenizer, vchord_bm25, pgaudit, pgadmin4, patroni, all
+                                  docloader, anonymizer, pg_vectorize, pg_tokenizer, vchord_bm25, pgaudit, pgadmin4, patroni, pg_stat_monitor, all
                           Comma-separated for multiple: lolor,postgis
 
   --repo <repository>     Repository to use (default: staging)
@@ -150,7 +150,8 @@ else
   echo "20) pgaudit - pgaudit extension tests"
   echo "21) pgadmin4 - pgAdmin4 tests"
   echo "22) patroni - Patroni HA tests"
-  echo "23) all - All tests"
+  echo "23) pg_stat_monitor - Pg Stat Monitor tests"
+  echo "24) all - All tests"
   echo ""
   echo "💡 You can specify multiple components separated by commas"
   echo "   Example: lolor,postgis,system_stats"
@@ -183,7 +184,7 @@ fi
 
 # Determine test types to run
 if [[ "$test_type_choice" == "all" || "$test_type_choice" == "All" ]]; then
-  test_type_list=(server snowflake pgbouncer pgbackrest postgrest lolor postgis system_stats vectorizer zerodowntime mcp rag ace repo_health docloader anonymizer pg_vectorize pg_tokenizer vchord_bm25 pgaudit pgadmin4 patroni)
+  test_type_list=(server snowflake pgbouncer pgbackrest postgrest lolor postgis system_stats vectorizer zerodowntime mcp rag ace repo_health docloader anonymizer pg_vectorize pg_tokenizer vchord_bm25 pgaudit pgadmin4 patroni pg_stat_monitor)
 else
   # Split by comma and trim whitespace
   IFS=',' read -ra test_type_list <<< "$test_type_choice"
@@ -360,6 +361,9 @@ for env in "${env_list[@]}"; do
             patroni)
               run_pytest_with_tracking "component-test/test_pep_patroni.py" "$env" "rpm" "patroni"
               ;;
+            pg_stat_monitor)
+              run_pytest_with_tracking "component-test/test_pep_pg_stat_monitor.py" "$env" "rpm" "pg_stat_monitor"
+              ;;
             *)
               echo "⚠️ Unknown test type: $test_type"
               ;;
@@ -433,6 +437,9 @@ for env in "${env_list[@]}"; do
               ;;
             patroni)
               run_pytest_with_tracking "component-test/test_pep_patroni.py" "$env" "deb" "patroni"
+              ;;
+            pg_stat_monitor)
+              run_pytest_with_tracking "component-test/test_pep_pg_stat_monitor.py" "$env" "deb" "pg_stat_monitor"
               ;;
             *)
               echo "⚠️ Unknown test type: $test_type"
@@ -1093,7 +1100,7 @@ cat > "test-logs/index.html" <<EOF
 EOF
 
 # Add card for each component that has reports
-for test_type in server snowflake pgbouncer pgbackrest postgrest lolor postgis system_stats vectorizer zerodowntime mcp rag ace repo_health docloader anonymizer pg_vectorize pg_tokenizer vchord_bm25 pgaudit pgadmin4 patroni; do
+for test_type in server snowflake pgbouncer pgbackrest postgrest lolor postgis system_stats vectorizer zerodowntime mcp rag ace repo_health docloader anonymizer pg_vectorize pg_tokenizer vchord_bm25 pgaudit pgadmin4 patroni pg_stat_monitor; do
   component_dir="test-logs/${test_type}"
   if [[ -d "$component_dir" ]]; then
     # Check for any HTML reports

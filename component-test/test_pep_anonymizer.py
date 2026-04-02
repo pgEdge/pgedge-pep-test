@@ -350,6 +350,82 @@ def test_verify_sbom(container_name, container_type):
 
 
 @pytest.mark.parametrize("container_name,container_type", all_containers)
+def test_binary_version(container_name, container_type):
+    """Verify that /usr/bin/pgedge-anonymizer --version reports PGEDGE_ANONYMIZER_VERSION.
+
+    Expected output format:
+      pgedge-anonymizer <version> (built <timestamp>)
+    """
+    container_name = container_name.strip()
+    if not container_name:
+        pytest.skip("No container defined in env")
+
+    if not anonymizer_version:
+        pytest.skip("No PGEDGE_ANONYMIZER_VERSION defined in env, skipping binary version check")
+
+    try:
+        container = client.containers.get(container_name)
+    except docker.errors.NotFound:
+        pytest.skip(f"Container {container_name} not found or not running.")
+
+    assert container.status == "running"
+
+    binary = "/usr/bin/pgedge-anonymizer"
+    print(f"\n--- Checking {binary} --version on {container_name} ({container_type}) ---")
+
+    exit_code, output = container.exec_run(
+        ["bash", "-c", f"{binary} version 2>&1"],
+        user="root",
+    )
+    assert exit_code == 0, f"'{binary} version' failed: {output.decode().strip()}"
+
+    version_output = output.decode().strip()
+    print(f"   Output: {version_output}")
+
+    assert anonymizer_version in version_output, (
+        f"Expected version '{anonymizer_version}' not found in binary output:\n  {version_output}"
+    )
+    print(f"✅ pgedge-anonymizer reports version {anonymizer_version}")
+
+
+@pytest.mark.parametrize("container_name,container_type", all_containers)
+def test_binary_stripped(container_name, container_type):
+    """Verify that /usr/bin/pgedge-anonymizer is a stripped ELF binary.
+
+    Runs 'file /usr/bin/pgedge-anonymizer' and asserts the output contains
+    the word 'stripped', confirming debug symbols were removed at build time.
+    """
+    container_name = container_name.strip()
+    if not container_name:
+        pytest.skip("No container defined in env")
+
+    try:
+        container = client.containers.get(container_name)
+    except docker.errors.NotFound:
+        pytest.skip(f"Container {container_name} not found or not running.")
+
+    assert container.status == "running"
+
+    binary = "/usr/bin/pgedge-anonymizer"
+    print(f"\n--- Checking ELF strip status of {binary} on {container_name} ({container_type}) ---")
+
+    exit_code, output = container.exec_run(
+        ["bash", "-c", f"file {binary} 2>&1"],
+        user="root",
+    )
+    assert exit_code == 0, f"'file {binary}' failed: {output.decode().strip()}"
+
+    file_output = output.decode().strip()
+    print(f"   Output: {file_output}")
+
+    assert "stripped" in file_output.lower(), (
+        f"Binary {binary} does not appear to be stripped.\n"
+        f"'file' output: {file_output}"
+    )
+    print(f"✅ {binary} is stripped")
+
+
+@pytest.mark.parametrize("container_name,container_type", all_containers)
 def test_package_uninstall(container_name, container_type):
     """Uninstall anonymizer package using package_management module"""
     if skip_cleanup:

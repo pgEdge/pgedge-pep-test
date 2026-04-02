@@ -39,6 +39,14 @@ pgdata = os.getenv("PG_DATA_DIR", "/tmp/n1")
 pg_major_version = os.getenv("PG_MAJOR_VERSION", "16")
 lolor_version = os.getenv(f"PGEDGE_LOLOR_{pg_major_version}_VERSION", "1.2.2")
 
+# Binary tests — set these when the component ships a standalone binary in /usr/bin.
+# If the component does not ship a binary, leave these as empty strings and the
+# test_binary_version / test_binary_stripped tests will be skipped automatically.
+# Example:  component_binary = "/usr/bin/pgedge-anonymizer"
+#           component_version = os.getenv("PGEDGE_ANONYMIZER_VERSION", "")
+component_binary = os.getenv("COMPONENT_BINARY", "")        # e.g. "/usr/bin/pgedge-anonymizer"
+component_version = os.getenv("COMPONENT_BINARY_VERSION", "")  # e.g. "1.0.0-beta2"
+
 # User configuration
 rhel_pguser = os.getenv("PG_USER", "postgres")
 deb_pguser = os.getenv("DEB_PG_USER", "postgres")
@@ -523,9 +531,89 @@ def test_create_extensions(container_name, container_type, extension):
     print(f"✅ Successfully created extension {normalized_ext}")
 
 
+@pytest.mark.parametrize("container_name,container_type", all_containers)
+def test_binary_version(container_name, container_type):
+    """Verify that the component binary reports the expected version string.
+
+    Skipped when COMPONENT_BINARY or COMPONENT_BINARY_VERSION is not set.
+    Set the env vars when the component ships a standalone binary, e.g.:
+      COMPONENT_BINARY=/usr/bin/pgedge-anonymizer
+      COMPONENT_BINARY_VERSION=1.0.0-beta2
+
+    Expected output format:
+      <binary-name> <version> (built <timestamp>)
+    """
+    if not component_binary or not component_version:
+        pytest.skip(
+            "COMPONENT_BINARY or COMPONENT_BINARY_VERSION not set — skipping binary version check"
+        )
+
+    container_name = container_name.strip()
+    if not container_name:
+        pytest.skip("No container defined in env")
+
+    try:
+        container = client.containers.get(container_name)
+    except docker.errors.NotFound:
+        pytest.skip(f"Container {container_name} not found or not running.")
+
+    assert container.status == "running"
+
+    print(f"\n--- Checking {component_binary} version on {container_name} ({container_type}) ---")
+
+    exit_code, output = container.exec_run(
+        ["bash", "-c", f"{component_binary} version 2>&1"],
+        user="root",
+    )
+    assert exit_code == 0, f"'{component_binary} version' failed: {output.decode().strip()}"
+
+    version_output = output.decode().strip()
+    print(f"   Output: {version_output}")
+
+    assert component_version in version_output, (
+        f"Expected version '{component_version}' not found in binary output:\n  {version_output}"
+    )
+    print(f"✅ {component_binary} reports version {component_version}")
 
 
+@pytest.mark.parametrize("container_name,container_type", all_containers)
+def test_binary_stripped(container_name, container_type):
+    """Verify that the component binary is a stripped ELF binary.
 
+    Skipped when COMPONENT_BINARY is not set.
+    Runs 'file <binary>' and asserts the output contains 'stripped',
+    confirming debug symbols were removed at build time.
+    """
+    if not component_binary:
+        pytest.skip("COMPONENT_BINARY not set — skipping binary strip check")
+
+    container_name = container_name.strip()
+    if not container_name:
+        pytest.skip("No container defined in env")
+
+    try:
+        container = client.containers.get(container_name)
+    except docker.errors.NotFound:
+        pytest.skip(f"Container {container_name} not found or not running.")
+
+    assert container.status == "running"
+
+    print(f"\n--- Checking ELF strip status of {component_binary} on {container_name} ({container_type}) ---")
+
+    exit_code, output = container.exec_run(
+        ["bash", "-c", f"file {component_binary} 2>&1"],
+        user="root",
+    )
+    assert exit_code == 0, f"'file {component_binary}' failed: {output.decode().strip()}"
+
+    file_output = output.decode().strip()
+    print(f"   Output: {file_output}")
+
+    assert "stripped" in file_output.lower(), (
+        f"Binary {component_binary} does not appear to be stripped.\n"
+        f"'file' output: {file_output}"
+    )
+    print(f"✅ {component_binary} is stripped")
 
 
 @pytest.mark.parametrize("container_name,container_type", all_containers)

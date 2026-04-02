@@ -46,14 +46,14 @@ deb_pguser = os.getenv("DEB_PG_USER", "postgres")
 # RHEL-specific configuration
 rhel_pgbin = os.getenv("PG_BIN_PATH", f"/usr/pgsql-{pg_major_version}/bin")
 rhel_pg_path = os.getenv("RHEL_PG_PATH", f"/usr/pgsql-{pg_major_version}")
-# Anonymizer is a standalone/decoupled package (no PG version suffix)
-rhel_anonymizer_package = os.getenv("ANONYMIZER_PACKAGE", "pgedge-anonymizer")
 
 # Debian-specific configuration
 deb_pgbin = os.getenv("DEB_PG_BIN_PATH", f"/usr/lib/postgresql/{pg_major_version}/bin")
 deb_pg_path = os.getenv("DEB_PG_PATH", f"/usr/lib/postgresql/{pg_major_version}")
 deb_pg_share_path = os.getenv("DEB_PG_SHARE_PATH", f"/usr/share/postgresql/{pg_major_version}")
-deb_anonymizer_package = os.getenv("DEB_ANONYMIZER_PACKAGE", "pgedge-anonymizer")
+
+# Anonymizer is a decoupled package — same name on both RHEL and DEB
+anonymizer_package = os.getenv("ANONYMIZER_PACKAGE", "pgedge-anonymizer")
 
 # Decoupled components SBOM path
 decoupled_sbom_path = os.getenv("DECOUPLED_COMPONENTS_SBOM", "")
@@ -69,13 +69,13 @@ def get_container_config(container_type):
         return {
             "pgbin": rhel_pgbin.rstrip('/'),
             "pguser": rhel_pguser,
-            "anonymizer_package": rhel_anonymizer_package,
+            "anonymizer_package": anonymizer_package,
         }
     else:  # deb
         return {
             "pgbin": deb_pgbin.rstrip('/'),
             "pguser": deb_pguser,
-            "anonymizer_package": deb_anonymizer_package,
+            "anonymizer_package": anonymizer_package,
         }
 
 
@@ -302,7 +302,7 @@ def test_verify_sbom(container_name, container_type):
 
     assert container.status == "running"
 
-    sbom_dir = decoupled_sbom_path
+    sbom_dir = f"{decoupled_sbom_path}/{anonymizer_package}"
 
     if container_type == "rhel":
         print(f"\n--- Verifying SBOM on {container_name} (RHEL) in {sbom_dir} ---")
@@ -316,9 +316,9 @@ def test_verify_sbom(container_name, container_type):
 
         exit_code, output = container.exec_run(
             f"sh -c 'cd {sbom_dir} && sq verify "
-            f"--signature-file pgedge-anonymizer-sbom.json.asc "
+            f"--signature-file {anonymizer_package}-sbom.json.asc "
             f"--signer-file pgedge-rsa.pub "
-            f"pgedge-anonymizer-sbom.json'",
+            f"{anonymizer_package}-sbom.json'",
             user="root",
         )
         output_str = output.decode().replace('\xa0', ' ')
@@ -337,8 +337,8 @@ def test_verify_sbom(container_name, container_type):
         exit_code, output = container.exec_run(
             f"sh -c 'cd {sbom_dir} && sq verify "
             f"{_sq_signer_flag} /etc/apt/keyrings/pgedge-rsa.gpg "
-            f"{_sq_sig_flag} pgedge-anonymizer-sbom.json.asc "
-            f"pgedge-anonymizer-sbom.json'",
+            f"{_sq_sig_flag} {anonymizer_package}-sbom.json.asc "
+            f"{anonymizer_package}-sbom.json'",
             user="root",
         )
         output_str = output.decode().replace('\xa0', ' ')

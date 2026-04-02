@@ -145,6 +145,15 @@ def detect_component_from_test_file(config):
             'rhel_package_default': 'pgedge-pgadmin4',
             'deb_package_env': 'PGADMIN_PACKAGES',
             'deb_package_default': 'pgedge-pgadmin4'
+        },
+        'test_pep_patroni': {
+            'name': 'Patroni',
+            'version_env': 'PGEDGE_PATRONI_VERSION',
+            'version_default': '4.1.0',
+            'rhel_package_env': 'PATRONI_PACKAGE',
+            'rhel_package_default': 'pgedge-patroni-etcd',
+            'deb_package_env': 'DEB_PATRONI_PACKAGE',
+            'deb_package_default': 'pgedge-patroni'
         }
     }
 

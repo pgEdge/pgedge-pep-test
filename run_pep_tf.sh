@@ -283,6 +283,32 @@ for env in "${env_list[@]}"; do
   source "$envfile"
   set +a
 
+  # Load containers from containers_list.json (overrides empty CONTAINERS/DEB_CONTAINERS from env file)
+  CONTAINERS_JSON="${ENV_DIR}/containers_list.json"
+  if [[ -f "$CONTAINERS_JSON" ]]; then
+    _loaded_containers=$(python3 -c "
+import json, sys
+try:
+    d = json.load(open('$CONTAINERS_JSON'))
+    print(','.join(c['name'] for c in d.get('rhel', []) if c.get('enabled')))
+except Exception as e:
+    sys.stderr.write(f'Warning: failed to parse containers_list.json: {e}\n')
+    print('')
+")
+    _loaded_deb_containers=$(python3 -c "
+import json, sys
+try:
+    d = json.load(open('$CONTAINERS_JSON'))
+    print(','.join(c['name'] for c in d.get('deb', []) if c.get('enabled')))
+except Exception as e:
+    sys.stderr.write(f'Warning: failed to parse containers_list.json: {e}\n')
+    print('')
+")
+    [[ -n "$_loaded_containers" ]] && export CONTAINERS="$_loaded_containers"
+    [[ -n "$_loaded_deb_containers" ]] && export DEB_CONTAINERS="$_loaded_deb_containers"
+    unset _loaded_containers _loaded_deb_containers
+  fi
+
   # Apply repo override if specified via CLI
   if [[ -n "$REPO_OVERRIDE" ]]; then
     export REPO="$REPO_OVERRIDE"

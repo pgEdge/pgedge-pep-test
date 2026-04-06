@@ -322,7 +322,7 @@ def test_verify_sbom(container_name, container_type):
 
     assert container.status == "running"
 
-    sbom_dir = decoupled_sbom_path
+    sbom_dir = f"{decoupled_sbom_path}/pgedge-rag-server"
 
     if container_type == "rhel":
         print(f"\n--- Verifying SBOM on {container_name} (RHEL) in {sbom_dir} ---")

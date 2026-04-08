@@ -50,8 +50,8 @@ def get_os_info():
     return os_id.lower(), major
 
 
-def setup_debian():
-    print("\n=== Debian/Ubuntu Prerequisites ===")
+def setup_debian(os_id="", major=""):
+    print(f"\n=== Debian/Ubuntu Prerequisites (os={os_id or '?'}, major={major or '?'}) ===")
     run("apt-get update")
     run("apt-get install -y python3")
     run("apt-get install -y curl")
@@ -59,7 +59,23 @@ def setup_debian():
     run("apt-get install -y gnupg2")
     run("apt-get install -y lsb-release")
     run("apt-get install -y file")
-    run("apt-get install -y sq")
+
+    # Install sq (Sequoia PGP CLI) — method varies by distro version
+    if os_id == "ubuntu":
+        # universe repo required on older Ubuntu
+        run("apt-get install -y software-properties-common")
+        run("add-apt-repository -y universe")
+        run("apt-get update")
+        run("apt-get install -y sq")
+    elif os_id == "debian" and major == "11":
+        # sq is only in backports on Debian 11 (Bullseye)
+        run("echo 'deb http://deb.debian.org/debian bullseye-backports main' "
+            "> /etc/apt/sources.list.d/backports.list")
+        run("apt-get update")
+        run("apt-get install -y -t bullseye-backports sq")
+    else:
+        # Debian 12+ has sq in main repos
+        run("apt-get install -y sq")
 
     # Add pgEdge repo
     cmd = (
@@ -211,7 +227,7 @@ def install_prerequisites_on_container(container):
     # Call the appropriate setup function
     try:
         if os_id in ["debian", "ubuntu"]:
-            setup_debian()
+            setup_debian(os_id=os_id, major=major)
         elif os_id in ["rhel", "redhat", "rhelserver"]:
             if major == "9":
                 setup_rhel9()
@@ -255,7 +271,7 @@ def main():
     os_id, major = get_os_info()
 
     if os_id in ["debian", "ubuntu"]:
-        setup_debian()
+        setup_debian(os_id=os_id, major=major)
 
     elif os_id in ["rhel", "redhat", "rhelserver"]:
         if major == "9":

@@ -76,15 +76,25 @@ def copy_config_files_to_container(
         if not os.path.exists(local_file):
             raise Exception(f"Local config file not found: {local_file}. (Resolved from local_config_dir: {local_config_dir})")
 
-        # Copy file from host to container using docker cp
-        result = subprocess.run(
-            ["docker", "cp", local_file, container_dest],
-            capture_output=True,
-            text=True
-        )
+        # Copy file to target: use SFTP for SSH executors, docker cp for containers
+        from aspects.ssh_executor import SSHExecutor as _SSHExecutor
+        if isinstance(container, _SSHExecutor):
+            remote_dest = f"{container_config_dir}/{dest_file}"
+            # Ensure remote directory exists first (exec_run already called above)
+            container.put_file(local_file, remote_dest)
+            result_ok = True
+        else:
+            result = subprocess.run(
+                ["docker", "cp", local_file, container_dest],
+                capture_output=True,
+                text=True
+            )
+            result_ok = result.returncode == 0
+            if not result_ok:
+                raise Exception(f"Failed to copy {source_file} to container: {result.stderr}")
 
-        if result.returncode != 0:
-            raise Exception(f"Failed to copy {source_file} to container: {result.stderr}")
+        if not result_ok:
+            raise Exception(f"Failed to copy {source_file} to target")
 
         print(f" Copied {source_file} as {dest_file} to {container_config_dir}/")
 

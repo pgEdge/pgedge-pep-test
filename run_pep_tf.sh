@@ -11,6 +11,7 @@ PGVER=""
 PLATFORMS=""
 COMPONENTS=""
 REPO_OVERRIDE=""
+TARGET="docker"   # default: local Docker containers
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -31,6 +32,11 @@ while [[ $# -gt 0 ]]; do
       ;;
     --repo)
       REPO_OVERRIDE="$2"
+      CLI_MODE=true
+      shift 2
+      ;;
+    --target)
+      TARGET="$2"
       CLI_MODE=true
       shift 2
       ;;
@@ -58,6 +64,12 @@ OPTIONS:
 
   --repo <repository>     Repository to use (default: staging)
                           Values: release, staging, daily
+
+  --target <target>       Execution target (default: docker)
+                          Values: docker, aws
+                          docker: run against local Docker containers (containers_list.json)
+                          aws:    run against live AWS EC2 instances (aws_instances.json)
+                          Key files for AWS must exist under keys/ (gitignored).
 
   --help, -h              Show this help message and exit
 
@@ -202,6 +214,7 @@ echo "=========================================="
 echo "Environments: ${env_list[*]}"
 echo "Platforms: ${platform_list[*]}"
 echo "Test types: ${test_type_list[*]}"
+echo "Target: ${TARGET}"
 if [[ -n "$REPO_OVERRIDE" ]]; then
   echo "Repo override: $REPO_OVERRIDE"
 fi
@@ -283,10 +296,43 @@ for env in "${env_list[@]}"; do
   source "$envfile"
   set +a
 
-  # Load containers from containers_list.json (overrides empty CONTAINERS/DEB_CONTAINERS from env file)
-  CONTAINERS_JSON="${ENV_DIR}/containers_list.json"
-  if [[ -f "$CONTAINERS_JSON" ]]; then
+  # Load target instances — Docker containers or AWS EC2 instances
+  if [[ "$TARGET" == "aws" ]]; then
+    # ── AWS mode ────────────────────────────────────────────────────────────
+    AWS_INSTANCES_JSON="${ENV_DIR}/aws_instances.json"
+    if [[ ! -f "$AWS_INSTANCES_JSON" ]]; then
+      echo "❌ aws_instances.json not found at ${AWS_INSTANCES_JSON}"
+      exit 1
+    fi
     _loaded_containers=$(python3 -c "
+import json, sys
+try:
+    d = json.load(open('$AWS_INSTANCES_JSON'))
+    print(','.join(c['name'] for c in d.get('rhel', []) if c.get('enabled')))
+except Exception as e:
+    sys.stderr.write(f'Warning: failed to parse aws_instances.json: {e}\n')
+    print('')
+")
+    _loaded_deb_containers=$(python3 -c "
+import json, sys
+try:
+    d = json.load(open('$AWS_INSTANCES_JSON'))
+    print(','.join(c['name'] for c in d.get('deb', []) if c.get('enabled')))
+except Exception as e:
+    sys.stderr.write(f'Warning: failed to parse aws_instances.json: {e}\n')
+    print('')
+")
+    [[ -n "$_loaded_containers" ]] && export CONTAINERS="$_loaded_containers"
+    [[ -n "$_loaded_deb_containers" ]] && export DEB_CONTAINERS="$_loaded_deb_containers"
+    export AWS_MODE=true
+    echo "   🌐 AWS mode: CONTAINERS=${CONTAINERS}  DEB_CONTAINERS=${DEB_CONTAINERS}"
+    unset _loaded_containers _loaded_deb_containers
+  else
+    # ── Docker mode (default) ────────────────────────────────────────────────
+    # Load containers from containers_list.json (overrides empty CONTAINERS/DEB_CONTAINERS from env file)
+    CONTAINERS_JSON="${ENV_DIR}/containers_list.json"
+    if [[ -f "$CONTAINERS_JSON" ]]; then
+      _loaded_containers=$(python3 -c "
 import json, sys
 try:
     d = json.load(open('$CONTAINERS_JSON'))
@@ -295,7 +341,7 @@ except Exception as e:
     sys.stderr.write(f'Warning: failed to parse containers_list.json: {e}\n')
     print('')
 ")
-    _loaded_deb_containers=$(python3 -c "
+      _loaded_deb_containers=$(python3 -c "
 import json, sys
 try:
     d = json.load(open('$CONTAINERS_JSON'))
@@ -304,9 +350,11 @@ except Exception as e:
     sys.stderr.write(f'Warning: failed to parse containers_list.json: {e}\n')
     print('')
 ")
-    [[ -n "$_loaded_containers" ]] && export CONTAINERS="$_loaded_containers"
-    [[ -n "$_loaded_deb_containers" ]] && export DEB_CONTAINERS="$_loaded_deb_containers"
-    unset _loaded_containers _loaded_deb_containers
+      [[ -n "$_loaded_containers" ]] && export CONTAINERS="$_loaded_containers"
+      [[ -n "$_loaded_deb_containers" ]] && export DEB_CONTAINERS="$_loaded_deb_containers"
+      unset _loaded_containers _loaded_deb_containers
+    fi
+    export AWS_MODE=false
   fi
 
   # Apply repo override if specified via CLI

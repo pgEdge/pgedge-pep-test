@@ -6,20 +6,20 @@
     { "name": "auto-rocky9-arm",   "description": "Rocky Linux 9  / ARM64",  "enabled": true  },
     { "name": "auto-rocky10-arm",  "description": "Rocky Linux 10 / ARM64",  "enabled": true },
     { "name": "auto-alma9-arm",    "description": "AlmaLinux 9    / ARM64",  "enabled": true },
-    { "name": "auto-alma10-arm",   "description": "AlmaLinux 10   / ARM64",  "enabled": true },
-    { "name": "auto-oel9-arm",     "description": "Oracle Linux 9 / ARM64",  "enabled": true },
+    { "name": "auto-alma10-arm",   "description": "AlmaLinux 10   / ARM64",  "enabled": false },
+    { "name": "auto-oel9-arm",     "description": "Oracle Linux 9 / ARM64",  "enabled": false },
     { "name": "auto-oel10-arm",    "description": "Oracle Linux 10/ ARM64",  "enabled": true },
     { "name": "my-rocky9-amd",     "description": "Rocky Linux 9  / AMD64",  "enabled": true },
-    { "name": "auto-alma9-amd",    "description": "AlmaLinux 9    / AMD64",  "enabled": true },
-    { "name": "auto-oel9-amd",     "description": "Oracle Linux 9 / AMD64",  "enabled": true }
+    { "name": "auto-alma9-amd",    "description": "AlmaLinux 9    / AMD64",  "enabled": false },
+    { "name": "auto-oel9-amd",     "description": "Oracle Linux 9 / AMD64",  "enabled": false }
   ],
 
   "deb": [
     { "name": "auto-ubuntu2204-arm", "description": "Ubuntu 22.04 LTS / ARM64", "enabled": true  },
     { "name": "auto-ubuntu2404-arm", "description": "Ubuntu 24.04 LTS / ARM64", "enabled": false },
-    { "name": "auto-debian11",       "description": "Debian 11 Bullseye / AMD64","enabled": false },
-    { "name": "auto-debian12-arm",   "description": "Debian 12 Bookworm / ARM64","enabled": true  },
-    { "name": "auto-debian13-arm",   "description": "Debian 13 Trixie  / ARM64", "enabled": true },
+    { "name": "auto-debian11",       "description": "Debian 11 Bullseye / ARM64","enabled": true },
+    { "name": "auto-debian12-arm",   "description": "Debian 12 Bookworm / ARM64","enabled": false  },
+    { "name": "auto-debian13-arm",   "description": "Debian 13 Trixie  / ARM64", "enabled": false },
     { "name": "auto-debian13-amd",   "description": "Debian 13 Trixie  / AMD64", "enabled": true }
   ]
 }

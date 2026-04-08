@@ -1,4 +1,5 @@
 import os
+import sys
 import pytest
 from dotenv import load_dotenv
 
@@ -11,6 +12,33 @@ except ImportError:
 
 # Load environment variables
 load_dotenv()
+
+# ── AWS_MODE: replace docker.from_env() with AWSInstanceClient ──────────────
+# When AWS_MODE=true every test file's `client = docker.from_env()` call
+# returns an AWSInstanceClient that delegates to SSHExecutor.  No test file
+# changes are required.
+if os.getenv("AWS_MODE", "false").lower() == "true":
+    sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
+    import docker
+    from aspects.aws_client import AWSInstanceClient
+
+    _aws_client_singleton = None
+
+    def _aws_from_env(**kwargs):
+        global _aws_client_singleton
+        if _aws_client_singleton is None:
+            _aws_client_singleton = AWSInstanceClient()
+        return _aws_client_singleton
+
+    docker.from_env = _aws_from_env
+
+    # Clean up SSH connections at the end of the session
+    @pytest.fixture(scope="session", autouse=True)
+    def _close_aws_connections():
+        yield
+        if _aws_client_singleton is not None:
+            _aws_client_singleton.close()
+# ────────────────────────────────────────────────────────────────────────────
 
 
 def detect_component_from_test_file(config):

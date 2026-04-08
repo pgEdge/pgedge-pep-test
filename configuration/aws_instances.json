@@ -1,0 +1,108 @@
+{
+  "_comment": "AWS EC2 instance registry for pgedge-pep-test regression runs.",
+  "_usage": "Set 'enabled: true' to include an instance in AWS test runs.",
+  "_key_security": "Never commit .pem key files. Prefer SSH agent (ssh-add) or AWS_SSH_KEY_PATH env var. If using a file, store it in keys/ (gitignored).",
+  "_key_resolution": "key_file resolution order: explicit path in this file → AWS_SSH_KEY_PATH env var → SSH agent (ssh-add).",
+
+  "rhel": [
+    {
+      "name":        "z_RHEL9AMD",
+      "host":        "ec2-13-234-225-52.ap-south-1.compute.amazonaws.com",
+      "username":    "rocky",
+      "key_file":    "",
+      "description": "Rocky Linux 9 / ap-south-1",
+      "enabled":     true
+    },
+    {
+      "name":        "z_Rocky9_ARM",
+      "host":        "ec2-3-111-170-196.ap-south-1.compute.amazonaws.com",
+      "username":    "rocky",
+      "key_file":    "",
+      "description": "Rocky Linux 9 ARM / ap-south-1",
+      "enabled":     true
+    },
+    {
+      "name":        "z_Rocky10_AMD",
+      "host":        "ec2-13-203-218-60.ap-south-1.compute.amazonaws.com",
+      "username":    "rocky",
+      "key_file":    "",
+      "description": "Rocky Linux 10 AMD / ap-south-1",
+      "enabled":     true
+    },
+    {
+      "name":        "z_Rocky10_AMD_FIPS",
+      "host":        "ec2-3-110-164-205.ap-south-1.compute.amazonaws.com",
+      "username":    "root",
+      "key_file":    "",
+      "description": "Rocky Linux 10 AMD FIPS / ap-south-1",
+      "enabled":     true
+    }
+  ],
+
+  "deb": [
+    {
+      "name":        "z_Debian13_AMD",
+      "host":        "ec2-3-110-84-181.ap-south-1.compute.amazonaws.com",
+      "username":    "admin",
+      "key_file":    "",
+      "description": "Debian 13 / ap-south-1",
+      "enabled":     true
+    },
+    {
+      "name":        "z_Debian12_AMD",
+      "host":        "ec2-13-234-31-21.ap-south-1.compute.amazonaws.com",
+      "username":    "admin",
+      "key_file":    "",
+      "description": "Debian 12 AMD / ap-south-1",
+      "enabled":     false
+    },
+    {
+      "name":        "z_Debian12_ARM",
+      "host":        "ec2-13-232-45-226.ap-south-1.compute.amazonaws.com",
+      "username":    "admin",
+      "key_file":    "",
+      "description": "Debian 12 ARM / ap-south-1",
+      "enabled":     false
+    },
+    {
+      "name":        "z_Debain11_AMD",
+      "host":        "ec2-13-127-38-243.ap-south-1.compute.amazonaws.com",
+      "username":    "admin",
+      "key_file":    "",
+      "description": "Debian 11 ARM / ap-south-1",
+      "enabled":     false
+    },
+    {
+      "name":        "z_Ubuntu22.04_AMD",
+      "host":        "ec2-13-204-255-140.ap-south-1.compute.amazonaws.com",
+      "username":    "ubuntu",
+      "key_file":    "",
+      "description": "Ubuntu 22.04 AMD / ap-south-1",
+      "enabled":     false
+    },
+    {
+      "name":        "z_Ubuntu 24.04 LTS Pro2",
+      "host":        "ec2-13-201-121-234.ap-south-1.compute.amazonaws.com",
+      "username":    "ubuntu",
+      "key_file":    "",
+      "description": "Ubuntu 24.04 LTS Pro2 / ap-south-1",
+      "enabled":     false
+    },
+    {
+      "name":        "z_Ubuntu2404_AMD",
+      "host":        "ec2-3-109-4-66.ap-south-1.compute.amazonaws.com",
+      "username":    "ubuntu",
+      "key_file":    "",
+      "description": "Ubuntu 24.04 AMD / ap-south-1",
+      "enabled":     false
+    },
+    {
+      "name":        "z_Ubuntu2404_ARM",
+      "host":        "ec2-3-110-79-34.ap-south-1.compute.amazonaws.com",
+      "username":    "ubuntu",
+      "key_file":    "",
+      "description": "Ubuntu 24.04 ARM / ap-south-1",
+      "enabled":     false
+    }
+  ]
+}

@@ -72,12 +72,19 @@ class SSHExecutor:
 
         for attempt in range(self._max_retries):
             try:
-                _, stdout, _ = self._client.exec_command(
-                    cmd, get_pty=True, timeout=timeout
+                _, stdout, stderr = self._client.exec_command(
+                    cmd, timeout=timeout
                 )
                 stdout.channel.settimeout(timeout)
-                exit_code = stdout.channel.recv_exit_status()
+                # Read stdout first — recv_exit_status() blocks until the channel
+                # is closed, which the server only does after all output is flushed.
+                # Calling recv_exit_status() before read() causes a deadlock when
+                # the PTY/pipe buffer is full.
                 output = stdout.read()
+                err_output = stderr.read()
+                exit_code = stdout.channel.recv_exit_status()
+                if err_output:
+                    output = output + err_output
                 return exit_code, output
             except (paramiko.SSHException, OSError, EOFError) as exc:
                 if attempt < self._max_retries - 1:

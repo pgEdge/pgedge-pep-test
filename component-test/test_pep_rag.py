@@ -355,9 +355,8 @@ def test_verify_sbom(container_name, container_type):
 
         # Verify SBOM signature using the distro keyring
         # Detect sq signer flag (older sq uses --signer-cert, newer uses --signer-file)
+        machine_prereq_setup.ensure_sq_installed(container)
         _sq_rc, _sq_help = container.exec_run("sq verify --help 2>&1", user="root")
-        if _sq_rc != 0:
-            pytest.skip(f"'sq' not installed on {container_name} — run test_install_prerequisites first")
         _sq_signer_flag = "--signer-file" if b"--signer-file" in _sq_help else "--signer-cert"
         _sq_sig_flag = "--signature-file" if b"--signature-file" in _sq_help else "--detached"
         exit_code, output = container.exec_run(

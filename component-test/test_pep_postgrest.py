@@ -392,7 +392,8 @@ def test_verify_sbom(container_name, container_type):
 
     assert container.status == "running"
 
-    sbom_dir = decoupled_sbom_path
+    sbom_dir = f"{decoupled_sbom_path}/{postgrest_package}"
+    sbom_name = postgrest_package.removeprefix("pgedge-")
 
     if container_type == "rhel":
         print(f"\n--- Verifying SBOM on {container_name} (RHEL) in {sbom_dir} ---")
@@ -408,9 +409,9 @@ def test_verify_sbom(container_name, container_type):
         # Verify SBOM signature
         exit_code, output = container.exec_run(
             f"sh -c 'cd {sbom_dir} && sq verify "
-            f"--signature-file postgrest-sbom.json.asc "
+            f"--signature-file {sbom_name}-sbom.json.asc "
             f"--signer-file pgedge-rsa.pub "
-            f"postgrest-sbom.json'",
+            f"{sbom_name}-sbom.json'",
             user="root",
         )
         output_str = output.decode().replace('\xa0', ' ')
@@ -425,14 +426,15 @@ def test_verify_sbom(container_name, container_type):
 
         # Verify SBOM signature using the distro keyring
         # Detect sq signer flag (older sq uses --signer-cert, newer uses --signer-file)
-        _, _sq_help = container.exec_run("sq verify --help 2>&1", user="root")
+        machine_prereq_setup.ensure_sq_installed(container)
+        _sq_rc, _sq_help = container.exec_run("sq verify --help 2>&1", user="root")
         _sq_signer_flag = "--signer-file" if b"--signer-file" in _sq_help else "--signer-cert"
         _sq_sig_flag = "--signature-file" if b"--signature-file" in _sq_help else "--detached"
         exit_code, output = container.exec_run(
             f"sh -c 'cd {sbom_dir} && sq verify "
             f"{_sq_signer_flag} /etc/apt/keyrings/pgedge-rsa.gpg "
-            f"{_sq_sig_flag} postgrest-sbom.json.asc "
-            f"postgrest-sbom.json'",
+            f"{_sq_sig_flag} {sbom_name}-sbom.json.asc "
+            f"{sbom_name}-sbom.json'",
             user="root",
         )
         output_str = output.decode().replace('\xa0', ' ')

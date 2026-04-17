@@ -5,8 +5,8 @@
 /usr/lib/tmpfiles.d/pgedge-postgrest.conf
 /usr/share/licenses/pgedge-postgrest
 /usr/share/licenses/pgedge-postgrest/LICENSE
-/usr/share/postgrest-sbom.json
-/usr/share/postgrest-sbom.json.asc
+/usr/share/pgedge-postgrest/postgrest-sbom.json
+/usr/share/pgedge-postgrest/postgrest-sbom.json.asc
 /var/lib/pgedge
 /var/lib/pgedge/postgrest
 /var/log/pgedge

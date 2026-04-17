@@ -191,6 +191,15 @@ def detect_component_from_test_file(config):
             'rhel_package_default': f'pgedge-pg-stat-monitor_{os.getenv("PG_MAJOR_VERSION", "16")}',
             'deb_package_env': 'DEB_PG_STAT_MONITOR_PACKAGE',
             'deb_package_default': f'pgedge-postgresql-{os.getenv("PG_MAJOR_VERSION", "16")}-pg-stat-monitor'
+        },
+        'test_pep_ai_db_workbench': {
+            'name': 'AI DB Workbench',
+            'version_env': 'PGEDGE_AI_DBA_VERSION',
+            'version_default': '1.0.0-alpha3',
+            'rhel_package_env': 'AI_DBA_COMPONENTS',
+            'rhel_package_default': 'pgedge-ai-dba-server,pgedge-ai-dba-alerter,pgedge-ai-dba-collector,pgedge-ai-dba-client',
+            'deb_package_env': 'AI_DBA_COMPONENTS',
+            'deb_package_default': 'pgedge-ai-dba-server,pgedge-ai-dba-alerter,pgedge-ai-dba-collector,pgedge-ai-dba-client'
         }
     }
 

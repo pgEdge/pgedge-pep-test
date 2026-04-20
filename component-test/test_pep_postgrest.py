@@ -1,3 +1,4 @@
+import base64
 import os
 import sys
 import time
@@ -566,7 +567,7 @@ def test_check_connection(container_name, container_type):
 
 
 @pytest.mark.parametrize("container_name,container_type", all_containers)
-def test_postgrest_execute_setup_sql(container_name, container_type):
+def test_postgrest_setup_sql(container_name, container_type):
     """Execute sql/postgrest.sql to create authenticator role and anon role"""
     container_name = container_name.strip()
     if not container_name:
@@ -585,25 +586,29 @@ def test_postgrest_execute_setup_sql(container_name, container_type):
 
     print(f"\n--- Executing postgrest.sql on {container_name} ({container_type}) ---")
 
-    # Copy sql/postgrest.sql into the container
+    # Copy sql/postgrest.sql into the container (skip if already present — e.g. on AWS re-runs)
     project_root = Path(__file__).parent.parent.resolve()
     sql_file = project_root / "sql" / "postgrest.sql"
 
-    try:
-        success, files_copied, message = file_management.copy_config_files_to_container(
-            container=container,
-            container_name=container_name,
-            local_config_dir=str(sql_file.parent),
-            container_config_dir="/tmp",
-            file_mapping={"postgrest.sql": "postgrest.sql"},
-            owner=pguser_val,
-            group=pguser_val,
-            permissions="644"
-        )
-        assert success, f"Failed to copy postgrest.sql: {message}"
-        print(f"✅ Copied postgrest.sql to container")
-    except Exception as e:
-        pytest.fail(f"Failed to copy postgrest.sql: {str(e)}")
+    check_rc, _ = container.exec_run(["bash", "-c", "test -f /tmp/postgrest.sql"], user="root")
+    if check_rc == 0:
+        print(f"✅ /tmp/postgrest.sql already exists on container, skipping copy")
+    else:
+        try:
+            success, files_copied, message = file_management.copy_config_files_to_container(
+                container=container,
+                container_name=container_name,
+                local_config_dir=str(sql_file.parent),
+                container_config_dir="/tmp",
+                file_mapping={"postgrest.sql": "postgrest.sql"},
+                owner=pguser_val,
+                group=pguser_val,
+                permissions="644"
+            )
+            assert success, f"Failed to copy postgrest.sql: {message}"
+            print(f"✅ Copied postgrest.sql to container")
+        except Exception as e:
+            pytest.fail(f"Failed to copy postgrest.sql: {str(e)}")
 
     # Execute the SQL file
     exit_code, output = container.exec_run(
@@ -672,10 +677,26 @@ def test_postgrest_start_service(container_name, container_type):
     assert exit_code == 0, f"Failed to update postgrest.conf: {output.decode()}"
     print(f"✅ Updated {postgrest_conf} (db name=postgres, password=postgres, server-port={postgrest_port})")
 
-    # Start PostgREST as pgedge user in the background, mimicking the systemd service
+    # Start PostgREST as pgedge user in the background.
+    # Shell-level approaches (nohup/setsid/& echo done) hang on RHEL AWS because sudo
+    # with `Defaults use_pty` allocates a PTY pair — bash keeps the PTY slave at a high
+    # fd (e.g. fd255) and every child inherits it.  sudo's PTY relay blocks until ALL
+    # processes with the slave open exit, so stdout.read() in SSHExecutor never returns.
+    # Fix: Python Popen with close_fds=True exhaustively closes ALL inherited fds
+    # (including fd255) before exec, and start_new_session=True detaches the session.
+    _py = (
+        f"import subprocess,os,pwd\n"
+        f"pw=pwd.getpwnam('{postgrest_service_user}')\n"
+        f"def _f():os.setgid(pw.pw_gid);os.setuid(pw.pw_uid)\n"
+        f"log=open('{postgrest_log_file}','a')\n"
+        f"subprocess.Popen(['{postgrest_bin}','{postgrest_conf}'],"
+        f"cwd='{postgrest_workdir}',stdin=open('/dev/null'),"
+        f"stdout=log,stderr=log,close_fds=True,start_new_session=True,preexec_fn=_f)\n"
+    )
+    _enc = base64.b64encode(_py.encode()).decode()
     exit_code, output = container.exec_run(
-        f"bash -c 'cd {postgrest_workdir} && nohup {postgrest_bin} {postgrest_conf} >> {postgrest_log_file} 2>&1 &'",
-        user=postgrest_service_user
+        f"bash -c 'echo {_enc} | base64 -d | python3'",
+        user="root"
     )
     assert exit_code == 0, f"Failed to start PostgREST: {output.decode()}"
 
@@ -746,25 +767,29 @@ def test_postgrest_load_northwind(container_name, container_type):
 
     print(f"\n--- Loading Northwind database on {container_name} ({container_type}) ---")
 
-    # Copy utillities/northwind.sql into the container
+    # Copy utillities/northwind.sql into the container (skip if already present — e.g. on AWS re-runs)
     project_root = Path(__file__).parent.parent.resolve()
     northwind_file = project_root / "utillities" / "northwind.sql"
 
-    try:
-        success, files_copied, message = file_management.copy_config_files_to_container(
-            container=container,
-            container_name=container_name,
-            local_config_dir=str(northwind_file.parent),
-            container_config_dir="/tmp",
-            file_mapping={"northwind.sql": "northwind.sql"},
-            owner=pguser_val,
-            group=pguser_val,
-            permissions="644"
-        )
-        assert success, f"Failed to copy northwind.sql: {message}"
-        print(f"✅ Copied northwind.sql to container")
-    except Exception as e:
-        pytest.fail(f"Failed to copy northwind.sql: {str(e)}")
+    check_rc, _ = container.exec_run(["bash", "-c", "test -f /tmp/northwind.sql"], user="root")
+    if check_rc == 0:
+        print(f"✅ /tmp/northwind.sql already exists on container, skipping copy")
+    else:
+        try:
+            success, files_copied, message = file_management.copy_config_files_to_container(
+                container=container,
+                container_name=container_name,
+                local_config_dir=str(northwind_file.parent),
+                container_config_dir="/tmp",
+                file_mapping={"northwind.sql": "northwind.sql"},
+                owner=pguser_val,
+                group=pguser_val,
+                permissions="644"
+            )
+            assert success, f"Failed to copy northwind.sql: {message}"
+            print(f"✅ Copied northwind.sql to container")
+        except Exception as e:
+            pytest.fail(f"Failed to copy northwind.sql: {str(e)}")
 
     # Execute northwind.sql
     exit_code, output = container.exec_run(
@@ -800,7 +825,7 @@ def test_postgrest_load_northwind(container_name, container_type):
 
 
 @pytest.mark.parametrize("container_name,container_type", all_containers)
-def test_postgrest_api_list_tables(container_name, container_type):
+def postgrest_api_list_tables(container_name, container_type):
     """REST API: List all tables (root endpoint)"""
     container_name = container_name.strip()
     if not container_name:
@@ -1158,6 +1183,10 @@ def test_pgedge_cleanup(container_name, container_type):
     pguser_val = config["pguser"]
 
     print(f"\n--- Full pgEdge cleanup on {container_name} ---")
+
+    # Remove test SQL files copied during the test run
+    container.exec_run("rm -f /tmp/postgrest.sql /tmp/northwind.sql", user="root")
+    print(f"   Removed /tmp/postgrest.sql and /tmp/northwind.sql")
 
     try:
         success, cleanup_summary, message = machine_cleanup.cleanup_pgedge_environment(

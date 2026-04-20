@@ -86,6 +86,12 @@ class SSHExecutor:
                 if err_output:
                     output = output + err_output
                 return exit_code, output
+            except TimeoutError as exc:
+                # socket.timeout (TimeoutError) is an OSError subclass — don't retry,
+                # retrying would hang for another `timeout` seconds per attempt.
+                raise RuntimeError(
+                    f"Command timed out after {timeout}s on {self._host}: {cmd!r}"
+                ) from exc
             except (paramiko.SSHException, OSError, EOFError) as exc:
                 if attempt < self._max_retries - 1:
                     print(f"  [ssh_executor] command failed (attempt {attempt + 1}): {exc} — reconnecting")
@@ -95,13 +101,32 @@ class SSHExecutor:
                     raise
 
     def put_file(self, local_path, remote_path):
-        """Upload a single file to the remote host via SFTP."""
+        """Upload a single file to the remote host.
+
+        Tries SFTP first; falls back to 'sudo tee' via SSH exec when SFTP is
+        blocked by a permission error (common on AWS instances where the login
+        user lacks SFTP write rights but has passwordless sudo).
+        """
         self._ensure_connected()
-        sftp = self._client.open_sftp()
         try:
-            sftp.put(local_path, remote_path)
-        finally:
-            sftp.close()
+            sftp = self._client.open_sftp()
+            try:
+                sftp.put(local_path, remote_path)
+                return
+            finally:
+                sftp.close()
+        except PermissionError:
+            with open(local_path, "rb") as f:
+                content = f.read()
+            stdin, stdout, stderr = self._client.exec_command(
+                f"sudo tee {remote_path} > /dev/null"
+            )
+            stdin.write(content)
+            stdin.channel.shutdown_write()
+            exit_code = stdout.channel.recv_exit_status()
+            if exit_code != 0:
+                err = stderr.read().decode().strip()
+                raise IOError(f"Failed to write {remote_path} via sudo tee: {err}")
 
     def put_archive(self, remote_dir, tarstream):
         """

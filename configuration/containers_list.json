@@ -3,7 +3,7 @@
   "_usage": "Set 'enabled: true' to include a container in test runs. Set 'enabled: false' to skip it without deleting it.",
 
   "rhel": [
-    { "name": "auto-rocky9-arm",   "description": "Rocky Linux 9  / ARM64",  "enabled": false  },
+    { "name": "auto-rocky9-arm",   "description": "Rocky Linux 9  / ARM64",  "enabled": true  },
     { "name": "auto-rocky10-arm",  "description": "Rocky Linux 10 / ARM64",  "enabled": true },
     { "name": "auto-alma9-arm",    "description": "AlmaLinux 9    / ARM64",  "enabled": true },
     { "name": "auto-alma10-arm",   "description": "AlmaLinux 10   / ARM64",  "enabled": true },
@@ -15,7 +15,7 @@
   ],
 
   "deb": [
-    { "name": "auto-ubuntu2204-arm", "description": "Ubuntu 22.04 LTS / ARM64", "enabled": false  },
+    { "name": "auto-ubuntu2204-arm", "description": "Ubuntu 22.04 LTS / ARM64", "enabled": true  },
     { "name": "auto-ubuntu2404-arm", "description": "Ubuntu 24.04 LTS / ARM64", "enabled": true },
     { "name": "auto-debian11",       "description": "Debian 11 Bullseye / ARM64","enabled": true },
     { "name": "auto-debian12-arm",   "description": "Debian 12 Bookworm / ARM64","enabled": true  },

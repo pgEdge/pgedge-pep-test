@@ -200,6 +200,15 @@ def detect_component_from_test_file(config):
             'rhel_package_default': 'pgedge-ai-dba-server,pgedge-ai-dba-alerter,pgedge-ai-dba-collector,pgedge-ai-dba-client',
             'deb_package_env': 'AI_DBA_COMPONENTS',
             'deb_package_default': 'pgedge-ai-dba-server,pgedge-ai-dba-alerter,pgedge-ai-dba-collector,pgedge-ai-dba-client'
+        },
+        'test_pep_radar': {
+            'name': 'Radar',
+            'version_env': 'PGEDGE_RADAR_VERSION',
+            'version_default': '1.4.1',
+            'rhel_package_env': 'RADAR_PACKAGE',
+            'rhel_package_default': 'pgedge-radar',
+            'deb_package_env': 'DEB_RADAR_PACKAGE',
+            'deb_package_default': 'pgedge-radar'
         }
     }
 

@@ -59,7 +59,7 @@ OPTIONS:
   --components <names>    Components to test (default: all)
                           Values: server, snowflake, pgbouncer, pgbackrest, postgrest, lolor, postgis,
                                   system_stats, vectorizer, zerodowntime, mcp, rag, ace, repo_health,
-                                  docloader, anonymizer, pg_vectorize, pg_tokenizer, vchord_bm25, pgaudit, pgadmin4, patroni, pg_stat_monitor, ai_db_workbench, all
+                                  docloader, anonymizer, pg_vectorize, pg_tokenizer, vchord_bm25, pgaudit, pgadmin4, patroni, pg_stat_monitor, ai_db_workbench, radar, all
                           Comma-separated for multiple: lolor,postgis
 
   --repo <repository>     Repository to use (default: staging)
@@ -164,7 +164,8 @@ else
   echo "22) patroni - Patroni HA tests"
   echo "23) pg_stat_monitor - Pg Stat Monitor tests"
   echo "24) ai_db_workbench - AI DB Workbench tests"
-  echo "25) all - All tests"
+  echo "25) radar - Radar tests"
+  echo "26) all - All tests"
   echo ""
   echo "💡 You can specify multiple components separated by commas"
   echo "   Example: lolor,postgis,system_stats"
@@ -197,7 +198,7 @@ fi
 
 # Determine test types to run
 if [[ "$test_type_choice" == "all" || "$test_type_choice" == "All" ]]; then
-  test_type_list=(server snowflake pgbouncer pgbackrest postgrest lolor postgis system_stats vectorizer zerodowntime mcp rag ace repo_health docloader anonymizer pg_vectorize pg_tokenizer vchord_bm25 pgaudit pgadmin4 patroni pg_stat_monitor ai_db_workbench)
+  test_type_list=(server snowflake pgbouncer pgbackrest postgrest lolor postgis system_stats vectorizer zerodowntime mcp rag ace repo_health docloader anonymizer pg_vectorize pg_tokenizer vchord_bm25 pgaudit pgadmin4 patroni pg_stat_monitor ai_db_workbench radar)
 else
   # Split by comma and trim whitespace
   IFS=',' read -ra test_type_list <<< "$test_type_choice"
@@ -442,6 +443,9 @@ except Exception as e:
             ai_db_workbench)
               run_pytest_with_tracking "component-test/test_pep_ai_db_workbench.py" "$env" "rpm" "ai_db_workbench"
               ;;
+            radar)
+              run_pytest_with_tracking "component-test/test_pep_radar.py" "$env" "rpm" "radar"
+              ;;
             *)
               echo "⚠️ Unknown test type: $test_type"
               ;;
@@ -521,6 +525,9 @@ except Exception as e:
               ;;
             ai_db_workbench)
               run_pytest_with_tracking "component-test/test_pep_ai_db_workbench.py" "$env" "deb" "ai_db_workbench"
+              ;;
+            radar)
+              run_pytest_with_tracking "component-test/test_pep_radar.py" "$env" "deb" "radar"
               ;;
             *)
               echo "⚠️ Unknown test type: $test_type"
@@ -1181,7 +1188,7 @@ cat > "test-logs/index.html" <<EOF
 EOF
 
 # Add card for each component that has reports
-for test_type in server snowflake pgbouncer pgbackrest postgrest lolor postgis system_stats vectorizer zerodowntime mcp rag ace repo_health docloader anonymizer pg_vectorize pg_tokenizer vchord_bm25 pgaudit pgadmin4 patroni pg_stat_monitor ai_db_workbench; do
+for test_type in server snowflake pgbouncer pgbackrest postgrest lolor postgis system_stats vectorizer zerodowntime mcp rag ace repo_health docloader anonymizer pg_vectorize pg_tokenizer vchord_bm25 pgaudit pgadmin4 patroni pg_stat_monitor ai_db_workbench radar; do
   component_dir="test-logs/${test_type}"
   if [[ -d "$component_dir" ]]; then
     # Check for any HTML reports

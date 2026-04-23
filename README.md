@@ -271,7 +271,14 @@ pgedge-pep-test/
 │   └── aws_instances.json   # AWS EC2 instance registry (enable/disable per instance)
 ├── aspects/                 # Test aspects and utilities
 │   ├── aws_client.py        # AWSInstanceClient (drop-in Docker replacement)
-│   └── ssh_executor.py      # SSH-based container interface for AWS VMs
+│   ├── ssh_executor.py      # SSH-based container interface for AWS VMs
+│   ├── configure_repository.py  # pgEdge repository configuration helpers
+│   ├── container_management.py  # Docker container lifecycle helpers
+│   ├── file_management.py       # File copy/verification utilities
+│   ├── machine_cleanup.py       # Post-test environment cleanup
+│   ├── machine_prereq_setup.py  # OS prerequisite installation
+│   ├── package_management.py    # RPM/DEB install, upgrade, uninstall helpers
+│   └── pg_server_management.py  # PostgreSQL init, start, stop helpers
 ├── expected-output/         # Expected test outputs for comparison
 ├── actual-output/           # Actual test outputs
 ├── test-logs/               # Test execution reports

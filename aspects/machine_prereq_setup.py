@@ -50,8 +50,21 @@ def get_os_info():
     return os_id.lower(), major
 
 
-def setup_debian():
-    print("\n=== Debian/Ubuntu Prerequisites ===")
+def setup_debian(os_id="", major=""):
+    print(f"\n=== Debian/Ubuntu Prerequisites (os={os_id or '?'}, major={major or '?'}) ===")
+
+    # Minimal Debian/Ubuntu Docker images (e.g. Ubuntu 24.04) ship dpkg config files
+    # under /etc/dpkg/dpkg.cfg.d/ that exclude /usr/share/doc and /usr/share/licenses,
+    # causing README.md and LICENSE files to be silently omitted on install.
+    # Remove those path-exclude lines from every file in the directory so subsequent
+    # apt-get installs write the full file tree.
+    run(
+        r"grep -rl 'path-exclude=/usr/share/doc' /etc/dpkg/dpkg.cfg.d/ 2>/dev/null"
+        r" | xargs -r sed -i '/^path-exclude=\/usr\/share\/doc/d';"
+        r" grep -rl 'path-exclude=/usr/share/licenses' /etc/dpkg/dpkg.cfg.d/ 2>/dev/null"
+        r" | xargs -r sed -i '/^path-exclude=\/usr\/share\/licenses/d'; true"
+    )
+
     run("apt-get update")
     run("apt-get install -y python3")
     run("apt-get install -y curl")
@@ -59,7 +72,17 @@ def setup_debian():
     run("apt-get install -y gnupg2")
     run("apt-get install -y lsb-release")
     run("apt-get install -y file")
-    run("apt-get install -y sq")
+
+    # Install sq (Sequoia PGP CLI) — method varies by distro version
+    if os_id == "ubuntu":
+        # universe repo required on older Ubuntu
+        run("apt-get install -y software-properties-common")
+        run("add-apt-repository -y universe")
+        run("apt-get update")
+        run("apt-get install -y sq")
+    else:
+        # All Debian versions: sq is in the standard main repos
+        run("apt-get install -y sq")
 
     # Add pgEdge repo
     cmd = (
@@ -163,6 +186,139 @@ def setup_alma10():
     run("sudo dnf install -y wget")
 
 
+def _container_run(container, cmd):
+    """Run a shell command on the container as root, print a warning on failure."""
+    print(f"  >>> {cmd}")
+    code, out = container.exec_run(["/bin/sh", "-c", cmd], user="root")
+    if code != 0:
+        print(f"  WARNING: exit={code}: {out.decode()[:200]}")
+    return code
+
+
+def _cmd_exists(container, binary):
+    """Return True if `binary` is on PATH inside the container."""
+    code, _ = container.exec_run(["/bin/sh", "-c", f"command -v {binary}"], user="root")
+    return code == 0
+
+
+def _detect_os(container):
+    """Return (os_id, major_version) detected from /etc/os-release."""
+    _, out = container.exec_run("cat /etc/os-release", user="root")
+    os_id, version_id = "", ""
+    for line in out.decode().split("\n"):
+        if line.startswith("ID="):
+            os_id = line.split("=", 1)[1].strip().strip('"').lower()
+        elif line.startswith("VERSION_ID="):
+            version_id = line.split("=", 1)[1].strip().strip('"')
+    major = version_id.split(".")[0] if version_id else ""
+    return os_id, major
+
+
+def ensure_wget_installed(container):
+    """Install wget on the container if it is not already present."""
+    if _cmd_exists(container, "wget"):
+        return
+    os_id, _ = _detect_os(container)
+    print(f"  [ensure_wget] wget not found — installing...")
+    if os_id in ("debian", "ubuntu"):
+        _container_run(container, "apt-get install -y wget")
+    else:
+        _container_run(container, "dnf install -y wget 2>/dev/null || yum install -y wget 2>/dev/null")
+
+
+def _get_deb_info(container, os_id, major):
+    """Return (codename, arch, mirror) for the container's Debian/Ubuntu system."""
+    _, codename_out = container.exec_run(
+        "grep -m1 VERSION_CODENAME /etc/os-release", user="root"
+    )
+    codename = codename_out.decode().strip().split("=")[-1].strip('"')
+    if not codename:
+        codename_map = {
+            "debian": {"11": "bullseye", "12": "bookworm", "13": "trixie"},
+            "ubuntu": {"22": "jammy", "24": "noble"},
+        }
+        codename = codename_map.get(os_id, {}).get(major, "")
+
+    _, arch_out = container.exec_run("dpkg --print-architecture", user="root")
+    arch = arch_out.decode().strip()
+
+    if os_id == "ubuntu":
+        mirror = ("http://ports.ubuntu.com/ubuntu-ports"
+                  if arch in ("arm64", "armhf")
+                  else "http://archive.ubuntu.com/ubuntu")
+    else:
+        mirror = "http://deb.debian.org/debian"
+
+    return codename, arch, mirror
+
+
+def _apt_enable_universe(container, codename, mirror):
+    """
+    Enable the 'universe' component for Ubuntu.
+    Handles both classic sources.list and DEB822 .sources files (Ubuntu 24.04+).
+    """
+    # DEB822 format: patch Components line in any *.sources file
+    _container_run(container,
+        r"find /etc/apt/sources.list.d/ -name '*.sources' "
+        r"-exec sed -i 's/\(Components:.*\)\bmain\b/\1main universe/' {} + 2>/dev/null; true")
+    # Classic format: append universe line if not already present
+    _container_run(container,
+        f"grep -qF 'universe' /etc/apt/sources.list 2>/dev/null || "
+        f"echo 'deb {mirror} {codename} main universe' >> /etc/apt/sources.list")
+
+
+def _apt_ensure_full_sources(container, os_id, major):
+    """
+    Guarantee that the full Debian/Ubuntu main repo is in sources.list.
+    Minimal Docker images sometimes ship with only security or a partial mirror,
+    which causes packages like 'sq' to be missing.
+    """
+    codename, _, mirror = _get_deb_info(container, os_id, major)
+    if not codename:
+        return
+    if os_id == "ubuntu":
+        _apt_enable_universe(container, codename, mirror)
+    else:
+        _container_run(container,
+            f"grep -qF '{codename} main' /etc/apt/sources.list 2>/dev/null || "
+            f"echo 'deb {mirror} {codename} main contrib' >> /etc/apt/sources.list")
+    _container_run(container, "apt-get update -y")
+
+
+def ensure_sq_installed(container):
+    """Install the sq (Sequoia PGP) CLI on the container if it is not already present."""
+    if _cmd_exists(container, "sq"):
+        return
+
+    os_id, major = _detect_os(container)
+    print(f"  [ensure_sq] sq not found ({os_id} {major}) — installing...")
+
+    if os_id in ("debian", "ubuntu"):
+        codename, arch, mirror = _get_deb_info(container, os_id, major)
+
+        if os_id == "ubuntu":
+            # Enable universe (handles both classic sources.list and DEB822 format)
+            _apt_enable_universe(container, codename, mirror)
+        else:
+            # Debian (all versions): ensure the full main mirror is available
+            _container_run(container,
+                f"grep -qF '{codename} main' /etc/apt/sources.list 2>/dev/null || "
+                f"echo 'deb {mirror} {codename} main contrib' >> /etc/apt/sources.list")
+
+        _container_run(container, "apt-get update -y")
+        _container_run(container, "apt-get install -y sq")
+
+    else:
+        _container_run(container,
+            "dnf install -y sequoia-sq 2>/dev/null || yum install -y sequoia-sq 2>/dev/null")
+
+    if not _cmd_exists(container, "sq"):
+        raise RuntimeError(
+            f"Failed to install sq on {os_id} {major} ({arch if os_id in ('debian','ubuntu') else 'rpm'}). "
+            "Ensure the full Debian/Ubuntu main repository is reachable from the container."
+        )
+
+
 def install_prerequisites_on_container(container):
     """
     Install prerequisites on a Docker container.
@@ -201,9 +357,9 @@ def install_prerequisites_on_container(container):
     version_id = ""
     for line in os_release.split('\n'):
         if line.startswith("ID="):
-            os_id = line.split('=')[1].strip('"').lower()
+            os_id = line.split('=')[1].strip().strip('"').lower()
         if line.startswith("VERSION_ID="):
-            version_id = line.split('=')[1].strip('"')
+            version_id = line.split('=')[1].strip().strip('"')
 
     major = version_id.split('.')[0] if version_id else ""
     print(f"Detected OS: {os_id}, Version: {version_id} (major={major})")
@@ -211,7 +367,7 @@ def install_prerequisites_on_container(container):
     # Call the appropriate setup function
     try:
         if os_id in ["debian", "ubuntu"]:
-            setup_debian()
+            setup_debian(os_id=os_id, major=major)
         elif os_id in ["rhel", "redhat", "rhelserver"]:
             if major == "9":
                 setup_rhel9()
@@ -255,7 +411,7 @@ def main():
     os_id, major = get_os_info()
 
     if os_id in ["debian", "ubuntu"]:
-        setup_debian()
+        setup_debian(os_id=os_id, major=major)
 
     elif os_id in ["rhel", "redhat", "rhelserver"]:
         if major == "9":

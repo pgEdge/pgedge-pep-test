@@ -1,4 +1,5 @@
 import os
+import sys
 import pytest
 from dotenv import load_dotenv
 
@@ -11,6 +12,33 @@ except ImportError:
 
 # Load environment variables
 load_dotenv()
+
+# ── AWS_MODE: replace docker.from_env() with AWSInstanceClient ──────────────
+# When AWS_MODE=true every test file's `client = docker.from_env()` call
+# returns an AWSInstanceClient that delegates to SSHExecutor.  No test file
+# changes are required.
+if os.getenv("AWS_MODE", "false").lower() == "true":
+    sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
+    import docker
+    from aspects.aws_client import AWSInstanceClient
+
+    _aws_client_singleton = None
+
+    def _aws_from_env(**kwargs):
+        global _aws_client_singleton
+        if _aws_client_singleton is None:
+            _aws_client_singleton = AWSInstanceClient()
+        return _aws_client_singleton
+
+    docker.from_env = _aws_from_env
+
+    # Clean up SSH connections at the end of the session
+    @pytest.fixture(scope="session", autouse=True)
+    def _close_aws_connections():
+        yield
+        if _aws_client_singleton is not None:
+            _aws_client_singleton.close()
+# ────────────────────────────────────────────────────────────────────────────
 
 
 def detect_component_from_test_file(config):
@@ -163,6 +191,24 @@ def detect_component_from_test_file(config):
             'rhel_package_default': f'pgedge-pg-stat-monitor_{os.getenv("PG_MAJOR_VERSION", "16")}',
             'deb_package_env': 'DEB_PG_STAT_MONITOR_PACKAGE',
             'deb_package_default': f'pgedge-postgresql-{os.getenv("PG_MAJOR_VERSION", "16")}-pg-stat-monitor'
+        },
+        'test_pep_ai_db_workbench': {
+            'name': 'AI DB Workbench',
+            'version_env': 'PGEDGE_AI_DBA_VERSION',
+            'version_default': '1.0.0-alpha3',
+            'rhel_package_env': 'AI_DBA_COMPONENTS',
+            'rhel_package_default': 'pgedge-ai-dba-server,pgedge-ai-dba-alerter,pgedge-ai-dba-collector,pgedge-ai-dba-client',
+            'deb_package_env': 'AI_DBA_COMPONENTS',
+            'deb_package_default': 'pgedge-ai-dba-server,pgedge-ai-dba-alerter,pgedge-ai-dba-collector,pgedge-ai-dba-client'
+        },
+        'test_pep_radar': {
+            'name': 'Radar',
+            'version_env': 'PGEDGE_RADAR_VERSION',
+            'version_default': '1.4.1',
+            'rhel_package_env': 'RADAR_PACKAGE',
+            'rhel_package_default': 'pgedge-radar',
+            'deb_package_env': 'DEB_RADAR_PACKAGE',
+            'deb_package_default': 'pgedge-radar'
         }
     }
 

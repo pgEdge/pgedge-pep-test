@@ -17,22 +17,30 @@ Ask the following questions as a numbered list in a single message:
 > I need a few details about the **$ARGUMENTS** component before I start. Please answer each question:
 >
 > 1. Is this component **coupled** (tied to a PostgreSQL major version, e.g. `pgedge-lolor_16`) or **decoupled** (standalone, e.g. `pgedge-patroni`)?
-> 2. What is the **RHEL/RPM package name**? (e.g. `pgedge-myext` or `pgedge-myext_16`)
-> 3. Is the **DEB package name the same** as the RPM name, or different? If different, provide the DEB package name.
+> 2. What is the **RHEL/RPM package name**? (e.g. `pgedge-myext` or `pgedge-myext_16`). For multiple packages list them all.
+> 3. Is the **DEB package name the same** as the RPM name, or different? If different, provide the DEB package name(s).
 > 4. What is the **current package version**? (e.g. `1.0.0`, `4.1.0-beta2`)
-> 5. Does this component install a **standalone binary** (e.g. `/usr/bin/pgedge-myext`)? If yes, give the full path. If no, type `none`.
+> 5. Does this component install a **standalone binary** (e.g. `/usr/bin/pgedge-myext`)? If yes, give the full path(s) per package. If no, type `none`.
 > 6. Does this component install **PostgreSQL extensions**? If yes, list the extension names separated by commas (e.g. `myext,myext_extra`). If no, type `none`.
+> 7. Do the packages install a **LICENSE file**? Expected path: `/usr/share/licenses/<package>/LICENSE`. Answer `yes` or `no`.
+> 8. Do the packages install a **README file**? Expected path: `/usr/share/doc/<package>/README.md`. Answer `yes` or `no`.
+> 9. Would you like to **provide the expected file list** for each package now? Options: **a)** paste the output of `rpm -ql <pkg>` or `dpkg -L <pkg>` for each package now, **b)** create TODO placeholders, **c)** skip bundled-file verification.
+> 10. Are there **package-level dependencies** between these packages or on other pgEdge packages? If yes, list them as `package → dependency` (one per line). If no, type `none`.
 
 Wait for the user's answers, then store:
 - `component` = `$ARGUMENTS` (snake_case)
 - `COMPONENT` = uppercase of `$ARGUMENTS`
 - `title` = title-cased display name (e.g. `My Ext`)
 - `coupled` = true/false
-- `rhel_pkg` = RHEL package name
-- `deb_pkg` = DEB package name (may equal `rhel_pkg`)
+- `rhel_pkg` = RHEL package name(s) — may be a list for multi-package components
+- `deb_pkg` = DEB package name(s) (may equal `rhel_pkg`)
 - `version` = package version
-- `binary_path` = full binary path or empty
+- `binary_path` = full binary path(s) per package or empty
 - `extensions` = comma-separated list or empty
+- `has_license` = true/false (from question 7)
+- `has_readme` = true/false (from question 8)
+- `bundled_files_option` = a/b/c (from question 9)
+- `dependencies` = map of package → [dependencies] or empty (from question 10)
 
 Derive naming variables:
 - `short_name` = `rhel_pkg` with `pgedge-` prefix stripped, and any `_16`/`_17`/`_18` suffix stripped
@@ -89,26 +97,18 @@ After writing all three files, print a summary of the lines added.
 
 ## Phase 3 — Create expected-output placeholder files
 
-Ask the user:
+Use the `bundled_files_option` stored from question 9 in Phase 1. If the user answered **a)**, **b)**, or **c)** there, skip re-asking and proceed directly.
 
-> Should I create **expected-output placeholder files** now?
-> These are used by `test_verify_bundled_files` to check that specific files exist after installation.
->
-> Options:
-> - **a)** Create empty placeholders (you will fill them in manually after installing the package)
-> - **b)** I will provide the file list now (paste the output of `rpm -ql <pkg>` or `dpkg -L <pkg>`)
-> - **c)** Skip — I don't need bundled-file verification for this component
+**If option a) (placeholders):**
+Create these files with a single comment line for each package:
+- `expected-output/rpm/<pkg>` containing: `# TODO: paste output of: rpm -ql <pkg>`
+- `expected-output/deb/<pkg>` containing: `# TODO: paste output of: dpkg -L <pkg>`
 
-**If option a):**
-Create these files with a single comment line:
-- `expected-output/rpm/<rhel_pkg>` containing: `# TODO: paste output of: rpm -ql <rhel_pkg>`
-- `expected-output/deb/<deb_pkg>` containing: `# TODO: paste output of: dpkg -L <deb_pkg>`
+**If option b) (user provides file lists):**
+The user may have already pasted the RPM file list in Phase 1 (question 9). If not, ask them to paste it now for each package. Create `expected-output/rpm/<pkg>` with the pasted content (one path per line).
+For DEB: if the user provided DEB paths too, create `expected-output/deb/<pkg>`. Otherwise create DEB files with TODO placeholders prefixed by a comment noting to verify paths after DEB install.
 
-**If option b):**
-Ask the user to paste the RPM file list first. Create `expected-output/rpm/<rhel_pkg>` with the pasted content (one path per line, no extra formatting).
-Then ask for the DEB file list. Create `expected-output/deb/<deb_pkg>` likewise.
-
-If `rhel_pkg == deb_pkg`, only one set of files is needed (under both `rpm/` and `deb/` with the same name).
+If `rhel_pkg == deb_pkg`, use the same filename under both `rpm/` and `deb/`.
 
 **If option c):**
 Skip this phase entirely.
@@ -143,6 +143,10 @@ Additionally:
 - Update `component_version = os.getenv("COMPONENT_BINARY_VERSION", "")` default to `<version>` if binary exists, otherwise leave empty
 - If the component has no extensions, remove both `test_create_extensions` and `test_extension_version` from the file entirely
 - If the component has extensions, keep `test_extension_version` immediately after `test_create_extensions`; it connects to psql, runs `\dx`, greps for the extension name, and asserts the version column matches `<component>_version`
+- If `has_license` is true (from question 7), add `test_verify_license_file` that checks `/usr/share/licenses/<package>/LICENSE` exists on the container
+- If `has_readme` is true (from question 8), add `test_verify_readme_file` that checks `/usr/share/doc/<package>/README.md` exists on the container
+- If `dependencies` is non-empty (from question 10), add `test_verify_package_dependencies` that runs `rpm -qR <pkg> | grep <dep>` (RHEL) or `dpkg -s <pkg> | grep Depends | grep <dep>` (DEB) for each declared dependency
+- For multi-package components, follow the MCP test pattern: use `all_container_package_combinations` parametrization and per-package version/binary/service maps instead of single-package variables
 - Update all docstrings that mention "lolor" or "LOLOR" to use the new component name
 
 ---

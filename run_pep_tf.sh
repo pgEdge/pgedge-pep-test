@@ -11,6 +11,7 @@ PGVER=""
 PLATFORMS=""
 COMPONENTS=""
 REPO_OVERRIDE=""
+TARGET="docker"   # default: local Docker containers
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -34,6 +35,11 @@ while [[ $# -gt 0 ]]; do
       CLI_MODE=true
       shift 2
       ;;
+    --target)
+      TARGET="$2"
+      CLI_MODE=true
+      shift 2
+      ;;
     --help|-h)
       cat <<HELPTEXT
 Usage: $(basename "$0") [OPTIONS]
@@ -53,11 +59,17 @@ OPTIONS:
   --components <names>    Components to test (default: all)
                           Values: server, snowflake, pgbouncer, pgbackrest, postgrest, lolor, postgis,
                                   system_stats, vectorizer, zerodowntime, mcp, rag, ace, repo_health,
-                                  docloader, anonymizer, pg_vectorize, pg_tokenizer, vchord_bm25, pgaudit, pgadmin4, patroni, pg_stat_monitor, all
+                                  docloader, anonymizer, pg_vectorize, pg_tokenizer, vchord_bm25, pgaudit, pgadmin4, patroni, pg_stat_monitor, ai_db_workbench, radar, all
                           Comma-separated for multiple: lolor,postgis
 
   --repo <repository>     Repository to use (default: staging)
                           Values: release, staging, daily
+
+  --target <target>       Execution target (default: docker)
+                          Values: docker, aws
+                          docker: run against local Docker containers (containers_list.json)
+                          aws:    run against live AWS EC2 instances (aws_instances.json)
+                          Key files for AWS must exist under keys/ (gitignored).
 
   --help, -h              Show this help message and exit
 
@@ -151,7 +163,9 @@ else
   echo "21) pgadmin4 - pgAdmin4 tests"
   echo "22) patroni - Patroni HA tests"
   echo "23) pg_stat_monitor - Pg Stat Monitor tests"
-  echo "24) all - All tests"
+  echo "24) ai_db_workbench - AI DB Workbench tests"
+  echo "25) radar - Radar tests"
+  echo "26) all - All tests"
   echo ""
   echo "💡 You can specify multiple components separated by commas"
   echo "   Example: lolor,postgis,system_stats"
@@ -184,7 +198,7 @@ fi
 
 # Determine test types to run
 if [[ "$test_type_choice" == "all" || "$test_type_choice" == "All" ]]; then
-  test_type_list=(server snowflake pgbouncer pgbackrest postgrest lolor postgis system_stats vectorizer zerodowntime mcp rag ace repo_health docloader anonymizer pg_vectorize pg_tokenizer vchord_bm25 pgaudit pgadmin4 patroni pg_stat_monitor)
+  test_type_list=(server snowflake pgbouncer pgbackrest postgrest lolor postgis system_stats vectorizer zerodowntime mcp rag ace repo_health docloader anonymizer pg_vectorize pg_tokenizer vchord_bm25 pgaudit pgadmin4 patroni pg_stat_monitor ai_db_workbench radar)
 else
   # Split by comma and trim whitespace
   IFS=',' read -ra test_type_list <<< "$test_type_choice"
@@ -202,6 +216,7 @@ echo "=========================================="
 echo "Environments: ${env_list[*]}"
 echo "Platforms: ${platform_list[*]}"
 echo "Test types: ${test_type_list[*]}"
+echo "Target: ${TARGET}"
 if [[ -n "$REPO_OVERRIDE" ]]; then
   echo "Repo override: $REPO_OVERRIDE"
 fi
@@ -283,10 +298,43 @@ for env in "${env_list[@]}"; do
   source "$envfile"
   set +a
 
-  # Load containers from containers_list.json (overrides empty CONTAINERS/DEB_CONTAINERS from env file)
-  CONTAINERS_JSON="${ENV_DIR}/containers_list.json"
-  if [[ -f "$CONTAINERS_JSON" ]]; then
+  # Load target instances — Docker containers or AWS EC2 instances
+  if [[ "$TARGET" == "aws" ]]; then
+    # ── AWS mode ────────────────────────────────────────────────────────────
+    AWS_INSTANCES_JSON="${ENV_DIR}/aws_instances.json"
+    if [[ ! -f "$AWS_INSTANCES_JSON" ]]; then
+      echo "❌ aws_instances.json not found at ${AWS_INSTANCES_JSON}"
+      exit 1
+    fi
     _loaded_containers=$(python3 -c "
+import json, sys
+try:
+    d = json.load(open('$AWS_INSTANCES_JSON'))
+    print(','.join(c['name'] for c in d.get('rhel', []) if c.get('enabled')))
+except Exception as e:
+    sys.stderr.write(f'Warning: failed to parse aws_instances.json: {e}\n')
+    print('')
+")
+    _loaded_deb_containers=$(python3 -c "
+import json, sys
+try:
+    d = json.load(open('$AWS_INSTANCES_JSON'))
+    print(','.join(c['name'] for c in d.get('deb', []) if c.get('enabled')))
+except Exception as e:
+    sys.stderr.write(f'Warning: failed to parse aws_instances.json: {e}\n')
+    print('')
+")
+    [[ -n "$_loaded_containers" ]] && export CONTAINERS="$_loaded_containers"
+    [[ -n "$_loaded_deb_containers" ]] && export DEB_CONTAINERS="$_loaded_deb_containers"
+    export AWS_MODE=true
+    echo "   🌐 AWS mode: CONTAINERS=${CONTAINERS}  DEB_CONTAINERS=${DEB_CONTAINERS}"
+    unset _loaded_containers _loaded_deb_containers
+  else
+    # ── Docker mode (default) ────────────────────────────────────────────────
+    # Load containers from containers_list.json (overrides empty CONTAINERS/DEB_CONTAINERS from env file)
+    CONTAINERS_JSON="${ENV_DIR}/containers_list.json"
+    if [[ -f "$CONTAINERS_JSON" ]]; then
+      _loaded_containers=$(python3 -c "
 import json, sys
 try:
     d = json.load(open('$CONTAINERS_JSON'))
@@ -295,7 +343,7 @@ except Exception as e:
     sys.stderr.write(f'Warning: failed to parse containers_list.json: {e}\n')
     print('')
 ")
-    _loaded_deb_containers=$(python3 -c "
+      _loaded_deb_containers=$(python3 -c "
 import json, sys
 try:
     d = json.load(open('$CONTAINERS_JSON'))
@@ -304,9 +352,11 @@ except Exception as e:
     sys.stderr.write(f'Warning: failed to parse containers_list.json: {e}\n')
     print('')
 ")
-    [[ -n "$_loaded_containers" ]] && export CONTAINERS="$_loaded_containers"
-    [[ -n "$_loaded_deb_containers" ]] && export DEB_CONTAINERS="$_loaded_deb_containers"
-    unset _loaded_containers _loaded_deb_containers
+      [[ -n "$_loaded_containers" ]] && export CONTAINERS="$_loaded_containers"
+      [[ -n "$_loaded_deb_containers" ]] && export DEB_CONTAINERS="$_loaded_deb_containers"
+      unset _loaded_containers _loaded_deb_containers
+    fi
+    export AWS_MODE=false
   fi
 
   # Apply repo override if specified via CLI
@@ -390,6 +440,12 @@ except Exception as e:
             pg_stat_monitor)
               run_pytest_with_tracking "component-test/test_pep_pg_stat_monitor.py" "$env" "rpm" "pg_stat_monitor"
               ;;
+            ai_db_workbench)
+              run_pytest_with_tracking "component-test/test_pep_ai_db_workbench.py" "$env" "rpm" "ai_db_workbench"
+              ;;
+            radar)
+              run_pytest_with_tracking "component-test/test_pep_radar.py" "$env" "rpm" "radar"
+              ;;
             *)
               echo "⚠️ Unknown test type: $test_type"
               ;;
@@ -466,6 +522,12 @@ except Exception as e:
               ;;
             pg_stat_monitor)
               run_pytest_with_tracking "component-test/test_pep_pg_stat_monitor.py" "$env" "deb" "pg_stat_monitor"
+              ;;
+            ai_db_workbench)
+              run_pytest_with_tracking "component-test/test_pep_ai_db_workbench.py" "$env" "deb" "ai_db_workbench"
+              ;;
+            radar)
+              run_pytest_with_tracking "component-test/test_pep_radar.py" "$env" "deb" "radar"
               ;;
             *)
               echo "⚠️ Unknown test type: $test_type"
@@ -1126,7 +1188,7 @@ cat > "test-logs/index.html" <<EOF
 EOF
 
 # Add card for each component that has reports
-for test_type in server snowflake pgbouncer pgbackrest postgrest lolor postgis system_stats vectorizer zerodowntime mcp rag ace repo_health docloader anonymizer pg_vectorize pg_tokenizer vchord_bm25 pgaudit pgadmin4 patroni pg_stat_monitor; do
+for test_type in server snowflake pgbouncer pgbackrest postgrest lolor postgis system_stats vectorizer zerodowntime mcp rag ace repo_health docloader anonymizer pg_vectorize pg_tokenizer vchord_bm25 pgaudit pgadmin4 patroni pg_stat_monitor ai_db_workbench radar; do
   component_dir="test-logs/${test_type}"
   if [[ -d "$component_dir" ]]; then
     # Check for any HTML reports

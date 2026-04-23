@@ -82,6 +82,17 @@ RHEL_PACKAGE_VERSION_MAP = {
     "pgedge-pgbouncer":                                os.getenv("PGEDGE_PGBOUNCER_VERSION"),
     "pgedge-pgbackrest":                               os.getenv("PGEDGE_PGBACKREST_VERSION"),
     "pgedge-pgadmin4":                                 os.getenv("PGEDGE_PGADMIN4_VERSION"),
+    "pgedge-patroni-consul":                           os.getenv("PGEDGE_PATRONI_CONSUL_VERSION"),
+    "pgedge-patroni-etcd":                             os.getenv("PGEDGE_PATRONI_ETCD_VERSION"),
+    "pgedge-patroni-aws":                              os.getenv("PGEDGE_PATRONI_AWS_VERSION"),
+    "pgedge-patroni-zookeeper":                        os.getenv("PGEDGE_PATRONI_ZOOKEEPER_VERSION"),
+    "pgedge-etcd":                                     os.getenv("PGEDGE_ETCD_VERSION"),  # standalone etcd binary; version independent of patroni
+    "pgedge-rag-server":                               os.getenv("PGEDGE_RAG_SERVER_VERSION"),
+    "pgedge-anonymizer":                               os.getenv("PGEDGE_ANONYMIZER_VERSION"),
+    "pgedge-ai-dba-server":                            os.getenv("PGEDGE_AI_DBA_VERSION"),
+    "pgedge-ai-dba-alerter":                           os.getenv("PGEDGE_AI_DBA_VERSION"),
+    "pgedge-ai-dba-collector":                         os.getenv("PGEDGE_AI_DBA_VERSION"),
+    "pgedge-ai-dba-client":                            os.getenv("PGEDGE_AI_DBA_VERSION"),
 }
 
 DEB_PACKAGE_VERSION_MAP = {
@@ -100,6 +111,14 @@ DEB_PACKAGE_VERSION_MAP = {
     "pgedge-pgbouncer":                                       os.getenv("PGEDGE_PGBOUNCER_VERSION"),
     "pgedge-pgbackrest":                                      os.getenv("PGEDGE_PGBACKREST_VERSION"),
     "pgedge-pgadmin4":                                        os.getenv("PGEDGE_PGADMIN4_VERSION"),
+    "pgedge-patroni":                                         os.getenv("PGEDGE_PATRONI_VERSION"),
+    "pgedge-etcd":                                            os.getenv("PGEDGE_ETCD_VERSION"),  # standalone etcd binary; version independent of patroni
+    "pgedge-rag-server":                                      os.getenv("PGEDGE_RAG_SERVER_VERSION"),
+    "pgedge-anonymizer":                                      os.getenv("PGEDGE_ANONYMIZER_VERSION"),
+    "pgedge-ai-dba-server":                                   os.getenv("PGEDGE_AI_DBA_VERSION"),
+    "pgedge-ai-dba-alerter":                                  os.getenv("PGEDGE_AI_DBA_VERSION"),
+    "pgedge-ai-dba-collector":                                os.getenv("PGEDGE_AI_DBA_VERSION"),
+    "pgedge-ai-dba-client":                                   os.getenv("PGEDGE_AI_DBA_VERSION"),
 }
 
 

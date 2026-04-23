@@ -9,6 +9,8 @@ A pytest-based testing framework for validating pgEdge Enterprise Postgres nativ
 - [Configuration](#configuration)
   - [Environment Files](#environment-files)
   - [Key Variables](#key-variables)
+  - [Container Selection (Docker Mode)](#container-selection-docker-mode)
+  - [AWS Instance Selection (AWS Mode)](#aws-instance-selection-aws-mode)
 - [Usage](#usage)
   - [Interactive Mode](#interactive-mode)
   - [Command Line Mode](#command-line-mode)
@@ -23,8 +25,8 @@ A pytest-based testing framework for validating pgEdge Enterprise Postgres nativ
 ## Prerequisites
 
 - Python 3.8+
-- Docker (for container-based testing)
-- SSH access to target test containers
+- Docker (for Docker-based testing)
+- SSH access to target machines (for AWS-based testing)
 
 ## Installation
 
@@ -62,8 +64,8 @@ Edit the configuration files located in the `configuration/` directory based on 
 Ensure all variables in the config files are correctly set:
 
 ```bash
-# Container details
-export CONTAINERS=auto-alma10-arm,auto-oel9-arm
+# Container/instance names (populated automatically from containers_list.json or aws_instances.json)
+export CONTAINERS=auto-rocky9-arm,auto-alma10-arm
 export DEB_CONTAINERS=auto-debian13-amd,auto-ubuntu2204-arm
 
 # Component versions
@@ -73,6 +75,99 @@ export PG_MAJOR_VERSION=16
 # Repository selection (release | staging | daily)
 export REPO=staging
 ```
+
+---
+
+### Container Selection (Docker Mode)
+
+In Docker mode (default), the test runner reads **`configuration/containers_list.json`** to determine which containers to test against. You do not need to edit `CONTAINERS` / `DEB_CONTAINERS` manually — the script builds them automatically from the JSON file.
+
+**`configuration/containers_list.json`** structure:
+
+```json
+{
+  "rhel": [
+    { "name": "auto-rocky9-arm",  "description": "Rocky Linux 9 / ARM64",  "enabled": true  },
+    { "name": "auto-alma10-arm",  "description": "AlmaLinux 10 / ARM64",   "enabled": false }
+  ],
+  "deb": [
+    { "name": "auto-debian13-amd", "description": "Debian 13 / AMD64",     "enabled": true  },
+    { "name": "auto-ubuntu2204-arm","description": "Ubuntu 22.04 / ARM64", "enabled": false }
+  ]
+}
+```
+
+- Set `"enabled": true` to include a container in the test run.
+- Set `"enabled": false` to skip it without removing the entry.
+- Container names must match existing Docker containers on the host.
+
+At runtime, only `enabled: true` entries are loaded into `CONTAINERS` (RPM) and `DEB_CONTAINERS` (DEB).
+
+---
+
+### AWS Instance Selection (AWS Mode)
+
+When running against live AWS EC2 instances instead of Docker containers, use `--target aws`. The test runner reads **`configuration/aws_instances.json`** and the `AWSInstanceClient` replaces the Docker client transparently — all existing test files work unchanged.
+
+**`configuration/aws_instances.json`** structure:
+
+```json
+{
+  "rhel": [
+    {
+      "name":        "z_Rocky9_ARM",
+      "host":        "ec2-3-111-170-196.ap-south-1.compute.amazonaws.com",
+      "username":    "rocky",
+      "key_file":    "",
+      "description": "Rocky Linux 9 ARM / ap-south-1",
+      "enabled":     true
+    }
+  ],
+  "deb": [
+    {
+      "name":        "z_Debian13_AMD",
+      "host":        "ec2-3-110-84-181.ap-south-1.compute.amazonaws.com",
+      "username":    "admin",
+      "key_file":    "",
+      "description": "Debian 13 AMD / ap-south-1",
+      "enabled":     true
+    }
+  ]
+}
+```
+
+- Set `"enabled": true` to include an instance in the AWS test run.
+- `"key_file"` is optional — leave it empty (`""`) and use SSH agent or `AWS_SSH_KEY_PATH` instead (see below).
+
+#### SSH Key Authentication
+
+Three methods are supported, resolved in this order:
+
+| Priority | Method | How to use |
+|----------|--------|------------|
+| 1 | `key_file` in JSON | Set path directly in `aws_instances.json` (not recommended for shared repos) |
+| 2 | Environment variable | `export AWS_SSH_KEY_PATH=/path/to/key.pem` |
+| 3 | SSH agent | `ssh-add /path/to/key.pem` (recommended) |
+
+**Recommended — SSH agent (no file path stored anywhere):**
+```bash
+ssh-add ~/.ssh/your-key.pem   # once per session
+./run_pep_tf.sh --target aws --pgver 17 --components server
+```
+
+**Alternative — environment variable (good for CI/CD):**
+```bash
+export AWS_SSH_KEY_PATH=/path/to/your-key.pem
+./run_pep_tf.sh --target aws --pgver 17 --components server
+```
+
+> **Never commit `.pem` key files.** The `keys/` directory is gitignored for local storage. Prefer SSH agent or `AWS_SSH_KEY_PATH` over `key_file` in JSON.
+
+#### Passwordless Sudo Requirement
+
+AWS instances must be configured to allow passwordless `sudo` for the SSH user. See the [pgEdge prerequisites guide](https://docs.pgedge.com/platform/prerequisites/#configuring-passwordless-sudo) for setup instructions.
+
+---
 
 ## Usage
 
@@ -96,21 +191,28 @@ Run without arguments to enter interactive menu mode:
 |--------|-------------|--------|
 | `--pgver` | PostgreSQL versions to test | `16`, `17`, `18`, `all` |
 | `--platforms` | Target platforms | `rpm`, `deb`, `all` |
-| `--components` | Components to test | `server`, `snowflake`, `pgbouncer`, `pgbackrest`, `postgrest`, `lolor`, `postgis`, `system_stats`, `vectorizer`, `zerodowntime`, `mcp`, `rag`, `ace`, `repo_health`, `docloader`, `anonymizer`, `pg_vectorize`, `pg_tokenizer`, `vchord_bm25`, `pgaudit`, `pgadmin4`, `patroni`, `pg_stat_monitor`, `all` |
+| `--components` | Components to test | `server`, `snowflake`, `pgbouncer`, `pgbackrest`, `postgrest`, `lolor`, `postgis`, `system_stats`, `vectorizer`, `zerodowntime`, `mcp`, `rag`, `ace`, `repo_health`, `docloader`, `anonymizer`, `pg_vectorize`, `pg_tokenizer`, `vchord_bm25`, `pgaudit`, `pgadmin4`, `patroni`, `pg_stat_monitor`, `ai_db_workbench`, `radar`, `all` |
 | `--repo` | Repository to use | `release`, `staging`, `daily` |
+| `--target` | Execution target | `docker` (default), `aws` |
 | `--help`, `-h` | Show help message | - |
 
 ### Examples
 
 ```bash
-# Test PG 16 and 17 server on DEB platforms with staging repo
+# Test PG 16 and 17 server on DEB platforms with staging repo (Docker)
 ./run_pep_tf.sh --pgver 16,17 --platforms deb --components server --repo staging
 
-# Test all versions on RPM only for lolor and postgis
+# Test all versions on RPM only for lolor and postgis (Docker)
 ./run_pep_tf.sh --pgver all --platforms rpm --components lolor,postgis
 
-# Test everything with release repo
+# Test everything with release repo (Docker)
 ./run_pep_tf.sh --pgver all --platforms all --components all --repo release
+
+# Test patroni on AWS EC2 instances
+./run_pep_tf.sh --target aws --pgver 17 --platforms all --components patroni --repo release
+
+# Test repo health on AWS EC2 instances
+./run_pep_tf.sh --target aws --pgver 17 --platforms all --components repo_health --repo release
 ```
 
 ## Output
@@ -145,6 +247,7 @@ pgedge-pep-test/
 │   ├── test_pep_postgrest.py
 │   ├── test_pep_pgadmin4.py
 │   ├── test_pep_ace.py
+│   ├── test_pep_ai_db_workbench.py
 │   ├── test_pep_system_stats.py
 │   ├── test_pep_vectorizer.py
 │   ├── test_pep_mcp.py
@@ -157,17 +260,22 @@ pgedge-pep-test/
 │   ├── test_pep_vchord_bm25.py
 │   ├── test_pep_pgaudit.py
 │   ├── test_pep_patroni.py
+│   ├── test_pep_radar.py
 │   ├── test_pep_pg_stat_monitor.py
 │   └── test_integration_zerodowntime.py
 ├── configuration/           # Environment configuration files
 │   ├── config16.env
 │   ├── config17.env
-│   └── config18.env
+│   ├── config18.env
+│   ├── containers_list.json # Docker container registry (enable/disable per container)
+│   └── aws_instances.json   # AWS EC2 instance registry (enable/disable per instance)
+├── aspects/                 # Test aspects and utilities
+│   ├── aws_client.py        # AWSInstanceClient (drop-in Docker replacement)
+│   └── ssh_executor.py      # SSH-based container interface for AWS VMs
 ├── expected-output/         # Expected test outputs for comparison
 ├── actual-output/           # Actual test outputs
 ├── test-logs/               # Test execution reports
 ├── sql/                     # SQL scripts for testing
-├── aspects/                 # Test aspects and utilities
 ├── utillities/              # Helper utilities
 ├── run_pep_tf.sh            # Main test runner script
 └── requirements.txt         # Python dependencies
@@ -196,29 +304,30 @@ pgedge-pep-test/
 
 ## Supported Components
 
-| Component      | Description                              |
-|----------------|------------------------------------------|
-| `server`       | PostgreSQL server and contrib packages   |
-| `snowflake`    | Snowflake sequence generator extension   |
-| `pgbouncer`    | Connection pooler                        |
-| `pgbackrest`   | Backup and restore tool                  |
-| `postgrest`    | RESTful API for PostgreSQL               |
-| `pgadmin4`     | Web-based database management tool       |
-| `lolor`        | Large object logical replication         |
-| `postgis`      | Spatial and geographic objects           |
-| `system_stats` | System statistics extension              |
-| `vectorizer`   | AI/ML vectorization tools                |
-| `zerodowntime` | Zero downtime upgrade testing            |
-| `mcp`          | Model Context Protocol components        |
-| `rag`          | RAG server components                    |
-| `ace`          | ACE extension tests                      |
-| `repo_health`  | Repository health (install all packages) |
-| `docloader`    | Document loader utility                  |
-| `anonymizer`   | Data anonymization extension             |
-| `pg_vectorize` | Vectorization extension                  |
-| `pg_tokenizer` | Text tokenization extension              |
-| `vchord_bm25`  | BM25 vector chord search                 |
-| `pgaudit`      | Audit logging extension                  |
-| `patroni`      | High-availability solution for PostgreSQL |
-| `pg_stat_monitor` | PostgreSQL query performance monitoring extension |
-
+| Component         | Description                                        |
+|-------------------|----------------------------------------------------|
+| `server`          | PostgreSQL server and contrib packages             |
+| `snowflake`       | Snowflake sequence generator extension             |
+| `pgbouncer`       | Connection pooler                                  |
+| `pgbackrest`      | Backup and restore tool                            |
+| `postgrest`       | RESTful API for PostgreSQL                         |
+| `pgadmin4`        | Web-based database management tool                 |
+| `lolor`           | Large object logical replication                   |
+| `postgis`         | Spatial and geographic objects                     |
+| `system_stats`    | System statistics extension                        |
+| `vectorizer`      | AI/ML vectorization tools                          |
+| `zerodowntime`    | Zero downtime upgrade testing                      |
+| `mcp`             | Model Context Protocol components                  |
+| `rag`             | RAG server components                              |
+| `ace`             | ACE extension tests                                |
+| `repo_health`     | Repository health (install and verify all packages)|
+| `docloader`       | Document loader utility                            |
+| `anonymizer`      | Data anonymization extension                       |
+| `pg_vectorize`    | Vectorization extension                            |
+| `pg_tokenizer`    | Text tokenization extension                        |
+| `vchord_bm25`     | BM25 vector chord search                           |
+| `pgaudit`         | Audit logging extension                            |
+| `patroni`         | High-availability solution for PostgreSQL          |
+| `pg_stat_monitor` | PostgreSQL query performance monitoring extension  |
+| `ai_db_workbench` | AI-powered database workbench (server, alerter, collector, client) |
+| `radar` | Radar monitoring and observability tool |

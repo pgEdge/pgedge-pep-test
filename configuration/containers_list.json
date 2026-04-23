@@ -5,13 +5,13 @@
   "rhel": [
     { "name": "auto-rocky9-arm",   "description": "Rocky Linux 9  / ARM64",  "enabled": true  },
     { "name": "auto-rocky10-arm",  "description": "Rocky Linux 10 / ARM64",  "enabled": true },
-    { "name": "auto-alma9-arm",    "description": "AlmaLinux 9    / ARM64",  "enabled": true },
-    { "name": "auto-alma10-arm",   "description": "AlmaLinux 10   / ARM64",  "enabled": true },
-    { "name": "auto-oel9-arm",     "description": "Oracle Linux 9 / ARM64",  "enabled": true },
-    { "name": "auto-oel10-arm",    "description": "Oracle Linux 10/ ARM64",  "enabled": true },
-    { "name": "my-rocky9-amd",     "description": "Rocky Linux 9  / AMD64",  "enabled": true },
-    { "name": "auto-alma9-amd",    "description": "AlmaLinux 9    / AMD64",  "enabled": true },
-    { "name": "auto-oel9-amd",     "description": "Oracle Linux 9 / AMD64",  "enabled": true }
+    { "name": "auto-alma9-arm",    "description": "AlmaLinux 9    / ARM64",  "enabled": false },
+    { "name": "auto-alma10-arm",   "description": "AlmaLinux 10   / ARM64",  "enabled": false },
+    { "name": "auto-oel9-arm",     "description": "Oracle Linux 9 / ARM64",  "enabled": false },
+    { "name": "auto-oel10-arm",    "description": "Oracle Linux 10/ ARM64",  "enabled": false },
+    { "name": "my-rocky9-amd",     "description": "Rocky Linux 9  / AMD64",  "enabled": false },
+    { "name": "auto-alma9-amd",    "description": "AlmaLinux 9    / AMD64",  "enabled": false },
+    { "name": "auto-oel9-amd",     "description": "Oracle Linux 9 / AMD64",  "enabled": false }
   ],
 
   "deb": [

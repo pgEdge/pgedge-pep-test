@@ -52,6 +52,19 @@ def get_os_info():
 
 def setup_debian(os_id="", major=""):
     print(f"\n=== Debian/Ubuntu Prerequisites (os={os_id or '?'}, major={major or '?'}) ===")
+
+    # Minimal Debian/Ubuntu Docker images (e.g. Ubuntu 24.04) ship dpkg config files
+    # under /etc/dpkg/dpkg.cfg.d/ that exclude /usr/share/doc and /usr/share/licenses,
+    # causing README.md and LICENSE files to be silently omitted on install.
+    # Remove those path-exclude lines from every file in the directory so subsequent
+    # apt-get installs write the full file tree.
+    run(
+        r"grep -rl 'path-exclude=/usr/share/doc' /etc/dpkg/dpkg.cfg.d/ 2>/dev/null"
+        r" | xargs -r sed -i '/^path-exclude=\/usr\/share\/doc/d';"
+        r" grep -rl 'path-exclude=/usr/share/licenses' /etc/dpkg/dpkg.cfg.d/ 2>/dev/null"
+        r" | xargs -r sed -i '/^path-exclude=\/usr\/share\/licenses/d'; true"
+    )
+
     run("apt-get update")
     run("apt-get install -y python3")
     run("apt-get install -y curl")

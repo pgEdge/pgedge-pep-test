@@ -55,9 +55,9 @@ ai_db_workbench_binary_map = {
 
 # Systemd service files — client has no service
 ai_db_workbench_service_map = {
-    ai_db_workbench_alerter_package: "/usr/lib/systemd/system/pgedge-ai-dba-alerter.service",
-    ai_db_workbench_collector_package: "/usr/lib/systemd/system/pgedge-ai-dba-collector.service",
-    ai_db_workbench_server_package: "/usr/lib/systemd/system/pgedge-ai-dba-server.service",
+    ai_db_workbench_alerter_package: "/lib/systemd/system/pgedge-ai-dba-alerter.service",
+    ai_db_workbench_collector_package: "/lib/systemd/system/pgedge-ai-dba-collector.service",
+    ai_db_workbench_server_package: "/lib/systemd/system/pgedge-ai-dba-server.service",
 }
 
 # SBOM file locations per package (server uses a subdirectory; others are flat under /usr/share)
@@ -433,16 +433,21 @@ def test_verify_readme_file(container_name, container_type, package):
 
     assert container.status == "running"
 
-    readme_path = f"/usr/share/doc/{package}/README.md.gz"
-    print(f"\n--- Verifying README.md for {package} on {container_name} ---")
+    # RPM installs README.md; DEB compresses it as README.md.gz
+    readme_path = (
+        f"/usr/share/doc/{package}/README.md"
+        if container_type == "rhel"
+        else f"/usr/share/doc/{package}/README.md.gz"
+    )
+    print(f"\n--- Verifying README for {package} on {container_name} ({container_type}) ---")
 
     exit_code, output = container.exec_run(
         ["bash", "-c", f"test -f {readme_path} && echo EXISTS || echo MISSING"],
         user="root",
     )
     result = output.decode().strip()
-    assert result == "EXISTS", f"README.md not found at {readme_path} for {package}"
-    print(f"✅ README.md found at {readme_path}")
+    assert result == "EXISTS", f"README not found at {readme_path} for {package}"
+    print(f"✅ README found at {readme_path}")
 
 
 @pytest.mark.parametrize("container_name,container_type,package", all_container_package_combinations)

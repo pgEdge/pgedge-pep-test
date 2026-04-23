@@ -89,6 +89,10 @@ RHEL_PACKAGE_VERSION_MAP = {
     "pgedge-etcd":                                     os.getenv("PGEDGE_ETCD_VERSION"),  # standalone etcd binary; version independent of patroni
     "pgedge-rag-server":                               os.getenv("PGEDGE_RAG_SERVER_VERSION"),
     "pgedge-anonymizer":                               os.getenv("PGEDGE_ANONYMIZER_VERSION"),
+    "pgedge-ai-dba-server":                            os.getenv("PGEDGE_AI_DBA_VERSION"),
+    "pgedge-ai-dba-alerter":                           os.getenv("PGEDGE_AI_DBA_VERSION"),
+    "pgedge-ai-dba-collector":                         os.getenv("PGEDGE_AI_DBA_VERSION"),
+    "pgedge-ai-dba-client":                            os.getenv("PGEDGE_AI_DBA_VERSION"),
 }
 
 DEB_PACKAGE_VERSION_MAP = {
@@ -111,6 +115,10 @@ DEB_PACKAGE_VERSION_MAP = {
     "pgedge-etcd":                                            os.getenv("PGEDGE_ETCD_VERSION"),  # standalone etcd binary; version independent of patroni
     "pgedge-rag-server":                                      os.getenv("PGEDGE_RAG_SERVER_VERSION"),
     "pgedge-anonymizer":                                      os.getenv("PGEDGE_ANONYMIZER_VERSION"),
+    "pgedge-ai-dba-server":                                   os.getenv("PGEDGE_AI_DBA_VERSION"),
+    "pgedge-ai-dba-alerter":                                  os.getenv("PGEDGE_AI_DBA_VERSION"),
+    "pgedge-ai-dba-collector":                                os.getenv("PGEDGE_AI_DBA_VERSION"),
+    "pgedge-ai-dba-client":                                   os.getenv("PGEDGE_AI_DBA_VERSION"),
 }
 
 

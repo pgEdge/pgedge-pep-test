@@ -7,11 +7,11 @@
   "rhel": [
     {
       "name":        "z_RHEL9AMD",
-      "host":        "ec2-35-154-166-213.ap-south-1.compute.amazonaws.com",
+      "host":        "ec2-43-205-145-209.ap-south-1.compute.amazonaws.com",
       "username":    "rocky",
       "key_file":    "",
       "description": "Rocky Linux 9 / ap-south-1",
-      "enabled":     false
+      "enabled":     true
     },
     {
       "name":        "z_Rocky9_ARM",
@@ -46,7 +46,7 @@
       "username":    "admin",
       "key_file":    "",
       "description": "Debian 13 / ap-south-1",
-      "enabled":     true
+      "enabled":     false
     },
     {
       "name":        "z_Debian12_AMD",

@@ -1,0 +1,12 @@
+# TODO: verify DEB file paths after installing — paste output of: dpkg -L pgedge-ai-dba-alerter
+/etc/pgedge/ai-dba-alerter.yaml
+/usr/bin/ai-dba-alerter
+/usr/lib/systemd/system/pgedge-ai-dba-alerter.service
+/usr/share/doc/pgedge-ai-dba-alerter/README.md.gz
+/usr/share/licenses/pgedge-ai-dba-alerter/LICENSE
+/usr/share/pgedge-ai-dba-alerter-sbom.json
+/usr/share/pgedge-ai-dba-alerter-sbom.json.asc
+/var/lib/pgedge
+/var/lib/pgedge/ai-dba-alerter
+/var/log/pgedge
+/var/log/pgedge/ai-dba-alerter

@@ -1,0 +1,11 @@
+/etc/pgedge/ai-dba-collector.yaml
+/usr/bin/ai-dba-collector
+/usr/lib/systemd/system/pgedge-ai-dba-collector.service
+/usr/share/doc/pgedge-ai-dba-collector/README.md
+/usr/share/licenses/pgedge-ai-dba-collector/LICENSE
+/usr/share/pgedge-ai-dba-collector/pgedge-ai-dba-collector-sbom.json
+/usr/share/pgedge-ai-dba-collector/pgedge-ai-dba-collector-sbom.json.asc
+/var/lib/pgedge
+/var/lib/pgedge/ai-dba-collector
+/var/log/pgedge
+/var/log/pgedge/ai-dba-collector

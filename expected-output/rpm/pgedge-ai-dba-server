@@ -1,0 +1,8 @@
+/etc/pgedge/ai-dba-server.yaml
+/usr/bin/ai-dba-server
+/usr/lib/systemd/system/pgedge-ai-dba-server.service
+v/usr/share/licenses/pgedge-ai-dba-server/LICENSE
+/usr/share/pgedge-ai-dba-server/pgedge-ai-dba-server-sbom.json
+/usr/share/pgedge-ai-dba-server/pgedge-ai-dba-server-sbom.json.asc
+/var/lib/pgedge/ai-dba-server
+/var/log/pgedge/ai-dba-server

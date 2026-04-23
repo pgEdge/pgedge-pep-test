@@ -1,0 +1,14 @@
+# TODO: verify DEB file paths after installing — paste output of: dpkg -L pgedge-ai-dba-client
+/etc/nginx/conf.d/pgedge-ai-dba-client.conf
+/usr/share/doc/pgedge-ai-dba-client/README.md.gz
+/usr/share/licenses/pgedge-ai-dba-client/LICENSE
+/usr/share/pgedge-ai-dba-client-sbom.json
+/usr/share/pgedge-ai-dba-client-sbom.json.asc
+/usr/share/pgedge/ai-dba-client
+/usr/share/pgedge/ai-dba-client/assets
+/usr/share/pgedge/ai-dba-client/assets/index-Ca_onZ_U.js
+/usr/share/pgedge/ai-dba-client/assets/index-Ca_onZ_U.js.map
+/usr/share/pgedge/ai-dba-client/assets/logo-dark-BAaEnOhp.png
+/usr/share/pgedge/ai-dba-client/assets/logo-light-gaA4LRit.png
+/usr/share/pgedge/ai-dba-client/favicon.ico
+/usr/share/pgedge/ai-dba-client/index.html

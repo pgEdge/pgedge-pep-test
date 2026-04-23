@@ -1,0 +1,12 @@
+# TODO: verify DEB file paths after installing — paste output of: dpkg -L pgedge-ai-dba-collector
+/etc/pgedge/ai-dba-collector.yaml
+/usr/bin/ai-dba-collector
+/usr/lib/systemd/system/pgedge-ai-dba-collector.service
+/usr/share/doc/pgedge-ai-dba-collector/README.md.gz
+/usr/share/licenses/pgedge-ai-dba-collector/LICENSE
+/usr/share/pgedge-ai-dba-collector-sbom.json
+/usr/share/pgedge-ai-dba-collector-sbom.json.asc
+/var/lib/pgedge
+/var/lib/pgedge/ai-dba-collector
+/var/log/pgedge
+/var/log/pgedge/ai-dba-collector

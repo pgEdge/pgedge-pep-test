@@ -1,0 +1,10 @@
+# TODO: verify DEB file paths after installing — paste output of: dpkg -L pgedge-ai-dba-server
+/etc/pgedge/ai-dba-server.yaml
+/usr/bin/ai-dba-server
+/usr/lib/systemd/system/pgedge-ai-dba-server.service
+/usr/share/doc/pgedge-ai-dba-server/README.md.gz
+/usr/share/licenses/pgedge-ai-dba-server/LICENSE
+/usr/share/pgedge-ai-dba-server/ai-dba-server-sbom.json
+/usr/share/pgedge-ai-dba-server/ai-dba-server-sbom.json.asc
+/var/lib/pgedge/ai-dba-server
+/var/log/pgedge/ai-dba-server

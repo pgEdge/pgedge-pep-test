@@ -1,0 +1,54 @@
+name: PEP Regression
+
+on:
+  workflow_dispatch:
+  # Scheduled trigger intentionally disabled for v1.
+  # Will be enabled once the workflow is fully validated.
+  #
+  # When enabling later: schedule fires with empty `inputs.*`. The plan job's
+  # parse() helper treats empty as "all" and the test job's `inputs.X || 'default'`
+  # fallbacks cover the rest, so no further code changes should be needed —
+  # but verify by triggering workflow_dispatch with all defaults (equivalent shape).
+  #
+  # schedule:
+  #   - cron: "0 2 * * *"   # 02:00 UTC nightly, full matrix, repo=release
+
+jobs:
+  smoke:
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 90
+    steps:
+      - name: '[stage-1] Checkout'
+        uses: actions/checkout@v4
+
+      - name: '[stage-1] Set up Python'
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: '[stage-1] Install Python deps'
+        run: pip install -r requirements.txt
+
+      - name: '[stage-1] Verify Docker available'
+        run: docker version
+
+      - name: '[stage-1] Run framework (hardcoded slice)'
+        run: |
+          echo "[stage-1] invoking run_pep_tf.sh with hardcoded params"
+          ./run_pep_tf.sh \
+            --pgver 17 \
+            --platforms deb \
+            --components pgbouncer \
+            --repo release
+
+      - name: '[stage-1] Upload test-logs artifact'
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: stage1-test-logs
+          path: test-logs/
+          retention-days: 14
+          if-no-files-found: warn
+
+    permissions:
+      contents: read

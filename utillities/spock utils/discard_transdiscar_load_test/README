@@ -1,0 +1,23 @@
+# Quick smoke test first — 30s, 4 workers, 20% conflicts
+python test_spock_discard.py --config nodes.json --test doc_load \
+    --duration 30 --threads 4 --conflict-ratio 0.2
+
+# Single mode under load — DISCARD only
+python test_spock_discard.py --config nodes.json --test discard_load \
+    --duration 60 --threads 8 --conflict-ratio 0.3
+
+# Single mode under load — TRANSDISCARD only
+python test_spock_discard.py --config nodes.json --test transdiscard_load \
+    --duration 60 --threads 8 --conflict-ratio 0.3
+
+# Both modes back-to-back, heavier
+python test_spock_discard.py --config nodes.json --test doc_load \
+    --duration 120 --threads 16 --conflict-ratio 0.5 --wait 30
+
+# Verbose — useful for the first run, prints every SQL on errors
+python test_spock_discard.py --config nodes.json --test doc_load \
+    --duration 30 --threads 4 -v
+
+
+ # Drops test_discard and test_transdiscard on every node
+python test_spock_discard.py --config nodes.json --test doc_load --cleanup

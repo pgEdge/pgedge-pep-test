@@ -455,8 +455,54 @@ def test_run_sql_files_on_nodes(container_name, container_type):
 
 
 @pytest.mark.parametrize("container_name,container_type", all_containers)
+def test_components_extensions(container_name, container_type):
+    """Step 9: Create extensions on all nodes if TEST_EXTENSIONS=true"""
+    if os.getenv("TEST_EXTENSIONS", "false").lower() != "true":
+        pytest.skip("TEST_EXTENSIONS is not set to true")
+
+    extensions_list = [e.strip() for e in os.getenv("EXTENSIONS", "").split(",") if e.strip()]
+    if not extensions_list:
+        pytest.skip("No extensions defined in EXTENSIONS env variable")
+
+    container_name = container_name.strip()
+    if not container_name:
+        pytest.skip("Invalid container")
+
+    try:
+        container = client.containers.get(container_name)
+    except docker.errors.NotFound:
+        pytest.skip(f"Container {container_name} not found or not running.")
+
+    assert container.status == "running"
+
+    config = get_container_config(container_type)
+    pguser = config["pguser"]
+
+    for node_num in range(1, no_of_nodes + 1):
+        node_port = base_port + node_num - 1
+        print(f"\n--- Creating extensions on n{node_num} (port {node_port}) ---")
+
+        for ext in extensions_list:
+            normalized_ext = f'"{ext}"' if "-" in ext else ext
+            print(f"  Creating extension {normalized_ext}...")
+
+            exit_code, output = container.exec_run(
+                ["bash", "-c",
+                 f"psql -h localhost -p {node_port} -U {pguser} -d postgres "
+                 f"-c 'CREATE EXTENSION IF NOT EXISTS {normalized_ext} CASCADE;'"],
+                user="root"
+            )
+
+            assert exit_code == 0, (
+                f"Failed to create extension {normalized_ext} on n{node_num} "
+                f"(port {node_port}): {output.decode()}"
+            )
+            print(f"  ✅ Created extension {normalized_ext} on n{node_num}")
+
+
+@pytest.mark.parametrize("container_name,container_type", all_containers)
 def test_setup_cross_wiring_with_zodan(container_name, container_type):
-    """Step 9: Setup cross-wiring between nodes using zodan-50x.py or zodan-50x.sql"""
+    """Step 10: Setup cross-wiring between nodes using zodan-50x.py or zodan-50x.sql"""
     container_name = container_name.strip()
 
     if not container_name:

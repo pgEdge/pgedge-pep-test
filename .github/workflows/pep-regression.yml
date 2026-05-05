@@ -1,0 +1,19 @@
+name: PEP Regression
+
+# This is a placeholder on the default branch.
+# The real workflow lives on the `gha` branch (and eventually merges here).
+# When triggering manually, use "Use workflow from: gha" (in progress) to run the real version that 
+# will eventually be merged here
+
+on:
+  workflow_dispatch:
+
+jobs:
+  placeholder:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: 'Placeholder — real workflow lives on gha'
+        run: |
+          echo "This is the placeholder workflow on the default branch."
+          echo "If you're seeing this output, you triggered with 'Use workflow from: main'."
+          echo "To run the real PEP regression, retrigger with 'Use workflow from: gha'."

@@ -52,7 +52,7 @@ The `.env` file is the primary configuration file. It controls:
 ```bash
 # Container Configuration
 export CONTAINERS=auto-rocky9-arm,auto-alma9-amd
-export DEB_CONTAINERS=auto-debian11,auto-ubuntu2204
+export DEB_CONTAINERS=auto-debian11-amd,auto-ubuntu2204
 
 # PostgreSQL Version
 export PG_MAJOR_VERSION=18
@@ -315,7 +315,7 @@ docker run -d --name auto-oel9-arm oraclelinux:9 tail -f /dev/null
 
 ```bash
 # Debian
-docker run -d --name auto-debian11 debian:11 tail -f /dev/null
+docker run -d --name auto-debian11-amd debian:11 tail -f /dev/null
 docker run -d --name auto-debian12 debian:12 tail -f /dev/null
 
 # Ubuntu
@@ -767,7 +767,7 @@ Check the `component-test/` directory for:
 | Variable | Description | Example |
 |----------|-------------|---------|
 | `CONTAINERS` | RHEL container names | `auto-rocky9-arm` |
-| `DEB_CONTAINERS` | Debian container names | `auto-debian11` |
+| `DEB_CONTAINERS` | Debian container names | `auto-debian11-amd` |
 | `PG_MAJOR_VERSION` | PostgreSQL version | `18` |
 | `PG_PORT` | PostgreSQL port | `5432` |
 | `PG_DATA_DIR` | Data directory path | `/tmp/n1` |

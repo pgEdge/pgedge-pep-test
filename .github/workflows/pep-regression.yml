@@ -32,14 +32,59 @@ jobs:
       - name: '[stage-1] Verify Docker available'
         run: docker version
 
-      - name: '[stage-1] Run framework (hardcoded slice)'
+      - name: '[framework-help] CLI sanity'
+        shell: bash
         run: |
-          echo "[stage-1] invoking run_pep_tf.sh with hardcoded params"
-          ./run_pep_tf.sh \
-            --pgver 17 \
-            --platforms deb \
-            --components pgbouncer \
-            --repo release
+          set -o pipefail
+          ./run_pep_tf.sh --help
+          ./run_pep_tf.sh --help | grep -- '--arch'    > /dev/null
+          ./run_pep_tf.sh --help | grep -- '--dry-run' > /dev/null
+          echo "[framework-help] OK (--arch and --dry-run advertised)"
+
+      - name: '[framework-command] Dry run'
+        shell: bash
+        run: |
+          set -o pipefail
+          mkdir -p test-logs
+          CMD="./run_pep_tf.sh --pgver 17 --platforms deb --arch arm64 --components pgbouncer --repo release --dry-run"
+          echo "[framework-command] $CMD"
+          $CMD 2>&1 | tee test-logs/dry-run-output.txt
+
+      - name: '[summary] Write workflow summary artifact'
+        if: always()
+        shell: bash
+        run: |
+          mkdir -p test-logs
+          {
+            echo "[workflow-summary] ============================================================"
+            echo "[workflow-summary] timestamp=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+            echo "[workflow-summary] github.sha=${{ github.sha }}"
+            echo "[workflow-summary] github.ref=${{ github.ref }}"
+            echo "[workflow-summary] github.run_id=${{ github.run_id }}"
+            echo "[workflow-summary] github.run_number=${{ github.run_number }}"
+            echo "[workflow-summary] github.event_name=${{ github.event_name }}"
+            echo "[workflow-summary] github.actor=${{ github.actor }}"
+            echo "[workflow-summary] runner.os=${{ runner.os }}"
+            echo "[workflow-summary] runner.arch=${{ runner.arch }}"
+            echo "[workflow-summary] runner.name=${{ runner.name }}"
+            echo "[workflow-summary] runner.label=ubuntu-24.04-arm"
+            echo "[workflow-summary] execution_mode=preview"
+            echo "[workflow-summary] pg=17"
+            echo "[workflow-summary] family=deb"
+            echo "[workflow-summary] arch=arm64"
+            echo "[workflow-summary] repo=release"
+            echo "[workflow-summary] components=pgbouncer"
+            echo "[workflow-summary] python=$(python3 --version 2>&1)"
+            echo "[workflow-summary] docker=$(docker --version 2>&1 || echo 'not available')"
+            echo "[workflow-summary] ------------------------------------------------------------"
+            echo "[workflow-summary] dry-run output:"
+            if [[ -f test-logs/dry-run-output.txt ]]; then
+              grep -E '\[container-resolution\]|\[image-resolution\]|\[dry-run\]|\[arch-filter\]' test-logs/dry-run-output.txt || echo "  (no tagged lines captured)"
+            else
+              echo "  (test-logs/dry-run-output.txt not present)"
+            fi
+            echo "[workflow-summary] ============================================================"
+          } | tee test-logs/workflow-summary.txt
 
       - name: '[stage-1] Upload test-logs artifact'
         if: always()

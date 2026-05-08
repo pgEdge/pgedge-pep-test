@@ -14,22 +14,43 @@ on:
   #   - cron: "0 2 * * *"   # 02:00 UTC nightly, full matrix, repo=release
 
 jobs:
-  smoke:
-    runs-on: ubuntu-24.04-arm
+  test:
+    name: 'PG${{ matrix.pg }} ${{ matrix.family }} ${{ matrix.arch }}'
+    runs-on: ${{ matrix.runner }}
     timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { pg: '16', family: 'rpm', arch: 'arm64', runner: 'ubuntu-24.04-arm' }
+          - { pg: '16', family: 'rpm', arch: 'amd64', runner: 'ubuntu-24.04' }
+          - { pg: '16', family: 'deb', arch: 'arm64', runner: 'ubuntu-24.04-arm' }
+          - { pg: '16', family: 'deb', arch: 'amd64', runner: 'ubuntu-24.04' }
+          - { pg: '17', family: 'rpm', arch: 'arm64', runner: 'ubuntu-24.04-arm' }
+          - { pg: '17', family: 'rpm', arch: 'amd64', runner: 'ubuntu-24.04' }
+          - { pg: '17', family: 'deb', arch: 'arm64', runner: 'ubuntu-24.04-arm' }
+          - { pg: '17', family: 'deb', arch: 'amd64', runner: 'ubuntu-24.04' }
+          - { pg: '18', family: 'rpm', arch: 'arm64', runner: 'ubuntu-24.04-arm' }
+          - { pg: '18', family: 'rpm', arch: 'amd64', runner: 'ubuntu-24.04' }
+          - { pg: '18', family: 'deb', arch: 'arm64', runner: 'ubuntu-24.04-arm' }
+          - { pg: '18', family: 'deb', arch: 'amd64', runner: 'ubuntu-24.04' }
     steps:
-      - name: '[stage-1] Checkout'
+      - name: '[slice] Identity'
+        run: |
+          echo "[slice] pg=${{ matrix.pg }} family=${{ matrix.family }} arch=${{ matrix.arch }} runner=${{ matrix.runner }}"
+
+      - name: '[checkout] Source'
         uses: actions/checkout@v4
 
-      - name: '[stage-1] Set up Python'
+      - name: '[python] Set up Python'
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
 
-      - name: '[stage-1] Install Python deps'
+      - name: '[deps] Install Python deps'
         run: pip install -r requirements.txt
 
-      - name: '[stage-1] Verify Docker available'
+      - name: '[docker] Verify Docker available'
         run: docker version
 
       - name: '[framework-help] CLI sanity'
@@ -46,13 +67,18 @@ jobs:
         run: |
           set -o pipefail
           mkdir -p test-logs
-          CMD="./run_pep_tf.sh --pgver 17 --platforms deb --arch arm64 --components pgbouncer --repo release --dry-run"
+          CMD="./run_pep_tf.sh --pgver ${{ matrix.pg }} --platforms ${{ matrix.family }} --arch ${{ matrix.arch }} --components pgbouncer --repo release --dry-run"
           echo "[framework-command] $CMD"
           $CMD 2>&1 | tee test-logs/dry-run-output.txt
 
       - name: '[summary] Write workflow summary artifact'
         if: always()
         shell: bash
+        env:
+          MATRIX_PG: ${{ matrix.pg }}
+          MATRIX_FAMILY: ${{ matrix.family }}
+          MATRIX_ARCH: ${{ matrix.arch }}
+          MATRIX_RUNNER: ${{ matrix.runner }}
         run: |
           mkdir -p test-logs
           {
@@ -67,11 +93,11 @@ jobs:
             echo "[workflow-summary] runner.os=${{ runner.os }}"
             echo "[workflow-summary] runner.arch=${{ runner.arch }}"
             echo "[workflow-summary] runner.name=${{ runner.name }}"
-            echo "[workflow-summary] runner.label=ubuntu-24.04-arm"
+            echo "[workflow-summary] runner.label=$MATRIX_RUNNER"
             echo "[workflow-summary] execution_mode=preview"
-            echo "[workflow-summary] pg=17"
-            echo "[workflow-summary] family=deb"
-            echo "[workflow-summary] arch=arm64"
+            echo "[workflow-summary] pg=$MATRIX_PG"
+            echo "[workflow-summary] family=$MATRIX_FAMILY"
+            echo "[workflow-summary] arch=$MATRIX_ARCH"
             echo "[workflow-summary] repo=release"
             echo "[workflow-summary] components=pgbouncer"
             echo "[workflow-summary] python=$(python3 --version 2>&1)"
@@ -86,11 +112,11 @@ jobs:
             echo "[workflow-summary] ============================================================"
           } | tee test-logs/workflow-summary.txt
 
-      - name: '[stage-1] Upload test-logs artifact'
+      - name: '[artifact] Upload test-logs'
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: stage1-test-logs
+          name: test-logs-pg${{ matrix.pg }}-${{ matrix.family }}-${{ matrix.arch }}
           path: test-logs/
           retention-days: 14
           if-no-files-found: warn

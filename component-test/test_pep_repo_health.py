@@ -157,6 +157,9 @@ all_container_package_combinations = generate_container_package_combinations()
 # Test Functions
 # ============================================================================
 
+aws_mode = os.getenv("AWS_MODE", "false").lower() == "true"
+
+
 @pytest.mark.parametrize("container_name,container_type", all_containers)
 def test_install_prerequisites(container_name, container_type):
     """Step 0: Install prerequisites using machine_prereq_setup module"""
@@ -164,13 +167,24 @@ def test_install_prerequisites(container_name, container_type):
     if not container_name:
         pytest.skip("No container defined in env")
 
-    # Ensure container exists and is running - create if not available
+    # Docker: always recreate the container from scratch to avoid disk-space
+    # buildup from packages installed in previous runs.
+    # AWS: instances are persistent — skip recreate and clean up manually instead.
     container, created, message = container_management.ensure_container_running(
-        client, container_name, container_type
+        client, container_name, container_type, force_recreate=not aws_mode
     )
     print(f"{'🆕 ' if created else ''}{message}")
 
     assert container.status == "running", f"Container {container_name} is not running (status: {container.status})"
+
+    # On AWS instances clean up leftover pgedge packages and free disk space
+    # before installing prerequisites so the install doesn't run out of space.
+    if aws_mode:
+        try:
+            success, cleanup_message = machine_prereq_setup.cleanup_disk_space(container)
+            print(f"✅ {cleanup_message}")
+        except Exception as e:
+            pytest.fail(f"Disk space cleanup failed on {container_name}: {str(e)}")
 
     print(f"\n--- Installing prerequisites on {container_name} ({container_type}) ---")
 

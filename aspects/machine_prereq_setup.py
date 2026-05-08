@@ -53,6 +53,10 @@ def get_os_info():
 def setup_debian(os_id="", major=""):
     print(f"\n=== Debian/Ubuntu Prerequisites (os={os_id or '?'}, major={major or '?'}) ===")
 
+    # Pre-configure timezone to Asia/Karachi to prevent tzdata from prompting
+    # during package installs. Must be done before any apt-get install calls.
+    run("ln -snf /usr/share/zoneinfo/Asia/Karachi /etc/localtime && echo Asia/Karachi > /etc/timezone")
+
     # Minimal Debian/Ubuntu Docker images (e.g. Ubuntu 24.04) ship dpkg config files
     # under /etc/dpkg/dpkg.cfg.d/ that exclude /usr/share/doc and /usr/share/licenses,
     # causing README.md and LICENSE files to be silently omitted on install.
@@ -66,23 +70,23 @@ def setup_debian(os_id="", major=""):
     )
 
     run("apt-get update")
-    run("apt-get install -y python3")
-    run("apt-get install -y curl")
-    run("apt-get install -y sudo")
-    run("apt-get install -y gnupg2")
-    run("apt-get install -y lsb-release")
-    run("apt-get install -y file")
+    run("DEBIAN_FRONTEND=noninteractive apt-get install -y python3")
+    run("DEBIAN_FRONTEND=noninteractive apt-get install -y curl")
+    run("DEBIAN_FRONTEND=noninteractive apt-get install -y sudo")
+    run("DEBIAN_FRONTEND=noninteractive apt-get install -y gnupg2")
+    run("DEBIAN_FRONTEND=noninteractive apt-get install -y lsb-release")
+    run("DEBIAN_FRONTEND=noninteractive apt-get install -y file")
 
     # Install sq (Sequoia PGP CLI) — method varies by distro version
     if os_id == "ubuntu":
         # universe repo required on older Ubuntu
-        run("apt-get install -y software-properties-common")
+        run("DEBIAN_FRONTEND=noninteractive apt-get install -y software-properties-common")
         run("add-apt-repository -y universe")
         run("apt-get update")
-        run("apt-get install -y sq")
+        run("DEBIAN_FRONTEND=noninteractive apt-get install -y sq")
     else:
         # All Debian versions: sq is in the standard main repos
-        run("apt-get install -y sq")
+        run("DEBIAN_FRONTEND=noninteractive apt-get install -y sq")
 
     # Add pgEdge repo
     cmd = (
@@ -221,7 +225,7 @@ def ensure_wget_installed(container):
     os_id, _ = _detect_os(container)
     print(f"  [ensure_wget] wget not found — installing...")
     if os_id in ("debian", "ubuntu"):
-        _container_run(container, "apt-get install -y wget")
+        _container_run(container, "DEBIAN_FRONTEND=noninteractive apt-get install -y wget")
     else:
         _container_run(container, "dnf install -y wget 2>/dev/null || yum install -y wget 2>/dev/null")
 
@@ -306,7 +310,7 @@ def ensure_sq_installed(container):
                 f"echo 'deb {mirror} {codename} main contrib' >> /etc/apt/sources.list")
 
         _container_run(container, "apt-get update -y")
-        _container_run(container, "apt-get install -y sq")
+        _container_run(container, "DEBIAN_FRONTEND=noninteractive apt-get install -y sq")
 
     else:
         _container_run(container,
@@ -317,6 +321,84 @@ def ensure_sq_installed(container):
             f"Failed to install sq on {os_id} {major} ({arch if os_id in ('debian','ubuntu') else 'rpm'}). "
             "Ensure the full Debian/Ubuntu main repository is reachable from the container."
         )
+
+
+def cleanup_disk_space(container):
+    """
+    Remove previously installed pgedge packages and reclaim disk space.
+    Called before installing prerequisites on AWS instances, which are
+    long-lived and accumulate package/cache/log bloat across runs.
+
+    Args:
+        container: Docker container / SSHExecutor object with exec_run method
+
+    Returns:
+        tuple: (success: bool, message: str)
+    """
+    os_id, _ = _detect_os(container)
+    is_deb = os_id in ("debian", "ubuntu")
+
+    print("\n--- Cleaning up disk space before install ---")
+
+    if is_deb:
+        # Stop background apt services before running any apt/dpkg commands to
+        # avoid 'Could not get lock' errors on long-lived AWS instances.
+        from aspects.configure_repository import _wait_for_apt_lock
+        _wait_for_apt_lock(container)
+
+        steps = [
+            # Remove leftover pgedge packages from prior test runs
+            "DEBIAN_FRONTEND=noninteractive apt-get remove -y 'pgedge-*' 2>/dev/null || true",
+            "DEBIAN_FRONTEND=noninteractive apt-get autoremove --purge -y 2>/dev/null || true",
+            # Wipe downloaded .deb files from the package cache
+            "apt-get clean",
+            "rm -rf /var/cache/apt/archives/* /var/cache/apt/*.bin",
+            # Wipe stale package index files — biggest space win on long-lived instances.
+            # Indexes accumulate after every apt-get update and are often several hundred MB.
+            # Rebuild them fresh with apt-get update afterwards.
+            "rm -rf /var/lib/apt/lists/*",
+            "apt-get update",
+            # Snap consumes 1-2 GB on stock Ubuntu AWS AMIs (lxd, core20, ssm-agent, etc.)
+            # Stop snapd before wiping to avoid mount-unit errors
+            "systemctl stop snapd snapd.socket snapd.seeded.service 2>/dev/null || true",
+            "rm -rf /var/lib/snapd/cache/* /var/lib/snapd/snaps/*",
+            # Old rotated logs can pile up to several hundred MB
+            "find /var/log -type f -name '*.gz' -delete 2>/dev/null || true",
+            "find /var/log -type f -name '*.1' -delete 2>/dev/null || true",
+        ]
+    else:
+        steps = [
+            "dnf remove -y 'pgedge-*' 2>/dev/null || yum remove -y 'pgedge-*' 2>/dev/null || true",
+            "dnf clean all 2>/dev/null || yum clean all 2>/dev/null || true",
+            "rm -rf /var/cache/dnf/* /var/cache/yum/*",
+            # Old rotated logs
+            "find /var/log -type f -name '*.gz' -delete 2>/dev/null || true",
+            "find /var/log -type f -name '*.1' -delete 2>/dev/null || true",
+        ]
+
+    # Steps common to both platforms
+    steps += [
+        "rm -rf /tmp/* /var/tmp/* 2>/dev/null || true",
+        "journalctl --vacuum-size=10M 2>/dev/null || true",
+    ]
+
+    for cmd in steps:
+        _container_run(container, cmd)
+
+    # Report remaining free space
+    _, df_out = container.exec_run(["/bin/sh", "-c", "df -h /"], user="root")
+    print(f"Disk usage after cleanup:\n{df_out.decode().strip()}")
+
+    # Warn about any files larger than 50 MB still present
+    _, big_files = container.exec_run(
+        ["/bin/sh", "-c", "find / -xdev -type f -size +50M 2>/dev/null | head -10"],
+        user="root"
+    )
+    big_files_str = big_files.decode().strip()
+    if big_files_str:
+        print(f"Large files still present (>50 MB):\n{big_files_str}")
+
+    return True, "Disk space cleanup completed"
 
 
 def install_prerequisites_on_container(container):
@@ -335,12 +417,13 @@ def install_prerequisites_on_container(container):
 
     print(f"\n--- Installing prerequisites on container ---")
 
-    # Create a container-aware executor
+    # Create a container-aware executor. Commands are run through /bin/sh so
+    # shell operators (&&, |, >, ;) work correctly.
     def container_executor(cmd):
         print(f"\n>>> Running: {cmd}")
-        exit_code, output = container.exec_run(cmd, user="root")
+        exit_code, output = container.exec_run(["/bin/sh", "-c", cmd], user="root")
         if exit_code != 0:
-            print(f"WARNING: Command failed (exit={exit_code})")
+            print(f"WARNING: Command failed (exit={exit_code}): {output.decode()[:200]}")
         return exit_code
 
     # Set the custom executor
@@ -367,6 +450,9 @@ def install_prerequisites_on_container(container):
     # Call the appropriate setup function
     try:
         if os_id in ["debian", "ubuntu"]:
+            # Ensure no background apt process holds the lock before setup_debian runs
+            from aspects.configure_repository import _wait_for_apt_lock
+            _wait_for_apt_lock(container)
             setup_debian(os_id=os_id, major=major)
         elif os_id in ["rhel", "redhat", "rhelserver"]:
             if major == "9":

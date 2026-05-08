@@ -11,7 +11,7 @@
       "username":    "rocky",
       "key_file":    "",
       "description": "Rocky Linux 9 / ap-south-1",
-      "enabled":     true
+      "enabled":     false
     },
     {
       "name":        "z_Rocky9_ARM",
@@ -23,7 +23,7 @@
     },
     {
       "name":        "z_Rocky10_AMD",
-      "host":        "ec2-15-206-179-156.ap-south-1.compute.amazonaws.com",
+      "host":        "ec2-13-233-136-192.ap-south-1.compute.amazonaws.com",
       "username":    "rocky",
       "key_file":    "",
       "description": "Rocky Linux 10 AMD / ap-south-1",
@@ -50,11 +50,11 @@
     },
     {
       "name":        "z_Debian12_AMD",
-      "host":        "ec2-15-207-18-62.ap-south-1.compute.amazonaws.com",
+      "host":        "ec2-3-109-124-12.ap-south-1.compute.amazonaws.com",
       "username":    "admin",
       "key_file":    "",
       "description": "Debian 12 AMD / ap-south-1",
-      "enabled":     true
+      "enabled":     false
     },
     {
       "name":        "z_Debian12_ARM",
@@ -66,19 +66,19 @@
     },
     {
       "name":        "z_Debain11_AMD",
-      "host":        "ec2-52-66-235-195.ap-south-1.compute.amazonaws.com",
+      "host":        "ec2-13-127-121-170.ap-south-1.compute.amazonaws.com",
       "username":    "admin",
       "key_file":    "",
       "description": "Debian 11 ARM / ap-south-1",
-      "enabled":     true
+      "enabled":     false
     },
     {
       "name":        "z_Ubuntu22.04_AMD",
-      "host":        "ec2-13-200-231-5.ap-south-1.compute.amazonaws.com",
+      "host":        "ec2-13-204-222-208.ap-south-1.compute.amazonaws.com",
       "username":    "ubuntu",
       "key_file":    "",
       "description": "Ubuntu 22.04 AMD / ap-south-1",
-      "enabled":     true
+      "enabled":     false
     },
     {
       "name":        "z_Ubuntu 24.04 LTS Pro2",
@@ -90,7 +90,7 @@
     },
     {
       "name":        "z_Ubuntu2404_AMD",
-      "host":        "ec2-13-201-84-36.ap-south-1.compute.amazonaws.com",
+      "host":        "ec2-65-2-130-45.ap-south-1.compute.amazonaws.com",
       "username":    "ubuntu",
       "key_file":    "",
       "description": "Ubuntu 24.04 AMD / ap-south-1",

@@ -57,7 +57,7 @@ def get_base_image_for_container(container_name, container_type):
         return "debian:12"
 
 
-def ensure_container_running(client, container_name, container_type):
+def ensure_container_running(client, container_name, container_type, force_recreate=False):
     """
     Ensure a container exists and is running. Create and start if necessary.
 
@@ -65,6 +65,8 @@ def ensure_container_running(client, container_name, container_type):
         client: Docker client object (or AWSInstanceClient in AWS_MODE)
         container_name: Name of the container / AWS instance
         container_type: Type of container ("rhel" or "deb")
+        force_recreate: If True, remove any existing container and create a fresh one.
+                        Prevents disk-space accumulation from prior test runs.
 
     Returns:
         tuple: (container, created, message)
@@ -84,6 +86,17 @@ def ensure_container_running(client, container_name, container_type):
     try:
         # Try to get existing container
         container = client.containers.get(container_name)
+
+        if force_recreate:
+            print(f"force_recreate=True: removing existing container '{container_name}' (status: {container.status}) for a clean slate...")
+            container.remove(force=True)
+            # Prune dangling volumes to reclaim disk space
+            try:
+                client.volumes.prune()
+                print("Pruned dangling volumes to reclaim disk space")
+            except docker.errors.APIError:
+                pass
+            raise docker.errors.NotFound(container_name)
 
         # Check container status
         if container.status == "running":

@@ -126,7 +126,10 @@ mkdir -p test-logs
 # Generate timestamp for this test run
 RUN_TIMESTAMP=$(date +%Y%m%d_%H%M%S)
 CONSOLIDATED_REPORT_DIR="test-logs/consolidated-${RUN_TIMESTAMP}"
-mkdir -p "$CONSOLIDATED_REPORT_DIR"
+# Defer creating the consolidated dir under --dry-run so test-logs/ stays clean
+if [[ "$DRY_RUN" != "true" ]]; then
+  mkdir -p "$CONSOLIDATED_REPORT_DIR"
+fi
 
 # Array to store all individual report paths
 declare -a ALL_REPORTS=()
@@ -320,6 +323,13 @@ for env in "${env_list[@]}"; do
   source "$envfile"
   set +a
 
+  # Apply repo override if specified via CLI (must happen BEFORE the JSON loader and --dry-run
+  # so that dry-run output reflects the effective REPO, not the envfile's default)
+  if [[ -n "$REPO_OVERRIDE" ]]; then
+    export REPO="$REPO_OVERRIDE"
+    echo "   Overriding REPO to: $REPO_OVERRIDE"
+  fi
+
   # Load containers from containers_list.json (overrides empty CONTAINERS/DEB_CONTAINERS from env file)
   CONTAINERS_JSON="${ENV_DIR}/containers_list.json"
   if [[ -f "$CONTAINERS_JSON" ]]; then
@@ -370,7 +380,7 @@ except Exception as e:
   # Python package. Keep these in sync; Stage 7 has a verification step.
   if [[ "$DRY_RUN" == "true" ]]; then
     _platforms_lc="$(echo "${platform_list[*]}" | tr '[:upper:]' '[:lower:]')"
-    echo "[dry-run] env=${env} platforms=${_platforms_lc} arch=${PEP_ARCH_FILTER:-<none>}"
+    echo "[dry-run] env=${env} platforms=${_platforms_lc} arch=${PEP_ARCH_FILTER:-<none>} repo=${REPO:-<unset>}"
 
     # Print only the families this slice will exercise (refinement: platform-aware output)
     case " $_platforms_lc " in
@@ -422,12 +432,6 @@ for fam, name in selected:
     echo "[dry-run] skipping test execution (no pytest, no Docker, no package install, no repo setup)"
     unset _platforms_lc
     continue
-  fi
-
-  # Apply repo override if specified via CLI
-  if [[ -n "$REPO_OVERRIDE" ]]; then
-    export REPO="$REPO_OVERRIDE"
-    echo "   Overriding REPO to: $REPO_OVERRIDE"
   fi
 
   for platform in "${platform_list[@]}"; do
@@ -594,6 +598,13 @@ for fam, name in selected:
     done
   done
 done
+
+# Strict --dry-run: skip post-loop report/index/consolidation generation so test-logs/
+# does not get polluted with empty/misleading reports when no tests actually ran.
+if [[ "$DRY_RUN" == "true" ]]; then
+  echo "[dry-run] env loop complete; skipping report/index/consolidated generation"
+  exit 0
+fi
 
 echo ""
 echo "=========================================="

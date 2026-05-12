@@ -334,10 +334,17 @@ for env in "${env_list[@]}"; do
   CONTAINERS_JSON="${ENV_DIR}/containers_list.json"
   if [[ -f "$CONTAINERS_JSON" ]]; then
     _arch_filter="${PEP_ARCH_FILTER:-}"
-    _loaded_containers=$(PEP_ARCH_FILTER="$_arch_filter" python3 -c "
+    # Lowercased platform list so the inline Python can decide whether to print
+    # [container-resolution] for a given family. Both loaders still run so that
+    # CONTAINERS/DEB_CONTAINERS env vars are always populated, but the
+    # informational line is suppressed for families not in --platforms scope.
+    _platforms_for_resolution="$(echo "${platform_list[*]}" | tr '[:upper:]' '[:lower:]')"
+    _loaded_containers=$(PEP_ARCH_FILTER="$_arch_filter" PEP_PLATFORM_SCOPE="$_platforms_for_resolution" python3 -c "
 import json, os, sys
 arch = os.environ.get('PEP_ARCH_FILTER', '').strip()
 suffix = '-arm' if arch == 'arm64' else ('-amd' if arch == 'amd64' else '')
+plats = os.environ.get('PEP_PLATFORM_SCOPE', '').lower().split()
+in_scope = (not plats) or ('rpm' in plats) or ('all' in plats)
 try:
     d = json.load(open('$CONTAINERS_JSON'))
     enabled = [c for c in d.get('rhel', []) if c.get('enabled')]
@@ -345,16 +352,19 @@ try:
         enabled = [c for c in enabled if suffix in c['name']]
     names = [c['name'] for c in enabled]
     arch_label = arch if arch else '<none>'
-    sys.stderr.write(f\"[container-resolution] platforms=rpm arch={arch_label} -> {len(names)} container(s): {', '.join(names) if names else '(none)'}\n\")
+    if in_scope:
+        sys.stderr.write(f\"[container-resolution] platforms=rpm arch={arch_label} -> {len(names)} container(s): {', '.join(names) if names else '(none)'}\n\")
     print(','.join(names))
 except Exception as e:
     sys.stderr.write(f'[container-resolution] ERROR: failed to parse containers_list.json: {e}\n')
     print('')
 ")
-    _loaded_deb_containers=$(PEP_ARCH_FILTER="$_arch_filter" python3 -c "
+    _loaded_deb_containers=$(PEP_ARCH_FILTER="$_arch_filter" PEP_PLATFORM_SCOPE="$_platforms_for_resolution" python3 -c "
 import json, os, sys
 arch = os.environ.get('PEP_ARCH_FILTER', '').strip()
 suffix = '-arm' if arch == 'arm64' else ('-amd' if arch == 'amd64' else '')
+plats = os.environ.get('PEP_PLATFORM_SCOPE', '').lower().split()
+in_scope = (not plats) or ('deb' in plats) or ('all' in plats)
 try:
     d = json.load(open('$CONTAINERS_JSON'))
     enabled = [c for c in d.get('deb', []) if c.get('enabled')]
@@ -362,7 +372,8 @@ try:
         enabled = [c for c in enabled if suffix in c['name']]
     names = [c['name'] for c in enabled]
     arch_label = arch if arch else '<none>'
-    sys.stderr.write(f\"[container-resolution] platforms=deb arch={arch_label} -> {len(names)} container(s): {', '.join(names) if names else '(none)'}\n\")
+    if in_scope:
+        sys.stderr.write(f\"[container-resolution] platforms=deb arch={arch_label} -> {len(names)} container(s): {', '.join(names) if names else '(none)'}\n\")
     print(','.join(names))
 except Exception as e:
     sys.stderr.write(f'[container-resolution] ERROR: failed to parse containers_list.json: {e}\n')

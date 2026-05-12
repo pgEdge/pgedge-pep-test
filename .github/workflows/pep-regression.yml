@@ -14,26 +14,42 @@ on:
   #   - cron: "0 2 * * *"   # 02:00 UTC nightly, full matrix, repo=release
 
 jobs:
+  plan:
+    name: 'Plan matrix'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      matrix: ${{ steps.build.outputs.matrix }}
+    steps:
+      - name: '[plan-job] Build matrix'
+        id: build
+        shell: bash
+        run: |
+          python3 - <<'PY' >> "$GITHUB_OUTPUT"
+          import json, sys
+          # Stage 4: PG / family / arch lists are hardcoded here.
+          # Stage 5 will replace these with workflow_dispatch inputs.
+          pgs        = ['16', '17', '18']
+          families   = ['rpm', 'deb']
+          arches     = ['arm64', 'amd64']
+          runner_for = {'arm64': 'ubuntu-24.04-arm', 'amd64': 'ubuntu-24.04'}
+          slices = [
+              {'pg': pg, 'family': fam, 'arch': arch, 'runner': runner_for[arch]}
+              for pg in pgs for fam in families for arch in arches
+          ]
+          payload = {'include': slices}
+          sys.stderr.write(f"[plan-job] {len(slices)} slice(s): {json.dumps(payload)}\n")
+          print(f"matrix={json.dumps(payload)}")
+          PY
+
   test:
+    needs: plan
     name: 'PG${{ matrix.pg }} ${{ matrix.family }} ${{ matrix.arch }}'
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 90
     strategy:
       fail-fast: false
-      matrix:
-        include:
-          - { pg: '16', family: 'rpm', arch: 'arm64', runner: 'ubuntu-24.04-arm' }
-          - { pg: '16', family: 'rpm', arch: 'amd64', runner: 'ubuntu-24.04' }
-          - { pg: '16', family: 'deb', arch: 'arm64', runner: 'ubuntu-24.04-arm' }
-          - { pg: '16', family: 'deb', arch: 'amd64', runner: 'ubuntu-24.04' }
-          - { pg: '17', family: 'rpm', arch: 'arm64', runner: 'ubuntu-24.04-arm' }
-          - { pg: '17', family: 'rpm', arch: 'amd64', runner: 'ubuntu-24.04' }
-          - { pg: '17', family: 'deb', arch: 'arm64', runner: 'ubuntu-24.04-arm' }
-          - { pg: '17', family: 'deb', arch: 'amd64', runner: 'ubuntu-24.04' }
-          - { pg: '18', family: 'rpm', arch: 'arm64', runner: 'ubuntu-24.04-arm' }
-          - { pg: '18', family: 'rpm', arch: 'amd64', runner: 'ubuntu-24.04' }
-          - { pg: '18', family: 'deb', arch: 'arm64', runner: 'ubuntu-24.04-arm' }
-          - { pg: '18', family: 'deb', arch: 'amd64', runner: 'ubuntu-24.04' }
+      matrix: ${{ fromJson(needs.plan.outputs.matrix) }}
     steps:
       - name: '[slice] Identity'
         run: |

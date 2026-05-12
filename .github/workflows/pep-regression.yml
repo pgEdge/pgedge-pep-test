@@ -2,6 +2,30 @@ name: PEP Regression
 
 on:
   workflow_dispatch:
+    inputs:
+      pg_versions:
+        description: "PG versions: '16' | '17' | '18' | 'all' | CSV (e.g. '16,17')"
+        default: 'all'
+      families:
+        description: "Package families: 'rpm' | 'deb' | 'all' | 'rpm,deb'"
+        default: 'all'
+      arches:
+        description: "Architectures: 'arm64' | 'amd64' | 'all' | CSV"
+        default: 'all'
+      components:
+        description: "Components: 'all' or CSV (e.g. 'pgbouncer,server'). See run_pep_tf.sh --help for the full list."
+        default: 'all'
+      repo:
+        description: "Repo channel"
+        type: choice
+        options: [release, staging, daily]
+        default: release
+      execution_mode:
+        description: "preview = --help + --dry-run only (cheap, side-effect-free). full = real framework execution (Docker pulls, package installs, pytest)."
+        type: choice
+        options: [preview, full]
+        default: preview
+
   # Scheduled trigger intentionally disabled for v1.
   # Will be enabled once the workflow is fully validated.
   #
@@ -19,27 +43,81 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     outputs:
-      matrix: ${{ steps.build.outputs.matrix }}
+      matrix:     ${{ steps.build.outputs.matrix }}
+      components: ${{ steps.build.outputs.components }}
     steps:
       - name: '[plan-job] Build matrix'
         id: build
         shell: bash
+        env:
+          IN_PG:         ${{ inputs.pg_versions }}
+          IN_FAM:        ${{ inputs.families }}
+          IN_ARCH:       ${{ inputs.arches }}
+          IN_COMPONENTS: ${{ inputs.components }}
         run: |
           python3 - <<'PY' >> "$GITHUB_OUTPUT"
-          import json, sys
-          # Stage 4: PG / family / arch lists are hardcoded here.
-          # Stage 5 will replace these with workflow_dispatch inputs.
-          pgs        = ['16', '17', '18']
-          families   = ['rpm', 'deb']
-          arches     = ['arm64', 'amd64']
-          runner_for = {'arm64': 'ubuntu-24.04-arm', 'amd64': 'ubuntu-24.04'}
+          import json, os, sys
+
+          ALL_PGS        = ['16', '17', '18']
+          ALL_FAMILIES   = ['rpm', 'deb']
+          ALL_ARCHES     = ['arm64', 'amd64']
+          # Must match the components --help advertises in run_pep_tf.sh
+          ALL_COMPONENTS = [
+              'server', 'snowflake', 'pgbouncer', 'pgbackrest', 'postgrest',
+              'lolor', 'postgis', 'system_stats', 'vectorizer', 'zerodowntime',
+              'mcp', 'rag', 'ace', 'repo_health', 'docloader', 'anonymizer',
+              'pg_vectorize', 'pg_tokenizer', 'vchord_bm25', 'pgaudit',
+              'pgadmin4', 'patroni', 'pg_stat_monitor',
+          ]
+          RUNNER_FOR = {'arm64': 'ubuntu-24.04-arm', 'amd64': 'ubuntu-24.04'}
+
+          def parse(raw, valid, name):
+              # Treat truly-empty or whitespace-only as "default to all".
+              # An explicit comma-only / all-empty CSV (e.g. ",") is a user
+              # error and must fail loudly, not silently produce an empty list.
+              raw_stripped = (raw or '').strip()
+              if not raw_stripped or raw_stripped == 'all':
+                  return list(valid)
+              parts = [p.strip() for p in raw_stripped.split(',') if p.strip()]
+              if not parts:
+                  sys.stderr.write(
+                      f"[plan-job] ERROR: {name} value '{raw}' has no valid entries after parsing\n"
+                  )
+                  sys.exit(2)
+              bad = [p for p in parts if p not in valid]
+              if bad:
+                  sys.stderr.write(
+                      f"[plan-job] ERROR: invalid {name} value(s): {bad}; valid: {valid}\n"
+                  )
+                  sys.exit(2)
+              seen, out = set(), []
+              for p in parts:
+                  if p not in seen:
+                      seen.add(p); out.append(p)
+              return out
+
+          pgs        = parse(os.environ.get('IN_PG'),         ALL_PGS,        'pg_versions')
+          families   = parse(os.environ.get('IN_FAM'),        ALL_FAMILIES,   'families')
+          arches     = parse(os.environ.get('IN_ARCH'),       ALL_ARCHES,     'arches')
+          components = parse(os.environ.get('IN_COMPONENTS'), ALL_COMPONENTS, 'components')
+
           slices = [
-              {'pg': pg, 'family': fam, 'arch': arch, 'runner': runner_for[arch]}
+              {'pg': pg, 'family': fam, 'arch': arch, 'runner': RUNNER_FOR[arch]}
               for pg in pgs for fam in families for arch in arches
           ]
           payload = {'include': slices}
+          # Normalized components value emitted as a job output so the test
+          # job uses the trimmed/validated string instead of inputs.components
+          # raw — otherwise "pgbouncer, server" (with space) would word-split
+          # in bash and break the framework's CLI parser.
+          components_normalized = ','.join(components)
+          sys.stderr.write(
+              f"[plan-job] inputs pg={pgs} fam={families} arch={arches} components={components}\n"
+          )
           sys.stderr.write(f"[plan-job] {len(slices)} slice(s): {json.dumps(payload)}\n")
+          sys.stderr.write(f"[plan-job] components normalized: {components_normalized}\n")
           print(f"matrix={json.dumps(payload)}")
+          print(f"components={components_normalized}")
           PY
 
   test:
@@ -78,23 +156,43 @@ jobs:
           ./run_pep_tf.sh --help | grep -- '--dry-run' > /dev/null
           echo "[framework-help] OK (--arch and --dry-run advertised)"
 
-      - name: '[framework-command] Dry run'
+      - name: '[framework-command] Preview (--help + --dry-run)'
+        if: ${{ inputs.execution_mode != 'full' }}
         shell: bash
+        env:
+          IN_COMPONENTS: ${{ needs.plan.outputs.components }}
+          IN_REPO:       ${{ inputs.repo       || 'release' }}
         run: |
           set -o pipefail
           mkdir -p test-logs
-          CMD="./run_pep_tf.sh --pgver ${{ matrix.pg }} --platforms ${{ matrix.family }} --arch ${{ matrix.arch }} --components pgbouncer --repo release --dry-run"
+          CMD="./run_pep_tf.sh --pgver ${{ matrix.pg }} --platforms ${{ matrix.family }} --arch ${{ matrix.arch }} --components $IN_COMPONENTS --repo $IN_REPO --dry-run"
           echo "[framework-command] $CMD"
           $CMD 2>&1 | tee test-logs/dry-run-output.txt
+
+      - name: '[framework-command] Full (real framework execution)'
+        if: ${{ inputs.execution_mode == 'full' }}
+        shell: bash
+        env:
+          IN_COMPONENTS: ${{ needs.plan.outputs.components }}
+          IN_REPO:       ${{ inputs.repo       || 'release' }}
+        run: |
+          set -o pipefail
+          mkdir -p test-logs
+          CMD="./run_pep_tf.sh --pgver ${{ matrix.pg }} --platforms ${{ matrix.family }} --arch ${{ matrix.arch }} --components $IN_COMPONENTS --repo $IN_REPO"
+          echo "[framework-command] $CMD"
+          $CMD
 
       - name: '[summary] Write workflow summary artifact'
         if: always()
         shell: bash
         env:
-          MATRIX_PG: ${{ matrix.pg }}
+          MATRIX_PG:     ${{ matrix.pg }}
           MATRIX_FAMILY: ${{ matrix.family }}
-          MATRIX_ARCH: ${{ matrix.arch }}
+          MATRIX_ARCH:   ${{ matrix.arch }}
           MATRIX_RUNNER: ${{ matrix.runner }}
+          IN_EXEC_MODE:  ${{ inputs.execution_mode || 'preview' }}
+          IN_COMPONENTS: ${{ needs.plan.outputs.components }}
+          IN_REPO:       ${{ inputs.repo           || 'release' }}
         run: |
           mkdir -p test-logs
           {
@@ -110,12 +208,12 @@ jobs:
             echo "[workflow-summary] runner.arch=${{ runner.arch }}"
             echo "[workflow-summary] runner.name=${{ runner.name }}"
             echo "[workflow-summary] runner.label=$MATRIX_RUNNER"
-            echo "[workflow-summary] execution_mode=preview"
+            echo "[workflow-summary] execution_mode=$IN_EXEC_MODE"
             echo "[workflow-summary] pg=$MATRIX_PG"
             echo "[workflow-summary] family=$MATRIX_FAMILY"
             echo "[workflow-summary] arch=$MATRIX_ARCH"
-            echo "[workflow-summary] repo=release"
-            echo "[workflow-summary] components=pgbouncer"
+            echo "[workflow-summary] repo=$IN_REPO"
+            echo "[workflow-summary] components=$IN_COMPONENTS"
             echo "[workflow-summary] python=$(python3 --version 2>&1)"
             echo "[workflow-summary] docker=$(docker --version 2>&1 || echo 'not available')"
             echo "[workflow-summary] ------------------------------------------------------------"
@@ -123,7 +221,7 @@ jobs:
             if [[ -f test-logs/dry-run-output.txt ]]; then
               grep -E '\[container-resolution\]|\[image-resolution\]|\[dry-run\]|\[arch-filter\]' test-logs/dry-run-output.txt || echo "  (no tagged lines captured)"
             else
-              echo "  (test-logs/dry-run-output.txt not present)"
+              echo "  (test-logs/dry-run-output.txt not present — likely full-mode run)"
             fi
             echo "[workflow-summary] ============================================================"
           } | tee test-logs/workflow-summary.txt

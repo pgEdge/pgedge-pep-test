@@ -209,6 +209,9 @@ jobs:
           set -o pipefail
           mkdir -p test-logs
           CMD="./run_pep_tf.sh --pgver ${{ matrix.pg }} --platforms ${{ matrix.family }} --arch ${{ matrix.arch }} --components $IN_COMPONENTS --repo $IN_REPO --dry-run"
+          # Capture the constructed CLI to a file so the exact invocation is in
+          # the artifact, not only in the GH Actions step log.
+          echo "$CMD" | tee test-logs/framework-command.txt
           echo "[framework-command] $CMD"
           $CMD 2>&1 | tee test-logs/dry-run-output.txt
 
@@ -222,6 +225,9 @@ jobs:
           set -o pipefail
           mkdir -p test-logs
           CMD="./run_pep_tf.sh --pgver ${{ matrix.pg }} --platforms ${{ matrix.family }} --arch ${{ matrix.arch }} --components $IN_COMPONENTS --repo $IN_REPO"
+          # Capture the constructed CLI to a file so the exact invocation is in
+          # the artifact, not only in the GH Actions step log.
+          echo "$CMD" | tee test-logs/framework-command.txt
           echo "[framework-command] $CMD"
           $CMD
 
@@ -260,11 +266,28 @@ jobs:
             echo "[workflow-summary] python=$(python3 --version 2>&1)"
             echo "[workflow-summary] docker=$(docker --version 2>&1 || echo 'not available')"
             echo "[workflow-summary] ------------------------------------------------------------"
+            echo "[workflow-summary] framework command:"
+            if [[ -f test-logs/framework-command.txt ]]; then
+              sed 's/^/  /' test-logs/framework-command.txt
+            else
+              echo "  (test-logs/framework-command.txt not present — framework step likely never ran)"
+            fi
+            echo "[workflow-summary] ------------------------------------------------------------"
             echo "[workflow-summary] dry-run output:"
             if [[ -f test-logs/dry-run-output.txt ]]; then
               grep -E '\[container-resolution\]|\[image-resolution\]|\[dry-run\]|\[arch-filter\]' test-logs/dry-run-output.txt || echo "  (no tagged lines captured)"
             else
               echo "  (test-logs/dry-run-output.txt not present — likely full-mode run)"
+            fi
+            if [[ "$IN_EXEC_MODE" == "full" ]]; then
+              echo "[workflow-summary] ------------------------------------------------------------"
+              echo "[workflow-summary] framework reports produced:"
+              manifest=$(find test-logs -maxdepth 4 -type f \( -name 'report-*.html' -o -name 'report-*.xml' -o -name 'index.html' \) 2>/dev/null | sort)
+              if [[ -n "$manifest" ]]; then
+                echo "$manifest" | sed 's/^/  /'
+              else
+                echo "  (no framework reports found — framework may have failed early)"
+              fi
             fi
             echo "[workflow-summary] ============================================================"
           } | tee test-logs/workflow-summary.txt

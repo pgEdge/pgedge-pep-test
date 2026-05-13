@@ -251,6 +251,7 @@ jobs:
             echo "[workflow-summary] github.ref=${{ github.ref }}"
             echo "[workflow-summary] github.run_id=${{ github.run_id }}"
             echo "[workflow-summary] github.run_number=${{ github.run_number }}"
+            echo "[workflow-summary] github.run_attempt=${{ github.run_attempt }}"
             echo "[workflow-summary] github.event_name=${{ github.event_name }}"
             echo "[workflow-summary] github.actor=${{ github.actor }}"
             echo "[workflow-summary] runner.os=${{ runner.os }}"
@@ -296,8 +297,54 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v7
         with:
-          name: test-logs-pg${{ matrix.pg }}-${{ matrix.family }}-${{ matrix.arch }}
+          # Prefix with run_number AND run_attempt so artifact names are
+          # unique across separate runs AND across reruns of the same run.
+          # upload-artifact names are immutable, so a same-named upload from
+          # a rerun would collide with the previous attempt's artifact.
+          # Each artifact is also packaged into the consolidated aggregate
+          # by the aggregate job below.
+          name: test-logs-r${{ github.run_number }}-a${{ github.run_attempt }}-pg${{ matrix.pg }}-${{ matrix.family }}-${{ matrix.arch }}
           path: test-logs/
+          retention-days: 14
+          if-no-files-found: warn
+
+    permissions:
+      contents: read
+
+  # Aggregates every per-slice artifact into a single consolidated archive so
+  # a tester can download all-slice results in one click. Per-slice artifacts
+  # are still available individually for targeted triage. Runs after the full
+  # test matrix and tolerates partial failure (if: always()).
+  aggregate:
+    name: 'Aggregate artifacts'
+    needs: [plan, test]
+    if: always()
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: '[aggregate] Download all per-slice artifacts'
+        uses: actions/download-artifact@v7
+        with:
+          path: aggregated/
+          # Match this run AND this attempt only - reruns produce a fresh
+          # attempt with a different a<N> suffix, so we don't accidentally
+          # pull artifacts from a prior attempt of the same run.
+          pattern: test-logs-r${{ github.run_number }}-a${{ github.run_attempt }}-*
+
+      - name: '[aggregate] List what we got'
+        shell: bash
+        run: |
+          echo "[aggregate] per-slice directories under aggregated/:"
+          find aggregated -mindepth 1 -maxdepth 1 -type d | sort | sed 's/^/  /'
+          echo "[aggregate] workflow-summary.txt files found:"
+          find aggregated -maxdepth 3 -type f -name workflow-summary.txt | wc -l
+
+      - name: '[aggregate] Upload consolidated archive'
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: pep-regression-r${{ github.run_number }}-a${{ github.run_attempt }}-all-slices
+          path: aggregated/
           retention-days: 14
           if-no-files-found: warn
 

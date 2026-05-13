@@ -143,10 +143,10 @@ jobs:
           echo "[slice] pg=${{ matrix.pg }} family=${{ matrix.family }} arch=${{ matrix.arch }} runner=${{ matrix.runner }}"
 
       - name: '[checkout] Source'
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: '[python] Set up Python'
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: '3.11'
 
@@ -185,7 +185,7 @@ jobs:
 
       - name: '[dockerhub] Docker Hub login (conditional)'
         if: ${{ inputs.execution_mode == 'full' && steps.dockerhub_creds.outputs.have_creds == 'true' }}
-        uses: docker/login-action@v3
+        uses: docker/login-action@v4
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
@@ -271,7 +271,7 @@ jobs:
 
       - name: '[artifact] Upload test-logs'
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: test-logs-pg${{ matrix.pg }}-${{ matrix.family }}-${{ matrix.arch }}
           path: test-logs/

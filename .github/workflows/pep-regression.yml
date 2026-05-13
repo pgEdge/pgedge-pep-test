@@ -37,6 +37,15 @@ on:
   # schedule:
   #   - cron: "0 2 * * *"   # 02:00 UTC nightly, full matrix, repo=release
 
+# Concurrency: protect an in-flight matrix run from being cancelled by a
+# re-trigger on the same ref. GitHub's behavior here is "at most one running +
+# at most one pending per group" — a third trigger cancels the pending one in
+# place rather than queueing FIFO. The running job is what we care about
+# protecting; that's preserved.
+concurrency:
+  group: pep-regression-${{ github.ref }}
+  cancel-in-progress: false
+
 jobs:
   plan:
     name: 'Plan matrix'
@@ -146,6 +155,40 @@ jobs:
 
       - name: '[docker] Verify Docker available'
         run: docker version
+
+      # Conditional Docker Hub auth.
+      # Two gates, both must pass:
+      #   1. The slice is in full mode (no point logging in if no images will
+      #      be pulled).
+      #   2. Both DOCKERHUB_USERNAME and DOCKERHUB_TOKEN secrets are set.
+      # We test secret presence by mapping them to env vars in a small bash
+      # step (well-supported pattern) rather than referencing `secrets.X` in
+      # the login step's `if:` directly. This avoids edge cases around
+      # secret-context redaction in expression evaluators and keeps the gate
+      # explicit. If either gate is open the login step shows as skipped
+      # (clean, not failed); pulls then run anonymously and may hit Docker
+      # Hub rate limits.
+      - name: '[dockerhub] Check credentials available'
+        id: dockerhub_creds
+        shell: bash
+        env:
+          DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+          DOCKERHUB_TOKEN:    ${{ secrets.DOCKERHUB_TOKEN }}
+        run: |
+          if [[ -n "$DOCKERHUB_USERNAME" && -n "$DOCKERHUB_TOKEN" ]]; then
+            echo "have_creds=true"  >> "$GITHUB_OUTPUT"
+            echo "[dockerhub] credentials present"
+          else
+            echo "have_creds=false" >> "$GITHUB_OUTPUT"
+            echo "[dockerhub] credentials NOT present (will skip login; anonymous pulls)"
+          fi
+
+      - name: '[dockerhub] Docker Hub login (conditional)'
+        if: ${{ inputs.execution_mode == 'full' && steps.dockerhub_creds.outputs.have_creds == 'true' }}
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
 
       - name: '[framework-help] CLI sanity'
         shell: bash

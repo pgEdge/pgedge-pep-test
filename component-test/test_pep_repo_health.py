@@ -1,3 +1,4 @@
+import json
 import os
 import sys
 import subprocess
@@ -14,6 +15,35 @@ from aspects import configure_repository, package_management, pg_server_manageme
 
 load_dotenv()
 client = docker.from_env()
+
+
+def _packages_from_matrix(pg_version: str, platform: str) -> list:
+    """
+    Build the package list for repo_health tests from packages_test_matrix.json.
+    Returns packages whose 'enabled' flag is true and whose pg_versions (if set)
+    includes the given PG major version.
+    """
+    matrix_path = Path(__file__).parent.parent / "configuration" / "packages_test_matrix.json"
+    if not matrix_path.exists():
+        return []
+    with matrix_path.open() as f:
+        matrix = json.load(f)
+    pg = int(pg_version)
+    seen: set = set()
+    pkgs: list = []
+    for comp in matrix["components"]:
+        if not comp.get("enabled", False):
+            continue
+        if "pg_versions" in comp and pg not in comp["pg_versions"]:
+            continue
+        raw = comp.get(platform)
+        if not raw:
+            continue
+        pkg = raw.replace("{PG}", pg_version)
+        if pkg not in seen:
+            seen.add(pkg)
+            pkgs.append(pkg)
+    return pkgs
 
 # Load values from env
 rhel_containers = [c.strip() for c in os.getenv("CONTAINERS", "").split(",") if c.strip()]
@@ -49,15 +79,10 @@ rhel_pgbin = os.getenv("PG_BIN_PATH", f"/usr/pgsql-{pg_major_version}/bin")
 # Debian-specific configuration
 deb_pgbin = os.getenv("DEB_PG_BIN_PATH", f"/usr/lib/postgresql/{pg_major_version}/bin")
 
-# All packages to install (RHEL / DEB)
-rhel_all_packages = [
-    p.strip() for p in os.getenv("ALL_PACKAGES", "").split(",")
-    if p.strip() and len(p.strip()) > 4  # skip malformed entries like "pged"
-]
-deb_all_packages = [
-    p.strip() for p in os.getenv("DEB_ALL_PACKAGES", "").split(",")
-    if p.strip() and len(p.strip()) > 4
-]
+# All packages to install — sourced from packages_test_matrix.json.
+# Toggle components in that file; no changes to env vars needed.
+rhel_all_packages = _packages_from_matrix(pg_major_version, "rhel")
+deb_all_packages  = _packages_from_matrix(pg_major_version, "deb")
 
 # All extensions to create
 all_extensions = [

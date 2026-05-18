@@ -55,6 +55,7 @@ def setup_debian():
     run("apt-get update")
     run("apt-get install -y python3")
     run("apt-get install -y curl")
+    run("apt-get install -y wget")
     run("apt-get install -y sudo")
     run("apt-get install -y gnupg2")
     run("apt-get install -y lsb-release")
@@ -163,6 +164,29 @@ def setup_alma10():
     run("sudo dnf install -y wget")
 
 
+def ensure_wget_installed():
+    """Defensive idempotent: verify wget is on PATH after the per-OS prereq
+    step ran; if not, install it via the available package manager.
+
+    Guards against silent transient failures: run() only warns on a non-zero
+    exit code (it does not abort), so an earlier failing step in a setup_*
+    function (e.g., sequoia-sq install) can leave the dnf/apt transaction
+    in a state where the subsequent wget install no-ops. test_verify_sbom
+    then fails downstream with 'wget: executable file not found in $PATH'.
+    """
+    if run("command -v wget >/dev/null 2>&1") == 0:
+        return  # wget is present, nothing to do
+    print("[prereq-fix] wget not found after primary prereq install; retrying via detected package manager")
+    if run("command -v apt-get >/dev/null 2>&1") == 0:
+        run("apt-get install -y wget")
+    elif run("command -v dnf >/dev/null 2>&1") == 0:
+        run("sudo dnf install -y wget")
+    elif run("command -v yum >/dev/null 2>&1") == 0:
+        run("sudo yum install -y wget")
+    else:
+        print("[prereq-fix] WARNING: no supported package manager found; cannot install wget")
+
+
 def install_prerequisites_on_container(container):
     """
     Install prerequisites on a Docker container.
@@ -245,6 +269,11 @@ def install_prerequisites_on_container(container):
             return True, f"{os_id} {major}", "Unsupported OS - prerequisites skipped"
     except Exception as e:
         raise Exception(f"Failed to install prerequisites: {str(e)}")
+
+    # Defensive idempotent: confirm wget is on PATH; if a silent transient
+    # failure earlier in the setup_* function left it uninstalled, this
+    # catches and retries. Surfaced by V2 alma9-arm finding (May 2026).
+    ensure_wget_installed()
 
     message = f"Prerequisites installed successfully for {os_id} {major}"
     print(f"\n✅ {message}")

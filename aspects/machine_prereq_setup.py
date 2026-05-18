@@ -168,20 +168,18 @@ def ensure_wget_installed():
     """Defensive idempotent: verify wget is on PATH after the per-OS prereq
     step ran; if not, install it via the available package manager.
 
-    Guards against silent transient failures: run() only warns on a non-zero
-    exit code (it does not abort), so an earlier failing step in a setup_*
-    function (e.g., sequoia-sq install) can leave the dnf/apt transaction
-    in a state where the subsequent wget install no-ops. test_verify_sbom
-    then fails downstream with 'wget: executable file not found in $PATH'.
+    Note: container.exec_run() runs commands directly, not through a shell,
+    so shell builtins (`command -v`) and redirection (`>/dev/null`) only
+    work when explicitly wrapped in `sh -c '...'`.
     """
-    if run("command -v wget >/dev/null 2>&1") == 0:
+    if run("sh -c 'command -v wget >/dev/null 2>&1'") == 0:
         return  # wget is present, nothing to do
     print("[prereq-fix] wget not found after primary prereq install; retrying via detected package manager")
-    if run("command -v apt-get >/dev/null 2>&1") == 0:
+    if run("sh -c 'command -v apt-get >/dev/null 2>&1'") == 0:
         run("apt-get install -y wget")
-    elif run("command -v dnf >/dev/null 2>&1") == 0:
+    elif run("sh -c 'command -v dnf >/dev/null 2>&1'") == 0:
         run("sudo dnf install -y wget")
-    elif run("command -v yum >/dev/null 2>&1") == 0:
+    elif run("sh -c 'command -v yum >/dev/null 2>&1'") == 0:
         run("sudo yum install -y wget")
     else:
         print("[prereq-fix] WARNING: no supported package manager found; cannot install wget")

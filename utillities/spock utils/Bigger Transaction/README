@@ -1,0 +1,186 @@
+# test_spock_large_txn.py
+
+Stress-test a 2-node pgEdge Spock cluster with large multi-row transactions.
+
+Drives N rows × R bytes in a single `BEGIN/COMMIT` block on n1 and verifies
+that n2 converges with identical row count and byte-for-byte payload checksums.
+Captures replication slot lag, apply-worker activity, throughput, and supports
+optional chaos injection.
+
+## Requirements
+
+- Python 3.8+
+- `psycopg2` driver:
+  ```bash
+  pip3 install psycopg2-binary
+  # or on RHEL/Amazon Linux:
+  dnf install python3-psycopg2
+  ```
+- Two PostgreSQL nodes with Spock installed, a subscription from n2 to n1, and
+  a shared replication set (`default` by default).
+
+## Config file
+
+Create a `nodes2.json` with both nodes. The first entry is the writer (n1),
+the second is the subscriber (n2):
+
+```json
+{
+  "nodes": [
+    {"name": "n1", "host": "10.0.0.1", "port": 5432, "dbname": "z1",
+     "user": "postgres", "password": "..."},
+    {"name": "n2", "host": "10.0.0.2", "port": 5432, "dbname": "z1",
+     "user": "postgres", "password": "..."}
+  ]
+}
+```
+
+## Usage
+
+### Interactive (recommended)
+
+```bash
+python3 test_spock_large_txn.py --config nodes2.json
+```
+
+You'll be asked:
+
+1. **Row count** — how many rows in the transaction (`50m` = 50 million, `100k` = 100k)
+2. **Row size** — bytes per row (`50`, `500B`, `1KB`, `1MiB`, etc.)
+3. **Confirm plan** — review and proceed
+4. **Drop test table?** — at the end, choose whether to clean up
+
+Pass `--size 2.5GB` as a hint to make the prompts suggest sensible defaults.
+
+### Non-interactive (CI / scripting)
+
+```bash
+# 2.5 GiB transaction: 50M rows × 50 B
+python3 test_spock_large_txn.py --config nodes2.json --non-interactive \
+    --rows 50m --row-bytes 50
+
+# 10 GiB transaction: 10M rows × 1 KiB
+python3 test_spock_large_txn.py --config nodes2.json --non-interactive \
+    --rows 10m --row-bytes 1KiB
+```
+
+`--non-interactive` requires both `--rows` and `--row-bytes`. It also implies
+`--auto-cleanup`.
+
+### Cleanup leftover from an interrupted run
+
+```bash
+python3 test_spock_large_txn.py --config nodes2.json --cleanup
+```
+
+## What it validates
+
+For `--expect success` (default), a run passes only if **all** of these hold:
+
+1. n1 commits the transaction without error
+2. n2 row count matches expected
+3. Server-side MD5 of payloads matches on both nodes
+4. Apply worker is alive at the end
+
+For `--expect failure` (boundary testing), the run passes if either n1 errors
+during commit or n2 fails to converge within `--converge-timeout`.
+
+## Chaos hooks
+
+Inject failures with `--chaos action1,action2,...`:
+
+| Action | When | What it does |
+|---|---|---|
+| `fill-slot` | before commit | Disable sub on n2 before producer commits, so the slot fills with the whole txn. Re-enable to drain. |
+| `restart-subscriber` | during replay | `sub_disable` + `sub_enable` on n2 mid-flight |
+| `kill-apply-worker` | during replay | `pg_terminate_backend()` every Spock worker on n2; verify auto-respawn |
+| `pause` | during replay | Sleep `--chaos-pause-sec` seconds without disrupting anything |
+
+Example:
+
+```bash
+python3 test_spock_large_txn.py --config nodes2.json --non-interactive \
+    --rows 50m --row-bytes 50 \
+    --chaos kill-apply-worker,pause --chaos-pause-sec 30
+```
+
+## Metrics
+
+A background thread polls both nodes every `--monitor-interval` seconds
+(default 2s) and captures:
+
+- **n1**: `pg_replication_slots` (lag, retained bytes, active, restart_lsn,
+  confirmed_flush_lsn), `pg_current_wal_lsn()`, `pg_stat_replication`
+- **n2**: `spock.sub_show_status()`, Spock workers in `pg_stat_activity`, test
+  table row count, `pg_total_relation_size`, `pg_stat_wal_receiver`
+
+Add `--metrics-out run.jsonl` to persist every sample as JSONL for offline analysis.
+
+End-of-run summary shows peak slot lag, peak retained WAL, peak n2 table size,
+apply-worker restart events, and slot active flips.
+
+## Common flags
+
+| Flag | Default | Meaning |
+|---|---|---|
+| `--config` | (required) | Path to nodes JSON |
+| `--rows` | (prompt) | Row count (`k`/`m` suffixes accepted) |
+| `--row-bytes` | (prompt) | Bytes per row (size-suffix accepted) |
+| `--size` | none | Hint for default suggestions in prompts |
+| `--expect` | `success` | `success` or `failure` |
+| `--repset` | `default` | Spock replication set name |
+| `--converge-timeout` | `3600` | Max seconds to wait for n2 to converge |
+| `--monitor-interval` | `2.0` | Seconds between replication snapshots |
+| `--metrics-out` | none | JSONL file for per-sample metrics |
+| `--chaos` | none | Comma-separated chaos actions |
+| `--chaos-pause-sec` | `15` | Sleep duration for `pause` chaos |
+| `--non-interactive` | off | Skip all prompts (requires `--rows` + `--row-bytes`) |
+| `--auto-cleanup` | off | Drop test table at end without asking |
+| `--no-cleanup` | off | Keep test table at end without asking |
+| `--cleanup` | off | Drop test table and exit (no test run) |
+| `--verbose` / `-v` | off | Log every SQL statement |
+
+## Output
+
+```
+[18:36:21] [HEADER] LARGE TXN TEST  50,000,000 rows × 50 B = 2.33 GiB
+[18:36:21] [PLAN  ]   transaction size : 2.33 GiB
+[18:36:21] [PLAN  ]   row count        : 50,000,000
+[18:36:21] [PLAN  ]   row size         : 50 B
+...
+[18:36:23] [INFO  ] [n1] BULK COPY: 50,000,000 rows × 50 B ≈ 2.33 GiB
+[18:39:11] [METRIC] [n1]   12,500,000/50,000,000 rows (596 MiB) @ 23.5 MB/s  ETA 67s
+...
+[18:42:08] [OK    ] [n1] BULK COPY committed: 2.33 GiB in 285.1s (8.4 MB/s, 78 flushes)
+[18:42:08] [HEADER] WAITING FOR CONVERGENCE on n2 (expected 50,000,000 rows...)
+[18:42:34] [METRIC] [n2] 24,891,234/50,000,000 (49.8%) ETA 12s @ 1,920,000 rows/s on n2
+...
+[18:42:46] [HEADER] VERDICT
+[18:42:46] [INFO  ]   n1 throughput        : 175,432 rows/s (8.4 MB/s)
+[18:42:46] [INFO  ]   n2 apply throughput  : 1,920,489 rows/s (1095% of n1)
+[18:42:46] [OK    ] RESULT: PASS — replicated, converged, md5 matches
+```
+
+## Caveats
+
+- **Schema is fixed**: `(id bigint PK, payload bytea, checksum text)`. The
+  table is dropped and recreated at the start of every run.
+- **Server-side MD5** of the full table is run at convergence — slow for
+  multi-GiB tables but tractable up to ~20 GiB.
+- **Spock subscription must already exist** between n2 and n1. The script
+  doesn't create subscriptions; it only adds the test table to the repset.
+- **The user in the config needs superuser** for tablespace/role operations
+  during chaos. For pure data tests, repset member privileges are enough.
+- **Spock 6.x compatibility**: the script auto-detects column-name differences
+  between Spock 5.x (`sub_name`/`sub_enabled`) and 6.x (`slot_name`/`status`).
+- **Memory**: the producer flushes the COPY buffer every 32 MiB regardless of
+  row size, so memory stays bounded even for large per-row payloads.
+
+## Exit codes
+
+| Code | Meaning |
+|---|---|
+| 0 | Run passed (success or expected failure) |
+| 1 | Run failed (n1 errored unexpectedly, or n2 didn't converge) |
+| 2 | Config / flag error before the test started |
+| 130 | Interrupted by Ctrl-C |

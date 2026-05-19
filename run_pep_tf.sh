@@ -11,6 +11,7 @@ PGVER=""
 PLATFORMS=""
 COMPONENTS=""
 REPO_OVERRIDE=""
+TARGET="docker"   # default: local Docker containers
 ARCH=""
 DRY_RUN="false"
 
@@ -33,6 +34,11 @@ while [[ $# -gt 0 ]]; do
       ;;
     --repo)
       REPO_OVERRIDE="$2"
+      CLI_MODE=true
+      shift 2
+      ;;
+    --target)
+      TARGET="$2"
       CLI_MODE=true
       shift 2
       ;;
@@ -65,15 +71,22 @@ OPTIONS:
   --components <names>    Components to test (default: all)
                           Values: server, snowflake, pgbouncer, pgbackrest, postgrest, lolor, postgis,
                                   system_stats, vectorizer, zerodowntime, mcp, rag, ace, repo_health,
-                                  docloader, anonymizer, pg_vectorize, pg_tokenizer, vchord_bm25, pgaudit, pgadmin4, patroni, pg_stat_monitor, all
+                                  docloader, anonymizer, pg_vectorize, pg_tokenizer, vchord_bm25, pgaudit, pgadmin4, patroni, pg_stat_monitor, ai_db_workbench, radar, all
                           Comma-separated for multiple: lolor,postgis
 
   --repo <repository>     Repository to use (default: staging)
                           Values: release, staging, daily
 
+  --target <target>       Execution target (default: docker)
+                          Values: docker, aws
+                          docker: run against local Docker containers (containers_list.json)
+                          aws:    run against live AWS EC2 instances (aws_instances.json)
+                          Key files for AWS must exist under keys/ (gitignored).
+
   --arch <arch>           Filter enabled containers by architecture (default: no filter)
                           Values: arm64, amd64
                           Filters by container-name suffix: -arm or -amd
+                          Used by the GitHub Actions workflow to scope slices per arch.
 
   --dry-run               Resolve containers and print what would run, then exit
                           (no pytest, no Docker pulls, no package installs, no repo setup)
@@ -126,10 +139,7 @@ mkdir -p test-logs
 # Generate timestamp for this test run
 RUN_TIMESTAMP=$(date +%Y%m%d_%H%M%S)
 CONSOLIDATED_REPORT_DIR="test-logs/consolidated-${RUN_TIMESTAMP}"
-# Defer creating the consolidated dir under --dry-run so test-logs/ stays clean
-if [[ "$DRY_RUN" != "true" ]]; then
-  mkdir -p "$CONSOLIDATED_REPORT_DIR"
-fi
+mkdir -p "$CONSOLIDATED_REPORT_DIR"
 
 # Array to store all individual report paths
 declare -a ALL_REPORTS=()
@@ -191,7 +201,9 @@ else
   echo "21) pgadmin4 - pgAdmin4 tests"
   echo "22) patroni - Patroni HA tests"
   echo "23) pg_stat_monitor - Pg Stat Monitor tests"
-  echo "24) all - All tests"
+  echo "24) ai_db_workbench - AI DB Workbench tests"
+  echo "25) radar - Radar tests"
+  echo "26) all - All tests"
   echo ""
   echo "💡 You can specify multiple components separated by commas"
   echo "   Example: lolor,postgis,system_stats"
@@ -224,7 +236,7 @@ fi
 
 # Determine test types to run
 if [[ "$test_type_choice" == "all" || "$test_type_choice" == "All" ]]; then
-  test_type_list=(server snowflake pgbouncer pgbackrest postgrest lolor postgis system_stats vectorizer zerodowntime mcp rag ace repo_health docloader anonymizer pg_vectorize pg_tokenizer vchord_bm25 pgaudit pgadmin4 patroni pg_stat_monitor)
+  test_type_list=(server snowflake pgbouncer pgbackrest postgrest lolor postgis system_stats vectorizer zerodowntime mcp rag ace repo_health docloader anonymizer pg_vectorize pg_tokenizer vchord_bm25 pgaudit pgadmin4 patroni pg_stat_monitor ai_db_workbench radar)
 else
   # Split by comma and trim whitespace
   IFS=',' read -ra test_type_list <<< "$test_type_choice"
@@ -242,6 +254,7 @@ echo "=========================================="
 echo "Environments: ${env_list[*]}"
 echo "Platforms: ${platform_list[*]}"
 echo "Test types: ${test_type_list[*]}"
+echo "Target: ${TARGET}"
 if [[ -n "$REPO_OVERRIDE" ]]; then
   echo "Repo override: $REPO_OVERRIDE"
 fi
@@ -323,23 +336,56 @@ for env in "${env_list[@]}"; do
   source "$envfile"
   set +a
 
-  # Apply repo override if specified via CLI (must happen BEFORE the JSON loader and --dry-run
-  # so that dry-run output reflects the effective REPO, not the envfile's default)
+  # Apply repo override BEFORE the JSON loader and --dry-run block so that the
+  # dry-run output reflects the effective REPO (not the envfile's default).
   if [[ -n "$REPO_OVERRIDE" ]]; then
     export REPO="$REPO_OVERRIDE"
     echo "   Overriding REPO to: $REPO_OVERRIDE"
   fi
 
-  # Load containers from containers_list.json (overrides empty CONTAINERS/DEB_CONTAINERS from env file)
-  CONTAINERS_JSON="${ENV_DIR}/containers_list.json"
-  if [[ -f "$CONTAINERS_JSON" ]]; then
-    _arch_filter="${PEP_ARCH_FILTER:-}"
-    # Lowercased platform list so the inline Python can decide whether to print
-    # [container-resolution] for a given family. Both loaders still run so that
-    # CONTAINERS/DEB_CONTAINERS env vars are always populated, but the
-    # informational line is suppressed for families not in --platforms scope.
-    _platforms_for_resolution="$(echo "${platform_list[*]}" | tr '[:upper:]' '[:lower:]')"
-    _loaded_containers=$(PEP_ARCH_FILTER="$_arch_filter" PEP_PLATFORM_SCOPE="$_platforms_for_resolution" python3 -c "
+  # Load target instances — Docker containers or AWS EC2 instances
+  if [[ "$TARGET" == "aws" ]]; then
+    # ── AWS mode ────────────────────────────────────────────────────────────
+    AWS_INSTANCES_JSON="${ENV_DIR}/aws_instances.json"
+    if [[ ! -f "$AWS_INSTANCES_JSON" ]]; then
+      echo "❌ aws_instances.json not found at ${AWS_INSTANCES_JSON}"
+      exit 1
+    fi
+    _loaded_containers=$(python3 -c "
+import json, sys
+try:
+    d = json.load(open('$AWS_INSTANCES_JSON'))
+    print(','.join(c['name'] for c in d.get('rhel', []) if c.get('enabled')))
+except Exception as e:
+    sys.stderr.write(f'Warning: failed to parse aws_instances.json: {e}\n')
+    print('')
+")
+    _loaded_deb_containers=$(python3 -c "
+import json, sys
+try:
+    d = json.load(open('$AWS_INSTANCES_JSON'))
+    print(','.join(c['name'] for c in d.get('deb', []) if c.get('enabled')))
+except Exception as e:
+    sys.stderr.write(f'Warning: failed to parse aws_instances.json: {e}\n')
+    print('')
+")
+    [[ -n "$_loaded_containers" ]] && export CONTAINERS="$_loaded_containers"
+    [[ -n "$_loaded_deb_containers" ]] && export DEB_CONTAINERS="$_loaded_deb_containers"
+    export AWS_MODE=true
+    echo "   🌐 AWS mode: CONTAINERS=${CONTAINERS}  DEB_CONTAINERS=${DEB_CONTAINERS}"
+    unset _loaded_containers _loaded_deb_containers
+  else
+    # ── Docker mode (default) ────────────────────────────────────────────────
+    # Load containers from containers_list.json (overrides empty CONTAINERS/DEB_CONTAINERS from env file)
+    CONTAINERS_JSON="${ENV_DIR}/containers_list.json"
+    if [[ -f "$CONTAINERS_JSON" ]]; then
+      _arch_filter="${PEP_ARCH_FILTER:-}"
+      # Lowercased platform list so the inline Python can decide whether to print
+      # [container-resolution] for a given family. Both loaders still run so that
+      # CONTAINERS/DEB_CONTAINERS env vars are always populated, but the
+      # informational line is suppressed for families not in --platforms scope.
+      _platforms_for_resolution="$(echo "${platform_list[*]}" | tr '[:upper:]' '[:lower:]')"
+      _loaded_containers=$(PEP_ARCH_FILTER="$_arch_filter" PEP_PLATFORM_SCOPE="$_platforms_for_resolution" python3 -c "
 import json, os, sys
 arch = os.environ.get('PEP_ARCH_FILTER', '').strip()
 suffix = '-arm' if arch == 'arm64' else ('-amd' if arch == 'amd64' else '')
@@ -359,7 +405,7 @@ except Exception as e:
     sys.stderr.write(f'[container-resolution] ERROR: failed to parse containers_list.json: {e}\n')
     print('')
 ")
-    _loaded_deb_containers=$(PEP_ARCH_FILTER="$_arch_filter" PEP_PLATFORM_SCOPE="$_platforms_for_resolution" python3 -c "
+      _loaded_deb_containers=$(PEP_ARCH_FILTER="$_arch_filter" PEP_PLATFORM_SCOPE="$_platforms_for_resolution" python3 -c "
 import json, os, sys
 arch = os.environ.get('PEP_ARCH_FILTER', '').strip()
 suffix = '-arm' if arch == 'arm64' else ('-amd' if arch == 'amd64' else '')
@@ -379,21 +425,22 @@ except Exception as e:
     sys.stderr.write(f'[container-resolution] ERROR: failed to parse containers_list.json: {e}\n')
     print('')
 ")
-    [[ -n "$_loaded_containers" ]] && export CONTAINERS="$_loaded_containers"
-    [[ -n "$_loaded_deb_containers" ]] && export DEB_CONTAINERS="$_loaded_deb_containers"
-    unset _loaded_containers _loaded_deb_containers
+      [[ -n "$_loaded_containers" ]] && export CONTAINERS="$_loaded_containers"
+      [[ -n "$_loaded_deb_containers" ]] && export DEB_CONTAINERS="$_loaded_deb_containers"
+      unset _loaded_containers _loaded_deb_containers _arch_filter _platforms_for_resolution
+    fi
+    export AWS_MODE=false
   fi
 
   # --dry-run: resolve containers, print platform-scoped image/platform inference, exit env iteration.
   # Side-effect-free: no pytest, no Docker pull/create/start, no package install, no repo setup.
   # Image/platform map intentionally inlined (mirrors aspects/container_management.py CONTAINER_IMAGES
   # and the suffix-detection in ensure_container_running) so --dry-run does not require the `docker`
-  # Python package. Keep these in sync; Stage 7 has a verification step.
+  # Python package. Keep these in sync; verified during periodic cleanup.
   if [[ "$DRY_RUN" == "true" ]]; then
     _platforms_lc="$(echo "${platform_list[*]}" | tr '[:upper:]' '[:lower:]')"
-    echo "[dry-run] env=${env} platforms=${_platforms_lc} arch=${PEP_ARCH_FILTER:-<none>} repo=${REPO:-<unset>}"
+    echo "[dry-run] env=${env} platforms=${_platforms_lc} arch=${PEP_ARCH_FILTER:-<none>} repo=${REPO:-}"
 
-    # Print only the families this slice will exercise (refinement: platform-aware output)
     case " $_platforms_lc " in
       *" rpm "*|*" all "*) echo "[dry-run] CONTAINERS (rpm)=${CONTAINERS:-}" ;;
     esac
@@ -520,6 +567,12 @@ for fam, name in selected:
             pg_stat_monitor)
               run_pytest_with_tracking "component-test/test_pep_pg_stat_monitor.py" "$env" "rpm" "pg_stat_monitor"
               ;;
+            ai_db_workbench)
+              run_pytest_with_tracking "component-test/test_pep_ai_db_workbench.py" "$env" "rpm" "ai_db_workbench"
+              ;;
+            radar)
+              run_pytest_with_tracking "component-test/test_pep_radar.py" "$env" "rpm" "radar"
+              ;;
             *)
               echo "⚠️ Unknown test type: $test_type"
               ;;
@@ -597,6 +650,12 @@ for fam, name in selected:
             pg_stat_monitor)
               run_pytest_with_tracking "component-test/test_pep_pg_stat_monitor.py" "$env" "deb" "pg_stat_monitor"
               ;;
+            ai_db_workbench)
+              run_pytest_with_tracking "component-test/test_pep_ai_db_workbench.py" "$env" "deb" "ai_db_workbench"
+              ;;
+            radar)
+              run_pytest_with_tracking "component-test/test_pep_radar.py" "$env" "deb" "radar"
+              ;;
             *)
               echo "⚠️ Unknown test type: $test_type"
               ;;
@@ -610,8 +669,8 @@ for fam, name in selected:
   done
 done
 
-# Strict --dry-run: skip post-loop report/index/consolidation generation so test-logs/
-# does not get polluted with empty/misleading reports when no tests actually ran.
+# --dry-run: env loop is the only place that produces results; nothing real
+# happened, so skip the report/index/consolidated generation entirely.
 if [[ "$DRY_RUN" == "true" ]]; then
   echo "[dry-run] env loop complete; skipping report/index/consolidated generation"
   exit 0
@@ -1263,7 +1322,7 @@ cat > "test-logs/index.html" <<EOF
 EOF
 
 # Add card for each component that has reports
-for test_type in server snowflake pgbouncer pgbackrest postgrest lolor postgis system_stats vectorizer zerodowntime mcp rag ace repo_health docloader anonymizer pg_vectorize pg_tokenizer vchord_bm25 pgaudit pgadmin4 patroni pg_stat_monitor; do
+for test_type in server snowflake pgbouncer pgbackrest postgrest lolor postgis system_stats vectorizer zerodowntime mcp rag ace repo_health docloader anonymizer pg_vectorize pg_tokenizer vchord_bm25 pgaudit pgadmin4 patroni pg_stat_monitor ai_db_workbench radar; do
   component_dir="test-logs/${test_type}"
   if [[ -d "$component_dir" ]]; then
     # Check for any HTML reports

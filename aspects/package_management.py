@@ -33,16 +33,17 @@ def install_package(container, package_name, pg_major_version=None, install_pg_s
     print(f"\n--- Installing packages: {', '.join(packages)} on container ---")
 
     # Detect package manager inside the container
-    exit_code, _ = container.exec_run("command -v dnf", user="root")
+    exit_code, _ = container.exec_run(["/bin/sh", "-c", "command -v dnf"], user="root")
     if exit_code == 0:
         pkg_mgr = "dnf install -y"
         platform = "rhel"
     else:
-        exit_code, _ = container.exec_run("/bin/bash -c 'command -v apt-get'", user="root")
+        exit_code, _ = container.exec_run(["/bin/sh", "-c", "command -v apt-get"], user="root")
         if exit_code == 0:
-            # Run apt-get update for Debian/Ubuntu
-            container.exec_run("apt-get update", user="root")
-            pkg_mgr = "apt-get install -y"
+            from aspects.configure_repository import _wait_for_apt_lock
+            _wait_for_apt_lock(container)
+            container.exec_run(["/bin/sh", "-c", "apt-get update"], user="root")
+            pkg_mgr = "DEBIAN_FRONTEND=noninteractive apt-get install -y"
             platform = "debian"
         else:
             raise Exception("No supported package manager found (dnf or apt-get)")
@@ -53,7 +54,7 @@ def install_package(container, package_name, pg_major_version=None, install_pg_s
     for pkg in packages:
         print(f"Installing {pkg}...")
         exit_code, output = container.exec_run(
-            f"{pkg_mgr} {pkg}",
+            ["/bin/sh", "-c", f"{pkg_mgr} {pkg}"],
             user="root"
         )
 
@@ -67,7 +68,7 @@ def install_package(container, package_name, pg_major_version=None, install_pg_s
         server_package = f"pgedge-postgresql-{pg_major_version}"
         print(f"\nInstalling PostgreSQL server package: {server_package}...")
         exit_code, output = container.exec_run(
-            f"{pkg_mgr} {server_package}",
+            ["/bin/sh", "-c", f"{pkg_mgr} {server_package}"],
             user="root"
         )
         if exit_code != 0:
@@ -105,16 +106,15 @@ def upgrade_package(container, package_name):
         raise Exception("package_name must be a string or list/tuple of package names")
 
     # Detect package manager inside the container
-    exit_code, _ = container.exec_run("command -v dnf", user="root")
+    exit_code, _ = container.exec_run(["/bin/sh", "-c", "command -v dnf"], user="root")
     if exit_code == 0:
         pkg_mgr = "dnf upgrade -y"
         platform = "rhel"
     else:
-        exit_code, _ = container.exec_run("/bin/bash -c 'command -v apt-get'", user="root")
+        exit_code, _ = container.exec_run(["/bin/sh", "-c", "command -v apt-get"], user="root")
         if exit_code == 0:
-            # Run apt-get update for Debian/Ubuntu
-            container.exec_run("apt-get update", user="root")
-            pkg_mgr = "apt-get upgrade -y"
+            container.exec_run(["/bin/sh", "-c", "apt-get update"], user="root")
+            pkg_mgr = "DEBIAN_FRONTEND=noninteractive apt-get upgrade -y"
             platform = "debian"
         else:
             raise Exception("No supported package manager found (dnf or apt-get)")
@@ -125,7 +125,7 @@ def upgrade_package(container, package_name):
     for pkg in packages:
         print(f"Upgrading {pkg}...")
         exit_code, output = container.exec_run(
-            f"{pkg_mgr} {pkg}",
+            ["/bin/sh", "-c", f"{pkg_mgr} {pkg}"],
             user="root"
         )
 
@@ -158,14 +158,14 @@ def uninstall_package(container, package_name):
     print(f"\n--- Uninstalling {package_name} from container ---")
 
     # Detect package manager
-    exit_code, _ = container.exec_run("command -v dnf", user="root")
+    exit_code, _ = container.exec_run(["/bin/sh", "-c", "command -v dnf"], user="root")
     if exit_code == 0:
         pkg_mgr = "dnf remove -y"
         platform = "rhel"
     else:
-        exit_code, _ = container.exec_run("/bin/bash -c 'command -v apt-get'", user="root")
+        exit_code, _ = container.exec_run(["/bin/sh", "-c", "command -v apt-get"], user="root")
         if exit_code == 0:
-            pkg_mgr = "apt-get purge -y"
+            pkg_mgr = "DEBIAN_FRONTEND=noninteractive apt-get purge -y"
             platform = "debian"
         else:
             raise Exception("No supported package manager found (dnf or apt-get)")
@@ -176,8 +176,8 @@ def uninstall_package(container, package_name):
     print(f"Uninstalling {package_name}...")
     exit_code, output = container.exec_run(
         ## Comment out the line due to not working on Debian-based systems. User not properly removed.
-        #f"{pkg_mgr} {package_name}",
-        f"{pkg_mgr} pgedge-*",
+        #["/bin/sh", "-c", f"{pkg_mgr} {package_name}"],
+        ["/bin/sh", "-c", f"{pkg_mgr} pgedge-*"],
         user="root"
     )
 
@@ -282,13 +282,13 @@ def verify_package_version(container, package_name, expected_version):
     print(f"Expected version: {expected_version}")
 
     # Detect package manager inside the container
-    exit_code, _ = container.exec_run("command -v dnf", user="root")
+    exit_code, _ = container.exec_run(["/bin/sh", "-c", "command -v dnf"], user="root")
     if exit_code == 0:
         # RHEL-based: use rpm to query version (include RELEASE for beta info)
         version_cmd = f"rpm -q --queryformat '%{{VERSION}}-%{{RELEASE}}' {package_name}"
         platform = "rhel"
     else:
-        exit_code, _ = container.exec_run("/bin/bash -c 'command -v apt-get'", user="root")
+        exit_code, _ = container.exec_run(["/bin/sh", "-c", "command -v apt-get"], user="root")
         if exit_code == 0:
             # Debian-based: use dpkg-query to get version
             version_cmd = f"dpkg-query --showformat='${{Version}}' --show {package_name}"
@@ -297,7 +297,7 @@ def verify_package_version(container, package_name, expected_version):
             raise Exception("No supported package manager found (dnf or apt-get)")
 
     # Get installed version
-    exit_code, output = container.exec_run(version_cmd, user="root")
+    exit_code, output = container.exec_run(["/bin/sh", "-c", version_cmd], user="root")
 
     if exit_code != 0:
         raise Exception(f"Failed to query {package_name} version: {output.decode()}")

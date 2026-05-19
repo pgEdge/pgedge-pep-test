@@ -1,3 +1,4 @@
+import json
 import os
 import sys
 import subprocess
@@ -14,6 +15,35 @@ from aspects import configure_repository, package_management, pg_server_manageme
 
 load_dotenv()
 client = docker.from_env()
+
+
+def _packages_from_matrix(pg_version: str, platform: str) -> list:
+    """
+    Build the package list for repo_health tests from packages_test_matrix.json.
+    Returns packages whose 'enabled' flag is true and whose pg_versions (if set)
+    includes the given PG major version.
+    """
+    matrix_path = Path(__file__).parent.parent / "configuration" / "packages_test_matrix.json"
+    if not matrix_path.exists():
+        return []
+    with matrix_path.open() as f:
+        matrix = json.load(f)
+    pg = int(pg_version)
+    seen: set = set()
+    pkgs: list = []
+    for comp in matrix["components"]:
+        if not comp.get("enabled", False):
+            continue
+        if "pg_versions" in comp and pg not in comp["pg_versions"]:
+            continue
+        raw = comp.get(platform)
+        if not raw:
+            continue
+        pkg = raw.replace("{PG}", pg_version)
+        if pkg not in seen:
+            seen.add(pkg)
+            pkgs.append(pkg)
+    return pkgs
 
 # Load values from env
 rhel_containers = [c.strip() for c in os.getenv("CONTAINERS", "").split(",") if c.strip()]
@@ -49,15 +79,10 @@ rhel_pgbin = os.getenv("PG_BIN_PATH", f"/usr/pgsql-{pg_major_version}/bin")
 # Debian-specific configuration
 deb_pgbin = os.getenv("DEB_PG_BIN_PATH", f"/usr/lib/postgresql/{pg_major_version}/bin")
 
-# All packages to install (RHEL / DEB)
-rhel_all_packages = [
-    p.strip() for p in os.getenv("ALL_PACKAGES", "").split(",")
-    if p.strip() and len(p.strip()) > 4  # skip malformed entries like "pged"
-]
-deb_all_packages = [
-    p.strip() for p in os.getenv("DEB_ALL_PACKAGES", "").split(",")
-    if p.strip() and len(p.strip()) > 4
-]
+# All packages to install — sourced from packages_test_matrix.json.
+# Toggle components in that file; no changes to env vars needed.
+rhel_all_packages = _packages_from_matrix(pg_major_version, "rhel")
+deb_all_packages  = _packages_from_matrix(pg_major_version, "deb")
 
 # All extensions to create
 all_extensions = [
@@ -82,6 +107,17 @@ RHEL_PACKAGE_VERSION_MAP = {
     "pgedge-pgbouncer":                                os.getenv("PGEDGE_PGBOUNCER_VERSION"),
     "pgedge-pgbackrest":                               os.getenv("PGEDGE_PGBACKREST_VERSION"),
     "pgedge-pgadmin4":                                 os.getenv("PGEDGE_PGADMIN4_VERSION"),
+    "pgedge-patroni-consul":                           os.getenv("PGEDGE_PATRONI_CONSUL_VERSION"),
+    "pgedge-patroni-etcd":                             os.getenv("PGEDGE_PATRONI_ETCD_VERSION"),
+    "pgedge-patroni-aws":                              os.getenv("PGEDGE_PATRONI_AWS_VERSION"),
+    "pgedge-patroni-zookeeper":                        os.getenv("PGEDGE_PATRONI_ZOOKEEPER_VERSION"),
+    "pgedge-etcd":                                     os.getenv("PGEDGE_ETCD_VERSION"),  # standalone etcd binary; version independent of patroni
+    "pgedge-rag-server":                               os.getenv("PGEDGE_RAG_SERVER_VERSION"),
+    "pgedge-anonymizer":                               os.getenv("PGEDGE_ANONYMIZER_VERSION"),
+    "pgedge-ai-dba-server":                            os.getenv("PGEDGE_AI_DBA_VERSION"),
+    "pgedge-ai-dba-alerter":                           os.getenv("PGEDGE_AI_DBA_VERSION"),
+    "pgedge-ai-dba-collector":                         os.getenv("PGEDGE_AI_DBA_VERSION"),
+    "pgedge-ai-dba-client":                            os.getenv("PGEDGE_AI_DBA_VERSION"),
 }
 
 DEB_PACKAGE_VERSION_MAP = {
@@ -100,6 +136,14 @@ DEB_PACKAGE_VERSION_MAP = {
     "pgedge-pgbouncer":                                       os.getenv("PGEDGE_PGBOUNCER_VERSION"),
     "pgedge-pgbackrest":                                      os.getenv("PGEDGE_PGBACKREST_VERSION"),
     "pgedge-pgadmin4":                                        os.getenv("PGEDGE_PGADMIN4_VERSION"),
+    "pgedge-patroni":                                         os.getenv("PGEDGE_PATRONI_VERSION"),
+    "pgedge-etcd":                                            os.getenv("PGEDGE_ETCD_VERSION"),  # standalone etcd binary; version independent of patroni
+    "pgedge-rag-server":                                      os.getenv("PGEDGE_RAG_SERVER_VERSION"),
+    "pgedge-anonymizer":                                      os.getenv("PGEDGE_ANONYMIZER_VERSION"),
+    "pgedge-ai-dba-server":                                   os.getenv("PGEDGE_AI_DBA_VERSION"),
+    "pgedge-ai-dba-alerter":                                  os.getenv("PGEDGE_AI_DBA_VERSION"),
+    "pgedge-ai-dba-collector":                                os.getenv("PGEDGE_AI_DBA_VERSION"),
+    "pgedge-ai-dba-client":                                   os.getenv("PGEDGE_AI_DBA_VERSION"),
 }
 
 
@@ -138,6 +182,9 @@ all_container_package_combinations = generate_container_package_combinations()
 # Test Functions
 # ============================================================================
 
+aws_mode = os.getenv("AWS_MODE", "false").lower() == "true"
+
+
 @pytest.mark.parametrize("container_name,container_type", all_containers)
 def test_install_prerequisites(container_name, container_type):
     """Step 0: Install prerequisites using machine_prereq_setup module"""
@@ -145,13 +192,24 @@ def test_install_prerequisites(container_name, container_type):
     if not container_name:
         pytest.skip("No container defined in env")
 
-    # Ensure container exists and is running - create if not available
+    # Docker: always recreate the container from scratch to avoid disk-space
+    # buildup from packages installed in previous runs.
+    # AWS: instances are persistent — skip recreate and clean up manually instead.
     container, created, message = container_management.ensure_container_running(
-        client, container_name, container_type
+        client, container_name, container_type, force_recreate=not aws_mode
     )
     print(f"{'🆕 ' if created else ''}{message}")
 
     assert container.status == "running", f"Container {container_name} is not running (status: {container.status})"
+
+    # On AWS instances clean up leftover pgedge packages and free disk space
+    # before installing prerequisites so the install doesn't run out of space.
+    if aws_mode:
+        try:
+            success, cleanup_message = machine_prereq_setup.cleanup_disk_space(container)
+            print(f"✅ {cleanup_message}")
+        except Exception as e:
+            pytest.fail(f"Disk space cleanup failed on {container_name}: {str(e)}")
 
     print(f"\n--- Installing prerequisites on {container_name} ({container_type}) ---")
 

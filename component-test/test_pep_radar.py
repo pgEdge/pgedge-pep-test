@@ -37,15 +37,12 @@ skip_cleanup = os.getenv("SKIP_CLEANUP", "false").lower() == "true"
 pgport = os.getenv("PG_PORT", "5432")
 pgdata = os.getenv("PG_DATA_DIR", "/tmp/n1")
 pg_major_version = os.getenv("PG_MAJOR_VERSION", "16")
-lolor_version = os.getenv(f"PGEDGE_LOLOR_{pg_major_version}_VERSION", "1.2.2")
+radar_version = os.getenv("PGEDGE_RADAR_VERSION", "1.4.1")
 
-# Binary tests — set these when the component ships a standalone binary in /usr/bin.
-# If the component does not ship a binary, leave these as empty strings and the
-# test_binary_version / test_binary_stripped tests will be skipped automatically.
-# Example:  component_binary = "/usr/bin/pgedge-anonymizer"
-#           component_version = os.getenv("PGEDGE_ANONYMIZER_VERSION", "")
-component_binary = os.getenv("COMPONENT_BINARY", "")        # e.g. "/usr/bin/pgedge-anonymizer"
-component_version = os.getenv("COMPONENT_BINARY_VERSION", "")  # e.g. "1.0.0-beta2"
+# Binary tests — radar ships /usr/bin/radar but does not expose a --version flag;
+# component_version is intentionally empty so test_binary_version is skipped.
+component_binary = os.getenv("COMPONENT_BINARY", "/usr/bin/radar")
+component_version = os.getenv("COMPONENT_BINARY_VERSION", "")
 
 # User configuration
 rhel_pguser = os.getenv("PG_USER", "postgres")
@@ -54,28 +51,23 @@ deb_pguser = os.getenv("DEB_PG_USER", "postgres")
 # RHEL-specific configuration
 rhel_pgbin = os.getenv("PG_BIN_PATH", f"/usr/pgsql-{pg_major_version}/bin")
 rhel_pg_path = os.getenv("RHEL_PG_PATH", f"/usr/pgsql-{pg_major_version}")
-# component specific change required.
-# In case of any decoupled component we don't required _{pg_major_version} postfix
-rhel_lolor_package = os.getenv("LOLOR_PACKAGE", f"pgedge-lolor_{pg_major_version}")
-rhel_bundled_files = os.getenv(
-    "LOLOR_BUNDLED_FILES",
-    f"/usr/pgsql-{pg_major_version}/lib/lolor.so,/usr/pgsql-{pg_major_version}/share/extension/lolor--1.0--1.1.sql,/usr/pgsql-{pg_major_version}/share/extension/lolor--1.0.sql,/usr/pgsql-{pg_major_version}/share/extension/lolor--1.1--1.2.sql,/usr/pgsql-{pg_major_version}/share/extension/lolor--1.1.sql,/usr/pgsql-{pg_major_version}/share/extension/lolor--1.2.sql,/usr/pgsql-{pg_major_version}/share/extension/lolor.control"
-).split(",")
+rhel_radar_package = os.getenv("RADAR_PACKAGE", "pgedge-radar")
+rhel_bundled_files = os.getenv("RADAR_BUNDLED_FILES", "").split(",")
 
 # Debian-specific configuration
 deb_pgbin = os.getenv("DEB_PG_BIN_PATH", f"/usr/lib/postgresql/{pg_major_version}/bin")
 deb_pg_path = os.getenv("DEB_PG_PATH", f"/usr/lib/postgresql/{pg_major_version}")
 deb_pg_share_path = os.getenv("DEB_PG_SHARE_PATH", f"/usr/share/postgresql/{pg_major_version}")
-deb_lolor_package = os.getenv("DEB_LOLOR_PACKAGE", f"pgedge-postgresql-{pg_major_version}-lolor")
-deb_bundled_files = os.getenv(
-    "DEB_LOLOR_BUNDLED_FILES",
-    f"{deb_pg_path}/lib/lolor.so,{deb_pg_share_path}/extension/lolor--1.0--1.1.sql,{deb_pg_share_path}/extension/lolor--1.0.sql,{deb_pg_share_path}/extension/lolor--1.1--1.2.sql,{deb_pg_share_path}/extension/lolor--1.1.sql,{deb_pg_share_path}/extension/lolor--1.2.sql,{deb_pg_share_path}/extension/lolor.control"
-).split(",")
+deb_radar_package = os.getenv("DEB_RADAR_PACKAGE", "pgedge-radar")
+deb_bundled_files = os.getenv("DEB_RADAR_BUNDLED_FILES", "").split(",")
 
-# Additional configuration for extension tests
-check_extensions = os.getenv("CHECK_EXTENSIONS", "true").lower() == "true"
-base_extensions = [ext.strip() for ext in os.getenv("BASE_EXTENSIONS", "lolor").split(",") if ext.strip()]
-components = [comp.strip() for comp in os.getenv("COMPONENTS", f"pgedge-lolor_{pg_major_version}").split(",") if comp.strip()]
+# Additional configuration for component tests
+components = [comp.strip() for comp in os.getenv("COMPONENTS", "pgedge-radar").split(",") if comp.strip()]
+
+# SBOM paths — pgedge-radar stores its SBOM under /usr/share/pgedge-radar/
+radar_sbom_dir = "/usr/share/pgedge-radar"
+radar_sbom_json = "pgedge-radar-sbom.json"
+radar_sbom_asc = "pgedge-radar-sbom.json.asc"
 
 
 def get_container_config(container_type):
@@ -84,15 +76,13 @@ def get_container_config(container_type):
         return {
             "pgbin": rhel_pgbin.rstrip('/'),
             "pguser": rhel_pguser,
-            "lolor_package": rhel_lolor_package,
-            "bundled_files": rhel_bundled_files
+            "radar_package": rhel_radar_package,
         }
     else:  # deb
         return {
             "pgbin": deb_pgbin.rstrip('/'),
             "pguser": deb_pguser,
-            "lolor_package": deb_lolor_package,
-            "bundled_files": deb_bundled_files
+            "radar_package": deb_radar_package,
         }
 
 
@@ -117,7 +107,6 @@ def test_install_prerequisites(container_name, container_type):
 
     print(f"\n--- Installing prerequisites on {container_name} ({container_type}) ---")
 
-    # Use the machine_prereq_setup module
     try:
         success, os_info, message = machine_prereq_setup.install_prerequisites_on_container(container)
         assert success, f"Prerequisite installation failed: {message}"
@@ -142,7 +131,6 @@ def test_configure_repository(container_name, container_type):
 
     print(f"\n--- Configuring repository in {container_name} ---")
 
-    # Use the configure_repository module
     try:
         success, platform, message = configure_repository.configure_pgedge_repository(container, repo)
         assert success, f"Repository configuration failed: {message}"
@@ -154,14 +142,13 @@ def test_configure_repository(container_name, container_type):
 
 @pytest.mark.parametrize("container_name,container_type", all_containers)
 def test_component_install(container_name, container_type):
-    """Step 2: Install pgedge-lolor using package_management module"""
+    """Step 2: Install pgedge-radar using package_management module"""
     container_name = container_name.strip()
     if not container_name:
         pytest.skip("No container defined in env")
 
-    # Get container-specific configuration
     config = get_container_config(container_type)
-    lolor_package = config["lolor_package"]
+    radar_package = config["radar_package"]
 
     try:
         container = client.containers.get(container_name)
@@ -170,21 +157,20 @@ def test_component_install(container_name, container_type):
 
     assert container.status == "running"
 
-    print(f"\n--- Installing {lolor_package} on {container_name} ({container_type}) ---")
+    print(f"\n--- Installing {radar_package} on {container_name} ({container_type}) ---")
 
-    # Use the package_management module to install the package
     try:
-        success, platform, message = package_management.install_package(container, lolor_package)
+        success, platform, message = package_management.install_package(container, radar_package)
         assert success, f"Package installation failed: {message}"
         print(f"✅ {message}")
         print(f"✅ Platform detected: {platform}")
     except Exception as e:
-        pytest.fail(f"Failed to install {lolor_package}: {str(e)}")
+        pytest.fail(f"Failed to install {radar_package}: {str(e)}")
 
 
 @pytest.mark.parametrize("container_name,container_type", all_containers)
 def test_component_upgrade(container_name, container_type):
-    """Upgrade component package if UPGRADE=true"""
+    """Upgrade radar package if UPGRADE=true"""
     if os.getenv("UPGRADE", "false").lower() != "true":
         pytest.skip("Skipping upgrade tests because UPGRADE=false in env")
 
@@ -192,9 +178,8 @@ def test_component_upgrade(container_name, container_type):
     if not container_name:
         pytest.skip("No container defined in env")
 
-    # Get container-specific configuration
     config = get_container_config(container_type)
-    lolor_package = config["lolor_package"]
+    radar_package = config["radar_package"]
 
     try:
         container = client.containers.get(container_name)
@@ -203,41 +188,38 @@ def test_component_upgrade(container_name, container_type):
 
     assert container.status == "running"
 
-    print(f"\n--- Upgrading {lolor_package} on {container_name} ({container_type}) ---")
+    print(f"\n--- Upgrading {radar_package} on {container_name} ({container_type}) ---")
 
-    # Switch to upgrade repo if needed
     if upgrade_repo in ["staging", "daily"]:
         try:
             configure_repository.configure_pgedge_repository(container, upgrade_repo)
         except Exception as e:
             print(f"Warning: Could not switch to upgrade repo: {e}")
 
-    # Use the package_management module to upgrade the package
     try:
-        success, platform, message = package_management.upgrade_package(container, lolor_package)
+        success, platform, message = package_management.upgrade_package(container, radar_package)
         if not success:
             if "already" in message.lower() or "newest" in message.lower():
-                pytest.skip(f"{lolor_package} is already at newest version")
+                pytest.skip(f"{radar_package} is already at newest version")
         assert success, f"Package upgrade failed: {message}"
         print(f"✅ {message}")
         print(f"✅ Platform detected: {platform}")
     except Exception as e:
-        pytest.fail(f"Failed to upgrade {lolor_package}: {str(e)}")
+        pytest.fail(f"Failed to upgrade {radar_package}: {str(e)}")
 
 
 @pytest.mark.parametrize("container_name,container_type", all_containers)
 def test_component_package_version(container_name, container_type):
-    """Step 3: Check the package version using package_management module"""
+    """Step 3: Check the radar package version using package_management module"""
     container_name = container_name.strip()
     if not container_name:
         pytest.skip("No container defined in env")
 
-    if not lolor_version:
-        pytest.skip("No LOLOR_VERSION defined in env, skipping version check")
+    if not radar_version:
+        pytest.skip("No RADAR_VERSION defined in env, skipping version check")
 
-    # Get container-specific configuration
     config = get_container_config(container_type)
-    lolor_package = config["lolor_package"]
+    radar_package = config["radar_package"]
 
     try:
         container = client.containers.get(container_name)
@@ -246,22 +228,21 @@ def test_component_package_version(container_name, container_type):
 
     assert container.status == "running"
 
-    print(f"\n--- Verifying {lolor_package} version on {container_name} ({container_type}) ---")
+    print(f"\n--- Verifying {radar_package} version on {container_name} ({container_type}) ---")
 
-    # Use the package_management module to verify the package version
     try:
         success, platform, installed_version, message = package_management.verify_package_version(
-            container, lolor_package, lolor_version
+            container, radar_package, radar_version
         )
         assert success, f"Version verification failed: {message}"
         print(f"✅ {message}")
         print(f"✅ Platform detected: {platform}")
     except Exception as e:
-        pytest.fail(f"Failed to verify {lolor_package} version: {str(e)}")
+        pytest.fail(f"Failed to verify {radar_package} version: {str(e)}")
 
 @pytest.mark.parametrize("container_name,container_type", all_containers)
 def test_verify_bundled_files(container_name, container_type):
-    """Verify bundled files for each component match expected files
+    """Verify bundled files for radar match expected files
 
     This compares the installed files from rpm/deb with expected files
     in expected-output/rpm/ or expected-output/deb/ directory
@@ -278,17 +259,12 @@ def test_verify_bundled_files(container_name, container_type):
 
     assert container.status == "running"
 
-    # Get the actual package name for the platform
     config = get_container_config(container_type)
-    actual_package = config["lolor_package"]
+    actual_package = config["radar_package"]
 
-    # Get project root directory (parent of component-test/)
     project_root = Path(__file__).parent.parent
 
     try:
-        # Call reusable verification function
-        # Use actual_package for both component and package_name to ensure
-        # correct expected file lookup based on the platform
         success, details, message = file_management.verify_bundled_files(
             container=container,
             container_name=container_name,
@@ -298,9 +274,7 @@ def test_verify_bundled_files(container_name, container_type):
             project_root=project_root
         )
 
-        # If verification failed, fail the test with details
         if not success:
-            # Format details for display
             details_str = ""
             if details:
                 if "missing_files" in details and details["missing_files"]:
@@ -314,7 +288,6 @@ def test_verify_bundled_files(container_name, container_type):
             pytest.fail(f"{message}{details_str}")
 
     except Exception as e:
-        # Handle cases like missing expected files
         if "No expected file found" in str(e):
             pytest.skip(str(e))
         else:
@@ -323,7 +296,7 @@ def test_verify_bundled_files(container_name, container_type):
 
 @pytest.mark.parametrize("container_name,container_type", all_containers)
 def test_verify_sbom(container_name, container_type):
-    """Verify SBOM signature files located under the PostgreSQL path sbom directory"""
+    """Verify SBOM signature files for pgedge-radar"""
     container_name = container_name.strip()
     if not container_name:
         pytest.skip("No container defined in env")
@@ -335,61 +308,41 @@ def test_verify_sbom(container_name, container_type):
 
     assert container.status == "running"
 
-    if container_type == "rhel":
-        sbom_dir = f"{rhel_pg_path}/sbom"
-        print(f"\n--- Verifying SBOM on {container_name} (RHEL) in {sbom_dir} ---")
+    print(f"\n--- Verifying Radar SBOM on {container_name} ({container_type}) in {radar_sbom_dir} ---")
 
-        # Download pgedge-rsa.pub signing key into the sbom directory
+    machine_prereq_setup.ensure_sq_installed(container)
+    _sq_rc, _sq_help = container.exec_run("sq verify --help 2>&1", user="root")
+    _sq_signer_flag = "--signer-file" if b"--signer-file" in _sq_help else "--signer-cert"
+    _sq_sig_flag = "--signature-file" if b"--signature-file" in _sq_help else "--detached"
+
+    if container_type == "rhel":
         exit_code, output = container.exec_run(
-            f"wget -q -O {sbom_dir}/pgedge-rsa.pub https://dnf.pgedge.com/keys/pgedge-rsa.pub",
+            f"wget -q -O {radar_sbom_dir}/pgedge-rsa.pub https://dnf.pgedge.com/keys/pgedge-rsa.pub",
             user="root",
         )
         assert exit_code == 0, f"Failed to download pgedge-rsa.pub: {output.decode()}"
-        print(f"✅ Downloaded pgedge-rsa.pub to {sbom_dir}")
+        signer_arg = f"{_sq_signer_flag} {radar_sbom_dir}/pgedge-rsa.pub"
+    else:
+        signer_arg = f"{_sq_signer_flag} /etc/apt/keyrings/pgedge-rsa.gpg"
 
-        # Verify SBOM signature
-        exit_code, output = container.exec_run(
-            f"sh -c 'cd {sbom_dir} && sq verify "
-            f"--signature-file postgresql-sbom.json.asc "
-            f"--signer-file pgedge-rsa.pub "
-            f"postgresql-sbom.json'",
-            user="root",
-        )
-        output_str = output.decode().replace('\xa0', ' ')
-        assert exit_code == 0, f"SBOM verification failed: {output_str}"
-        assert "1 authenticated signature." in output_str, \
-            f"Expected '1 authenticated signature.' not found in output:\n{output_str}"
-        print(f"✅ SBOM signature verified on {container_name} (RHEL)")
-        print(f"   {output_str.strip()}")
-
-    else:  # deb
-        sbom_dir = f"{deb_pg_path}/sbom"
-        print(f"\n--- Verifying SBOM on {container_name} (Deb) in {sbom_dir} ---")
-
-        # Verify SBOM signature using the distro keyring
-        # Detect sq signer flag (older sq uses --signer-cert, newer uses --signer-file)
-        machine_prereq_setup.ensure_sq_installed(container)
-        _sq_rc, _sq_help = container.exec_run("sq verify --help 2>&1", user="root")
-        _sq_signer_flag = "--signer-file" if b"--signer-file" in _sq_help else "--signer-cert"
-        _sq_sig_flag = "--signature-file" if b"--signature-file" in _sq_help else "--detached"
-        exit_code, output = container.exec_run(
-            f"sh -c 'cd {sbom_dir} && sq verify "
-            f"{_sq_signer_flag} /etc/apt/keyrings/pgedge-rsa.gpg "
-            f"{_sq_sig_flag} postgresql-sbom.json.asc "
-            f"postgresql-sbom.json'",
-            user="root",
-        )
-        output_str = output.decode().replace('\xa0', ' ')
-        assert exit_code == 0, f"SBOM verification failed: {output_str}"
-        assert "1 good signature." in output_str or "1 authenticated signature." in output_str, \
-            f"Expected '1 good signature.' or '1 authenticated signature.' not found in output:\n{output_str}"
-        print(f"✅ SBOM signature verified on {container_name} (Deb)")
-        print(f"   {output_str.strip()}")
+    exit_code, output = container.exec_run(
+        f"sh -c 'cd {radar_sbom_dir} && sq verify "
+        f"{signer_arg} "
+        f"{_sq_sig_flag} {radar_sbom_asc} "
+        f"{radar_sbom_json}'",
+        user="root",
+    )
+    output_str = output.decode().replace('\xa0', ' ')
+    assert exit_code == 0, f"SBOM verification failed: {output_str}"
+    assert "1 good signature." in output_str or "1 authenticated signature." in output_str, \
+        f"Expected authenticated signature not found in output:\n{output_str}"
+    print(f"✅ Radar SBOM signature verified on {container_name} ({container_type})")
+    print(f"   {output_str.strip()}")
 
 
 @pytest.mark.parametrize("container_name,container_type", all_containers)
 def test_init_cluster(container_name, container_type):
-    """Initialize PostgreSQL cluster with LOLOR-specific GUC parameters using pg_server_management module"""
+    """Initialize PostgreSQL cluster using pg_server_management module"""
     container_name = container_name.strip()
     if not container_name:
         pytest.skip("No container defined in env")
@@ -401,22 +354,14 @@ def test_init_cluster(container_name, container_type):
 
     assert container.status == "running"
 
-    # Get container-specific configuration
     config = get_container_config(container_type)
     pgbin = config["pgbin"]
     pguser = config["pguser"]
 
     print(f"\n--- Initializing cluster on {container_name} ---")
 
-    # Define LOLOR-specific GUC parameters
-    guc_parameters = {
-        "shared_preload_libraries": "'lolor'",
-        "wal_level": "logical",
-        "max_replication_slots": "10",
-        "max_wal_senders": "10"
-    }
+    guc_parameters = {}
 
-    # Use the pg_server_management module to initialize cluster
     try:
         success, config_content, message = pg_server_management.init_cluster(
             container, pgbin, pgdata, pguser, guc_parameters
@@ -440,14 +385,12 @@ def test_start_server(container_name, container_type):
 
     assert container.status == "running"
 
-    # Get container-specific configuration
     config = get_container_config(container_type)
     pgbin = config["pgbin"]
     pguser = config["pguser"]
 
     print(f"\n--- Starting PostgreSQL server on {container_name} ---")
 
-    # Use the pg_server_management module to start the server
     try:
         success, server_output, message = pg_server_management.start_server(
             container, pgbin, pgdata, pgport, pguser
@@ -471,14 +414,12 @@ def test_check_connection(container_name, container_type):
 
     assert container.status == "running"
 
-    # Get container-specific configuration
     config = get_container_config(container_type)
     pgbin = config["pgbin"]
     pguser = config["pguser"]
 
     print(f"\n--- Checking PostgreSQL connection on {container_name} ---")
 
-    # Use the pg_server_management module to check connection
     try:
         success, version_output, message = pg_server_management.check_connection(
             container, pgbin, pgport, pguser
@@ -489,117 +430,10 @@ def test_check_connection(container_name, container_type):
         pytest.fail(f"Failed to check PostgreSQL connection: {str(e)}")
 
 @pytest.mark.parametrize("container_name,container_type", all_containers)
-@pytest.mark.parametrize("extension", base_extensions)
-def test_create_extensions(container_name, container_type, extension):
-    """Create each extension individually with separate test results
-
-    This creates a separate test for each container-extension combination
-    """
-    if not check_extensions:
-        pytest.skip("Extension check disabled via env")
-
-    container_name = container_name.strip()
-    extension = extension.strip()
-
-    if not container_name or not extension:
-        pytest.skip("Invalid container or extension")
-
-    try:
-        container = client.containers.get(container_name)
-    except docker.errors.NotFound:
-        pytest.skip(f"Container {container_name} not found or not running.")
-
-    assert container.status == "running"
-
-    # Get container-specific configuration
-    config = get_container_config(container_type)
-    pgbin = config["pgbin"]
-    pguser = config["pguser"]
-
-    # Normalize extension (quote if it contains a dash)
-    normalized_ext = f'"{extension}"' if "-" in extension else extension
-
-    print(f"\n--- Creating extension {normalized_ext} in {container_name} ---")
-
-    # Create the extension
-    exit_code, output = container.exec_run(
-        f"{pgbin}/psql -p {pgport} -U {pguser} -d postgres "
-        f"-c 'CREATE EXTENSION IF NOT EXISTS {normalized_ext} CASCADE;'",
-        user=pguser,
-    )
-
-    assert exit_code == 0, f"Failed to create {normalized_ext}: {output.decode()}"
-    print(f"✅ Successfully created extension {normalized_ext}")
-
-
-@pytest.mark.parametrize("container_name,container_type", all_containers)
-@pytest.mark.parametrize("extension", base_extensions)
-def test_extension_version(container_name, container_type, extension):
-    """Verify the installed extension version matches the expected version via \\dx in psql.
-
-    Runs psql \\dx and greps for the extension name, then checks that the
-    reported version column matches lolor_version.
-    Skipped when extension check is disabled.
-    """
-    if not check_extensions:
-        pytest.skip("Extension check disabled via env")
-
-    container_name = container_name.strip()
-    extension = extension.strip()
-
-    if not container_name or not extension:
-        pytest.skip("Invalid container or extension")
-
-    try:
-        container = client.containers.get(container_name)
-    except docker.errors.NotFound:
-        pytest.skip(f"Container {container_name} not found or not running.")
-
-    assert container.status == "running"
-
-    config = get_container_config(container_type)
-    pgbin = config["pgbin"]
-    pguser = config["pguser"]
-
-    print(f"\n--- Verifying extension version for '{extension}' on {container_name} ---")
-
-    exit_code, output = container.exec_run(
-        ["bash", "-c",
-         f"{pgbin}/psql -p {pgport} -U {pguser} -d postgres -c '\\dx' | grep '{extension}'"],
-        user=pguser,
-    )
-    assert exit_code == 0, (
-        f"Failed to query extension '{extension}' version via \\dx: {output.decode().strip()}"
-    )
-
-    ext_line = output.decode().strip()
-    print(f"   \\dx grep output: {ext_line}")
-
-    assert ext_line, f"Extension '{extension}' not found in \\dx output"
-
-    # Parse version from the table row: " name | version | schema | description "
-    columns = [col.strip() for col in ext_line.split("|")]
-    assert len(columns) >= 2, f"Unexpected \\dx row format: {ext_line}"
-    installed_version = columns[1].strip()
-
-    assert lolor_version in installed_version, (
-        f"Extension '{extension}' version mismatch: "
-        f"expected '{lolor_version}', got '{installed_version}'"
-    )
-    print(f"✅ Extension '{extension}' version {installed_version} matches expected {lolor_version}")
-
-
-@pytest.mark.parametrize("container_name,container_type", all_containers)
 def test_binary_version(container_name, container_type):
-    """Verify that the component binary reports the expected version string.
+    """Verify that the radar binary reports the expected version string.
 
     Skipped when COMPONENT_BINARY or COMPONENT_BINARY_VERSION is not set.
-    Set the env vars when the component ships a standalone binary, e.g.:
-      COMPONENT_BINARY=/usr/bin/pgedge-anonymizer
-      COMPONENT_BINARY_VERSION=1.0.0-beta2
-
-    Expected output format:
-      <binary-name> <version> (built <timestamp>)
     """
     if not component_binary or not component_version:
         pytest.skip(
@@ -636,11 +470,10 @@ def test_binary_version(container_name, container_type):
 
 @pytest.mark.parametrize("container_name,container_type", all_containers)
 def test_binary_stripped(container_name, container_type):
-    """Verify that the component binary is a stripped ELF binary.
+    """Verify that the radar binary is a stripped ELF binary.
 
     Skipped when COMPONENT_BINARY is not set.
-    Runs 'file <binary>' and asserts the output contains 'stripped',
-    confirming debug symbols were removed at build time.
+    Runs 'file <binary>' and asserts the output contains 'stripped'.
     """
     if not component_binary:
         pytest.skip("COMPONENT_BINARY not set — skipping binary strip check")
@@ -675,6 +508,62 @@ def test_binary_stripped(container_name, container_type):
 
 
 @pytest.mark.parametrize("container_name,container_type", all_containers)
+def test_verify_license_file(container_name, container_type):
+    """Verify that the LICENSE file is installed for pgedge-radar."""
+    container_name = container_name.strip()
+    if not container_name:
+        pytest.skip("No container defined in env")
+
+    try:
+        container = client.containers.get(container_name)
+    except docker.errors.NotFound:
+        pytest.skip(f"Container {container_name} not found or not running.")
+
+    assert container.status == "running"
+
+    config = get_container_config(container_type)
+    radar_package = config["radar_package"]
+    license_path = f"/usr/share/licenses/{radar_package}/LICENCE.md"
+
+    print(f"\n--- Verifying LICENSE file on {container_name} ({container_type}) ---")
+
+    exit_code, output = container.exec_run(
+        f"test -f {license_path}",
+        user="root"
+    )
+    assert exit_code == 0, f"LICENSE file not found at {license_path}: {output.decode()}"
+    print(f"✅ LICENSE file exists at {license_path}")
+
+
+@pytest.mark.parametrize("container_name,container_type", all_containers)
+def test_verify_readme_file(container_name, container_type):
+    """Verify that the README.md file is installed for pgedge-radar."""
+    container_name = container_name.strip()
+    if not container_name:
+        pytest.skip("No container defined in env")
+
+    try:
+        container = client.containers.get(container_name)
+    except docker.errors.NotFound:
+        pytest.skip(f"Container {container_name} not found or not running.")
+
+    assert container.status == "running"
+
+    config = get_container_config(container_type)
+    radar_package = config["radar_package"]
+    readme_path = f"/usr/share/doc/{radar_package}/README.md"
+
+    print(f"\n--- Verifying README.md file on {container_name} ({container_type}) ---")
+
+    exit_code, output = container.exec_run(
+        f"test -f {readme_path}",
+        user="root"
+    )
+    assert exit_code == 0, f"README.md not found at {readme_path}: {output.decode()}"
+    print(f"✅ README.md exists at {readme_path}")
+
+
+@pytest.mark.parametrize("container_name,container_type", all_containers)
 def test_stop_server(container_name, container_type):
     """Stop PostgreSQL server using pg_server_management module"""
     container_name = container_name.strip()
@@ -688,14 +577,12 @@ def test_stop_server(container_name, container_type):
 
     assert container.status == "running"
 
-    # Get container-specific configuration
     config = get_container_config(container_type)
     pgbin = config["pgbin"]
     pguser = config["pguser"]
 
     print(f"\n--- Stopping PostgreSQL server on {container_name} ---")
 
-    # Use the pg_server_management module to stop the server
     try:
         success, server_output, message = pg_server_management.stop_server(
             container, pgbin, pgdata, pgport, pguser
@@ -707,7 +594,7 @@ def test_stop_server(container_name, container_type):
 
 @pytest.mark.parametrize("container_name,container_type", all_containers)
 def test_package_uninstall(container_name, container_type):
-    """Uninstall lolor package using package_management module"""
+    """Uninstall radar package using package_management module"""
     if skip_cleanup:
         pytest.skip("Skipping uninstall: SKIP_CLEANUP=true")
 
@@ -715,9 +602,8 @@ def test_package_uninstall(container_name, container_type):
     if not container_name:
         pytest.skip("No container defined in env")
 
-    # Get container-specific configuration
     config = get_container_config(container_type)
-    lolor_package = config["lolor_package"]
+    radar_package = config["radar_package"]
 
     try:
         container = client.containers.get(container_name)
@@ -726,16 +612,15 @@ def test_package_uninstall(container_name, container_type):
 
     assert container.status == "running"
 
-    print(f"\n--- Uninstalling {lolor_package} on {container_name} ({container_type}) ---")
+    print(f"\n--- Uninstalling {radar_package} on {container_name} ({container_type}) ---")
 
-    # Use the package_management module to uninstall the package
     try:
-        success, platform, message = package_management.uninstall_package(container, lolor_package)
+        success, platform, message = package_management.uninstall_package(container, radar_package)
         assert success, f"Package uninstallation failed: {message}"
         print(f"✅ {message}")
         print(f"✅ Platform detected: {platform}")
     except Exception as e:
-        pytest.fail(f"Failed to uninstall {lolor_package}: {str(e)}")
+        pytest.fail(f"Failed to uninstall {radar_package}: {str(e)}")
 
 
 @pytest.mark.parametrize("container_name,container_type", all_containers)
@@ -755,13 +640,11 @@ def test_pgedge_cleanup(container_name, container_type):
 
     assert container.status == "running"
 
-    # Get container-specific configuration
     config = get_container_config(container_type)
     pguser = config["pguser"]
 
     print(f"\n--- Full pgEdge cleanup on {container_name} ---")
 
-    # Use the machine_cleanup module to perform comprehensive cleanup
     try:
         success, cleanup_summary, message = machine_cleanup.cleanup_pgedge_environment(
             container, pgdata=pgdata, pguser=pguser
@@ -769,7 +652,6 @@ def test_pgedge_cleanup(container_name, container_type):
         assert success, f"Cleanup failed: {message}"
         print(f"✅ {message}")
 
-        # Display cleanup details
         if cleanup_summary["packages_removed"]:
             print(f"   Packages removed: {len(cleanup_summary['packages_removed'])}")
         if cleanup_summary["data_directory_removed"]:

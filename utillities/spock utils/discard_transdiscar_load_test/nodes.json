@@ -1,0 +1,21 @@
+{
+    "nodes": [
+        {"name": "n1", "host": "localhost", "port": 5432, "dbname": "z1", "user": "postgres", "password": "postgres"},
+        {"name": "n2", "host": "localhost", "port": 5433, "dbname": "z1", "user": "postgres", "password": "postgres"},
+        {"name": "n3", "host": "localhost", "port": 5434, "dbname": "z1", "user": "postgres", "password": "postgres"}
+    ],
+    "discard_rules": [
+        {
+            "node": "n2",
+            "rule_name": "discard_test_marker",
+            "condition": "company_name LIKE '%DISCARD_TEST%'",
+            "action": "DISCARD"
+        },
+        {
+            "node": "n3",
+            "rule_name": "transdiscard_test_marker",
+            "condition": "company_name LIKE '%TRANSDISCARD_TEST%'",
+            "action": "TRANSDISCARD"
+        }
+    ]
+}

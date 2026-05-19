@@ -3,6 +3,9 @@ Container Management Module
 
 This module provides functions to manage Docker containers for testing,
 including creating, starting, and ensuring containers are running.
+
+When AWS_MODE=true the client is an AWSInstanceClient and containers are
+live EC2 instances — no create/start logic is needed in that case.
 """
 
 import docker
@@ -54,27 +57,46 @@ def get_base_image_for_container(container_name, container_type):
         return "debian:12"
 
 
-def ensure_container_running(client, container_name, container_type):
+def ensure_container_running(client, container_name, container_type, force_recreate=False):
     """
     Ensure a container exists and is running. Create and start if necessary.
 
     Args:
-        client: Docker client object
-        container_name: Name of the container
+        client: Docker client object (or AWSInstanceClient in AWS_MODE)
+        container_name: Name of the container / AWS instance
         container_type: Type of container ("rhel" or "deb")
+        force_recreate: If True, remove any existing container and create a fresh one.
+                        Prevents disk-space accumulation from prior test runs.
 
     Returns:
         tuple: (container, created, message)
-            - container: Docker container object
+            - container: Docker container object or SSHExecutor
             - created: Boolean indicating if container was newly created
             - message: Status message describing what was done
     """
+    # AWS_MODE: instances are already running — just return the SSH executor.
+    from aspects.aws_client import AWSInstanceClient
+    if isinstance(client, AWSInstanceClient):
+        executor = client.containers.get(container_name)
+        return executor, False, f"AWS instance '{container_name}' connected ({executor._host})"
+
     created = False
     message = ""
 
     try:
         # Try to get existing container
         container = client.containers.get(container_name)
+
+        if force_recreate:
+            print(f"force_recreate=True: removing existing container '{container_name}' (status: {container.status}) for a clean slate...")
+            container.remove(force=True)
+            # Prune dangling volumes to reclaim disk space
+            try:
+                client.volumes.prune()
+                print("Pruned dangling volumes to reclaim disk space")
+            except docker.errors.APIError:
+                pass
+            raise docker.errors.NotFound(container_name)
 
         # Check container status
         if container.status == "running":

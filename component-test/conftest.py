@@ -183,6 +183,15 @@ def detect_component_from_test_file(config):
             'deb_package_env': 'DEB_PATRONI_PACKAGE',
             'deb_package_default': 'pgedge-patroni'
         },
+        'test_spock_patroni_failover': {
+            'name': 'Spock-Patroni Failover',
+            'version_env': 'PGEDGE_PATRONI_VERSION',
+            'version_default': '4.1.0',
+            'rhel_package_env': 'PATRONI_PACKAGE',
+            'rhel_package_default': 'pgedge-patroni-etcd',
+            'deb_package_env': 'DEB_PATRONI_PACKAGE',
+            'deb_package_default': 'pgedge-patroni'
+        },
         'test_pep_pg_stat_monitor': {
             'name': 'Pg Stat Monitor',
             'version_env': f'PGEDGE_PG_STAT_MONITOR_{os.getenv("PG_MAJOR_VERSION", "16")}_VERSION',

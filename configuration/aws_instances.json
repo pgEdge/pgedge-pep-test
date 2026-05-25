@@ -70,7 +70,7 @@
       "username":    "admin",
       "key_file":    "",
       "description": "Debian 11 ARM / ap-south-1",
-      "enabled":     true
+      "enabled":     false
     },
     {
       "name":        "z_Ubuntu22.04_AMD",
@@ -78,7 +78,7 @@
       "username":    "ubuntu",
       "key_file":    "",
       "description": "Ubuntu 22.04 AMD / ap-south-1",
-      "enabled":     true
+      "enabled":     false
     },
     {
       "name":        "z_Ubuntu 24.04 LTS Pro2",
@@ -94,7 +94,7 @@
       "username":    "ubuntu",
       "key_file":    "",
       "description": "Ubuntu 24.04 AMD / ap-south-1",
-      "enabled":     true
+      "enabled":     false
     },
     {
       "name":        "z_Ubuntu2404_ARM",

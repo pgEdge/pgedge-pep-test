@@ -43,3 +43,33 @@ def test_parse_slice_metadata_fallback_to_dirname(tmp_path):
     assert meta["family"] == "rpm"
     assert meta["arch"] == "amd64"
     assert meta["metadata_source"] == "directory-name"
+
+
+def _touch(p: Path):
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text("<testsuites/>")
+
+
+def test_discover_excludes_consolidated(tmp_path):
+    sd = tmp_path / "test-logs-r31-a1-pg17-deb-arm64"
+    # Canonical per-component report.
+    _touch(sd / "server" / "17" / "report-deb-server-17.xml")
+    _touch(sd / "pgbouncer" / "17" / "report-deb-pgbouncer-17.xml")
+    # Duplicate copy under consolidated-* must be excluded.
+    _touch(sd / "consolidated-20260520_110213" / "report-deb-server-17.xml")
+    _touch(sd / "consolidated-20260520_110213" / "report-deb-pgbouncer-17.xml")
+
+    found = ccr.discover_report_xmls(sd)
+    names = sorted(p.relative_to(sd).as_posix() for p in found)
+    assert names == [
+        "pgbouncer/17/report-deb-pgbouncer-17.xml",
+        "server/17/report-deb-server-17.xml",
+    ]
+
+
+def test_derive_component_from_path(tmp_path):
+    sd = tmp_path / "test-logs-r31-a1-pg17-deb-arm64"
+    xml = sd / "server" / "17" / "report-deb-server-17.xml"
+    assert ccr.derive_component_from_path(xml, sd) == "server"
+    xml2 = sd / "pg_stat_monitor" / "17" / "report-deb-pg_stat_monitor-17.xml"
+    assert ccr.derive_component_from_path(xml2, sd) == "pg_stat_monitor"

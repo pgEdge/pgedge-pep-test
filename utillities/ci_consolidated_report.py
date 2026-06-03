@@ -89,5 +89,29 @@ def _backfill_from_dirname(slice_dir: Path, meta: dict) -> None:
         meta["run_attempt"] = m.group("attempt")
 
 
+def discover_report_xmls(slice_dir: Path) -> list:
+    """All report-*.xml under the slice, EXCLUDING the duplicate copies that
+    live under any consolidated-* directory (those are byte-identical copies
+    the framework makes for its own per-slice consolidated page).
+    """
+    result = []
+    for xml in slice_dir.rglob("report-*.xml"):
+        if any(part.startswith("consolidated-") for part in xml.relative_to(slice_dir).parts):
+            continue
+        result.append(xml)
+    return result
+
+
+def derive_component_from_path(xml_path: Path, slice_dir: Path) -> str:
+    """Component is the first path segment under the slice directory:
+    <slice>/<component>/<pg>/report-*.xml  ->  <component>.
+    Falls back to 'unknown' if the layout is unexpected.
+    """
+    rel = xml_path.relative_to(slice_dir).parts
+    if len(rel) >= 1:
+        return rel[0]
+    return "unknown"
+
+
 if __name__ == "__main__":  # pragma: no cover (wired up in a later task)
     pass

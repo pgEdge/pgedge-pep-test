@@ -264,5 +264,176 @@ def build_rows(aggregated_dir: Path) -> list:
     return rows
 
 
-if __name__ == "__main__":  # pragma: no cover (wired up in a later task)
-    pass
+def _esc(value) -> str:
+    return html.escape(str(value), quote=True)
+
+
+# Statuses that demand attention: test failures AND data/report problems.
+# Used both for sorting (these float to the top) and for the failures-only
+# toggle (these stay visible).
+_ATTENTION_STATUSES = ("FAILED", "PARSE ERROR", "NO REPORTS", "NO TESTCASES")
+
+
+def render_html(rows: list, ctx: dict) -> str:
+    total_tests = sum(r["tests"] for r in rows)
+    total_passed = sum(r["passed"] for r in rows)
+    total_failed = sum(r["failed"] for r in rows)
+    total_skipped = sum(r["skipped"] for r in rows)
+    total_time = sum(r["time"] for r in rows)
+    # Report-data problems are counted separately so a run with missing/broken
+    # reports but no test failures does not look all-green in the summary.
+    report_issues = sum(
+        1 for r in rows if r["status"] in ("NO REPORTS", "PARSE ERROR", "NO TESTCASES")
+    )
+
+    # Sort: attention rows (failures, missing/broken reports) first, then by
+    # pg/family/arch/component/container.
+    def sort_key(r):
+        return (0 if r["status"] in _ATTENTION_STATUSES else 1,
+                r["pg"], r["family"], r["arch"], r["component"], r["container"])
+    rows = sorted(rows, key=sort_key)
+
+    css = """
+      body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif; margin: 20px; background:#f5f5f5; }
+      .header { background: linear-gradient(135deg,#667eea,#764ba2); color:#fff; padding:24px; border-radius:8px; }
+      .header h1 { margin:0 0 8px 0; }
+      .context { font-size:13px; opacity:.95; line-height:1.6; }
+      .banner { background:#fff8e1; border:1px solid #f0d98c; color:#7a5b00; padding:12px 16px; border-radius:8px; margin:16px 0; font-size:14px; }
+      .summary { display:grid; grid-template-columns:repeat(auto-fit,minmax(160px,1fr)); gap:12px; margin:16px 0; }
+      .card { background:#fff; padding:16px; border-radius:8px; box-shadow:0 2px 4px rgba(0,0,0,.1); }
+      .card h3 { margin:0 0 6px 0; font-size:12px; color:#666; text-transform:uppercase; }
+      .card .value { font-size:28px; font-weight:bold; }
+      .card.total .value{color:#667eea;} .card.passed .value{color:#10b981;}
+      .card.failed .value{color:#ef4444;} .card.skipped .value{color:#f59e0b;}
+      .card.issues .value{color:#b45309;}
+      .controls { margin:12px 0; font-size:14px; }
+      table { width:100%; border-collapse:collapse; background:#fff; border-radius:8px; overflow:hidden; box-shadow:0 2px 4px rgba(0,0,0,.1); }
+      th { background:#f8f9fa; padding:10px; text-align:left; border-bottom:2px solid #dee2e6; font-size:13px; }
+      td { padding:10px; border-bottom:1px solid #dee2e6; font-size:13px; }
+      tr:hover { background:#f8f9fa; }
+      .badge { padding:3px 10px; border-radius:12px; font-size:11px; font-weight:600; text-transform:uppercase; }
+      .badge.passed{background:#d1fae5;color:#065f46;} .badge.failed{background:#fee2e2;color:#991b1b;}
+      .badge.skipped{background:#fef3c7;color:#92400e;} .badge.noreports{background:#e5e7eb;color:#374151;}
+      .mono { font-family:monospace; }
+      a.report-link { color:#667eea; text-decoration:none; } a.report-link:hover{text-decoration:underline;}
+      .footer { margin-top:20px; text-align:center; color:#666; font-size:12px; }
+    """
+
+    head = f"""<!DOCTYPE html><html><head><meta charset="utf-8"/>
+<title>Cross-Slice Consolidated Report</title><style>{css}</style></head><body>
+<div class="header">
+  <h1>Cross-Slice Consolidated Report</h1>
+  <div class="context">
+    Run #{_esc(ctx.get('run_number'))} (attempt {_esc(ctx.get('run_attempt'))}) &middot;
+    run_id {_esc(ctx.get('run_id'))} &middot;
+    event {_esc(ctx.get('event_name'))} &middot;
+    by {_esc(ctx.get('actor'))} &middot;
+    {_esc(ctx.get('slice_count'))} slice(s)
+  </div>
+</div>
+<div class="banner">
+  <strong>Note:</strong> A slice/runner showing green in GitHub Actions reflects
+  workflow completion, not whether every component test passed. Per-row
+  PASS/FAILED/SKIPPED counts below are the source of truth for test outcomes.
+</div>
+<div class="summary">
+  <div class="card total"><h3>Total Tests</h3><div class="value">{total_tests}</div></div>
+  <div class="card passed"><h3>Passed</h3><div class="value">{total_passed}</div></div>
+  <div class="card failed"><h3>Failed</h3><div class="value">{total_failed}</div></div>
+  <div class="card skipped"><h3>Skipped</h3><div class="value">{total_skipped}</div></div>
+  <div class="card issues"><h3>Report Issues</h3><div class="value">{report_issues}</div></div>
+</div>
+<div class="controls">
+  <label><input type="checkbox" id="failuresOnly" onclick="toggleFailures()"> Show attention rows only (failures, missing &amp; broken reports)</label>
+</div>
+<table id="results"><thead><tr>
+  <th>PG</th><th>Family</th><th>Arch</th><th>Component</th><th>Container</th>
+  <th>Status</th><th>Tests</th><th>Passed</th><th>Failed</th><th>Skipped</th>
+  <th>Time (s)</th><th>Report</th>
+</tr></thead><tbody>
+"""
+
+    body_rows = []
+    for r in rows:
+        is_fail = "1" if r["status"] in _ATTENTION_STATUSES else "0"
+        if r["report_href"]:
+            link = f'<a class="report-link" href="{_esc(r["report_href"])}">View &rarr;</a>'
+        else:
+            link = "&mdash;"
+        body_rows.append(f"""<tr data-fail="{is_fail}">
+  <td>{_esc(r['pg'])}</td><td>{_esc(r['family'])}</td><td>{_esc(r['arch'])}</td>
+  <td>{_esc(r['component'])}</td><td class="mono">{_esc(r['container'])}</td>
+  <td><span class="badge {_esc(r['status_class'])}">{_esc(r['status'])}</span></td>
+  <td class="mono">{r['tests']}</td><td class="mono">{r['passed']}</td>
+  <td class="mono">{r['failed']}</td><td class="mono">{r['skipped']}</td>
+  <td class="mono">{r['time']:.2f}</td><td>{link}</td>
+</tr>""")
+
+    tail = f"""</tbody></table>
+<div class="footer">
+  {len(rows)} row(s) &middot; total execution time {total_time:.2f}s across all slices.
+</div>
+<script>
+function toggleFailures() {{
+  var on = document.getElementById('failuresOnly').checked;
+  var trs = document.querySelectorAll('#results tbody tr');
+  for (var i=0;i<trs.length;i++) {{
+    trs[i].style.display = (on && trs[i].getAttribute('data-fail') !== '1') ? 'none' : '';
+  }}
+}}
+</script>
+</body></html>"""
+
+    return head + "\n".join(body_rows) + tail
+
+
+def _run_context(aggregated_dir: Path, rows: list) -> dict:
+    """Pull run-level context from the first slice that has a workflow-summary."""
+    ctx = {"run_number": "", "run_attempt": "", "run_id": "",
+           "event_name": "", "actor": "", "slice_count": 0}
+    slice_dirs = [d for d in aggregated_dir.iterdir()
+                  if d.is_dir() and d.name.startswith("test-logs-")]
+    ctx["slice_count"] = len(slice_dirs)
+    for sd in sorted(slice_dirs):
+        meta = parse_slice_metadata(sd)
+        if meta["run_id"] or meta["run_number"]:
+            ctx.update({
+                "run_number": meta["run_number"], "run_attempt": meta["run_attempt"],
+                "run_id": meta["run_id"], "event_name": meta["event_name"],
+                "actor": meta["actor"],
+            })
+            break
+    return ctx
+
+
+def main(argv=None) -> int:
+    ap = argparse.ArgumentParser(description="Generate the cross-slice consolidated CI report.")
+    ap.add_argument("--input-dir", required=True, help="Directory of downloaded per-slice artifacts.")
+    ap.add_argument("--output", required=True, help="Path to write consolidated-report.html.")
+    args = ap.parse_args(argv)
+
+    aggregated = Path(args.input_dir)
+    if not aggregated.is_dir():
+        print(f"[ci-report] input dir not found: {aggregated}", file=sys.stderr)
+        return 1
+
+    slice_dirs = [d for d in aggregated.iterdir()
+                  if d.is_dir() and d.name.startswith("test-logs-")]
+    rows = build_rows(aggregated)
+    ctx = _run_context(aggregated, rows)
+
+    out = Path(args.output)
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_text(render_html(rows, ctx))
+
+    fails = sum(r["failed"] for r in rows)
+    print(f"[ci-report] slices={len(slice_dirs)} rows={len(rows)} "
+          f"tests={sum(r['tests'] for r in rows)} failed={fails} "
+          f"-> {out}")
+    # Always exit 0: this is a reporting step, not a gate. It must not fail the
+    # aggregate job on the basis of underlying test failures.
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

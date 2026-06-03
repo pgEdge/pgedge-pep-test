@@ -187,3 +187,54 @@ def test_build_rows_report_with_zero_testcases(tmp_path):
     assert rows[0]["component"] == "server"
     assert rows[0]["container"] == "-"
     assert rows[0]["tests"] == 0
+
+
+def test_render_html_escapes_values(tmp_path):
+    rows = [{
+        "pg": "17", "family": "deb", "arch": "arm64",
+        "runner_label": "ubuntu-24.04-arm",
+        "component": "<script>", "container": "auto&co",
+        "tests": 1, "passed": 1, "failed": 0, "skipped": 0, "time": 1.0,
+        "status": "PASSED", "status_class": "passed", "report_href": "",
+    }]
+    ctx = {"run_number": "31", "run_attempt": "1", "run_id": "x",
+           "event_name": "workflow_dispatch", "actor": "hayee-bhatti",
+           "slice_count": 1}
+    out = ccr.render_html(rows, ctx)
+    # Only the legitimate toggle JS <script> should exist — an injected raw
+    # component value would push the count to 2+.
+    assert out.count("<script") == 1
+    assert "&lt;script&gt;" in out          # user value was escaped
+    assert "auto&amp;co" in out             # ampersand escaped
+    assert "togglefailures" in out.lower()  # failures/attention toggle present
+    assert "workflow" in out.lower() and "test" in out.lower()  # banner present
+
+
+def test_render_html_totals(tmp_path):
+    rows = [
+        {"pg": "17", "family": "deb", "arch": "arm64", "runner_label": "r",
+         "component": "server", "container": "c1", "tests": 10, "passed": 8,
+         "failed": 2, "skipped": 0, "time": 5.0, "status": "FAILED",
+         "status_class": "failed", "report_href": ""},
+    ]
+    ctx = {"run_number": "31", "run_attempt": "1", "run_id": "x",
+           "event_name": "e", "actor": "a", "slice_count": 1}
+    out = ccr.render_html(rows, ctx)
+    assert ">10<" in out  # total tests rendered somewhere
+
+
+def test_render_html_flags_report_issues(tmp_path):
+    # A NO REPORTS row must (a) surface a "Report Issues" header count even
+    # with zero test failures, and (b) be treated as an attention row so the
+    # failures-only toggle keeps it visible.
+    rows = [{
+        "pg": "17", "family": "rpm", "arch": "amd64", "runner_label": "r",
+        "component": "-", "container": "-", "tests": 0, "passed": 0,
+        "failed": 0, "skipped": 0, "time": 0.0, "status": "NO REPORTS",
+        "status_class": "noreports", "report_href": "",
+    }]
+    ctx = {"run_number": "31", "run_attempt": "1", "run_id": "x",
+           "event_name": "e", "actor": "a", "slice_count": 1}
+    out = ccr.render_html(rows, ctx)
+    assert "Report Issues" in out
+    assert 'data-fail="1"' in out  # NO REPORTS row participates in failures-only

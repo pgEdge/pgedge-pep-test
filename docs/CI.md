@@ -106,6 +106,32 @@ In full mode each slice's artifact also contains the framework's own outputs und
 - `index.html` — master index
 - `consolidated-{timestamp}/` — framework's consolidated report
 
+### Report layers — three distinct things
+
+A workflow run produces reports at three levels. They are easy to confuse, so:
+
+| Layer | Where | Scope | Produced by |
+|---|---|---|---|
+| **Per-component report** | `{component}/{pg}/report-{family}-{component}-{pg}.html` inside each per-slice artifact | One component, one PG, one slice | The framework (`run_pep_tf.sh`), unchanged |
+| **Per-slice consolidated** | `consolidated-{timestamp}/index.html` inside each per-slice artifact | All components within a single slice | The framework, unchanged |
+| **Cross-slice consolidated (new in v2.1)** | `consolidated-report.html` at the root of the `pep-regression-r{N}-a{M}-all-slices` aggregate artifact | Every component across every slice in the whole run | The CI-only generator `utillities/ci_consolidated_report.py`, run by the aggregate job |
+
+The **aggregate artifact** (`pep-regression-r{N}-a{M}-all-slices`) is the single
+downloadable archive. It bundles all per-slice trees (each with its own
+per-component and per-slice-consolidated reports) plus the new cross-slice
+`consolidated-report.html` at its root. Open that file first for the
+whole-run view; drill into the per-slice trees for detail.
+
+For preview-mode runs (execution_mode=preview) no tests run, so
+`consolidated-report.html` is a short placeholder noting that full mode is
+needed to produce results.
+
+Note on status: a slice/runner being green reflects workflow completion, not
+test outcomes. The cross-slice report carries an explicit banner about this,
+shows real PASS/FAILED/SKIPPED counts per row, and includes a "Report Issues"
+count for slices that produced no reports, unparseable reports, or zero test
+cases — so report-integrity problems are visible even when no test failed.
+
 ## Optional: Docker Hub authentication
 
 With many parallel runners pulling base images simultaneously, anonymous Docker Hub pulls can hit rate limits. The workflow has a conditional auth step that activates when **both** of these repo secrets are set:

@@ -113,5 +113,78 @@ def derive_component_from_path(xml_path: Path, slice_dir: Path) -> str:
     return "unknown"
 
 
+# Match "[<container>-<rhel|deb>" where the type is followed by ] or -.
+# Prevents a false match on 'debian' inside names like auto-debian13-amd.
+_CONTAINER_RE = re.compile(r"\[(.+)-(rhel|deb)(?=[-\]])")
+
+
+def _normalize_container(raw: str) -> str:
+    """Strip an extension prefix so 'bloom-auto-alma10-arm' -> 'auto-alma10-arm'."""
+    for pfx in ("auto-", "my-"):
+        idx = raw.find(pfx)
+        if idx >= 0:
+            return raw[idx:]
+    return raw
+
+
+def _looks_like_container(name: str) -> bool:
+    """Containers in containers_list.json all begin with 'auto-' or 'my-'.
+    Gates the bracket FALLBACK so arbitrary pytest parameters (a port number,
+    a feature flag, etc.) are not mistaken for containers.
+    """
+    return name.startswith("auto-") or name.startswith("my-")
+
+
+def parse_junit_xml(xml_path: Path) -> dict:
+    """Parse one JUnit XML, grouping every test case by base container.
+
+    Iterates ALL <testcase> elements anywhere in the tree (single suite,
+    multiple <testsuite> under <testsuites>, etc.) so counts cannot be
+    silently undercounted.
+
+    Container resolution, in order:
+      * Primary  : canonical pytest param form '[<container>-<rhel|deb>'.
+      * Fallback : a bracketed param that, after normalization, still looks
+                   like a container (starts with auto-/my-).
+      * Otherwise: 'unattributed' (counted, never dropped).
+    """
+    groups = {}
+
+    def bucket(name):
+        return groups.setdefault(
+            name, {"tests": 0, "passed": 0, "failed": 0, "skipped": 0, "time": 0.0}
+        )
+
+    tree = ET.parse(xml_path)
+    root = tree.getroot()
+
+    for tc in root.iter("testcase"):
+        name = tc.get("name", "")
+        tc_time = float(tc.get("time", 0) or 0)
+
+        m = _CONTAINER_RE.search(name)
+        if m:
+            container = _normalize_container(m.group(1))
+        else:
+            m2 = re.search(r"\[([^\]]+)\]", name)
+            if m2:
+                candidate = _normalize_container(m2.group(1))
+                container = candidate if _looks_like_container(candidate) else "unattributed"
+            else:
+                container = "unattributed"
+
+        g = bucket(container)
+        g["tests"] += 1
+        g["time"] += tc_time
+        if tc.find("failure") is not None or tc.find("error") is not None:
+            g["failed"] += 1
+        elif tc.find("skipped") is not None:
+            g["skipped"] += 1
+        else:
+            g["passed"] += 1
+
+    return groups
+
+
 if __name__ == "__main__":  # pragma: no cover (wired up in a later task)
     pass

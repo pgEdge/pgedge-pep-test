@@ -73,3 +73,72 @@ def test_derive_component_from_path(tmp_path):
     assert ccr.derive_component_from_path(xml, sd) == "server"
     xml2 = sd / "pg_stat_monitor" / "17" / "report-deb-pg_stat_monitor-17.xml"
     assert ccr.derive_component_from_path(xml2, sd) == "pg_stat_monitor"
+
+
+_JUNIT_SAMPLE = """<?xml version="1.0" encoding="utf-8"?>
+<testsuites name="pytest tests"><testsuite name="pytest" errors="0" failures="1" skipped="1" tests="4" time="12.5">
+  <testcase classname="component-test.test_pep_server" name="test_install[auto-debian12-arm-deb]" time="3.0"/>
+  <testcase classname="component-test.test_pep_server" name="test_version[auto-debian12-arm-deb]" time="2.0"><failure message="boom"/></testcase>
+  <testcase classname="component-test.test_pep_server" name="test_extn[bloom-auto-debian12-arm-deb]" time="1.0"/>
+  <testcase classname="component-test.test_pep_server" name="test_orphan_no_brackets" time="0.5"><skipped message="why"/></testcase>
+</testsuite></testsuites>
+"""
+
+
+def test_parse_junit_groups_by_container(tmp_path):
+    xml = tmp_path / "report-deb-server-17.xml"
+    xml.write_text(_JUNIT_SAMPLE)
+    groups = ccr.parse_junit_xml(xml)
+    # The 3 bracketed cases collapse to one container; extension prefix stripped.
+    assert "auto-debian12-arm" in groups
+    g = groups["auto-debian12-arm"]
+    assert g["tests"] == 3
+    assert g["passed"] == 2
+    assert g["failed"] == 1
+    assert g["skipped"] == 0
+
+
+def test_parse_junit_unattributed_bucket(tmp_path):
+    xml = tmp_path / "report-deb-server-17.xml"
+    xml.write_text(_JUNIT_SAMPLE)
+    groups = ccr.parse_junit_xml(xml)
+    # The test with no [container] bracket must NOT be dropped.
+    assert "unattributed" in groups
+    assert groups["unattributed"]["tests"] == 1
+    assert groups["unattributed"]["skipped"] == 1
+
+
+_JUNIT_MULTISUITE = """<?xml version="1.0" encoding="utf-8"?>
+<testsuites name="pytest tests">
+  <testsuite name="suite-a" tests="1" failures="0" skipped="0">
+    <testcase classname="c" name="test_a[auto-rocky9-arm-rhel]" time="1.0"/>
+  </testsuite>
+  <testsuite name="suite-b" tests="1" failures="1" skipped="0">
+    <testcase classname="c" name="test_b[auto-rocky9-arm-rhel]" time="1.0"><failure message="x"/></testcase>
+  </testsuite>
+</testsuites>
+"""
+
+
+def test_parse_junit_iterates_all_suites(tmp_path):
+    # Must count testcases across EVERY testsuite, not just the first.
+    xml = tmp_path / "report-rpm-server-17.xml"
+    xml.write_text(_JUNIT_MULTISUITE)
+    groups = ccr.parse_junit_xml(xml)
+    g = groups["auto-rocky9-arm"]
+    assert g["tests"] == 2
+    assert g["passed"] == 1
+    assert g["failed"] == 1
+
+
+def test_parse_junit_non_container_bracket_is_unattributed(tmp_path):
+    # A bracketed param that is not container-like (e.g. a port) must NOT be
+    # mistaken for a container; it goes to 'unattributed'.
+    xml = tmp_path / "report-deb-server-17.xml"
+    xml.write_text(
+        '<?xml version="1.0"?><testsuite name="pytest" tests="1" failures="0" skipped="0">'
+        '<testcase classname="c" name="test_port[5432]" time="0.1"/></testsuite>'
+    )
+    groups = ccr.parse_junit_xml(xml)
+    assert "5432" not in groups
+    assert groups["unattributed"]["tests"] == 1

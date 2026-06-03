@@ -2,7 +2,7 @@
 
 This repository ships a GitHub Actions workflow at `.github/workflows/pep-regression.yml` that lets you run the pgEdge PEP regression framework across PostgreSQL versions, package families, and architectures in parallel from the GitHub Actions UI.
 
-The workflow wraps the existing `run_pep_tf.sh` framework without changing its behavior. Each matrix slice spins up one GitHub-hosted runner and invokes the same script you'd run locally, just with slice-specific flags.
+The workflow wraps the existing `run_pep_tf.sh` framework without changing its behavior. Each matrix target spins up one GitHub-hosted runner and invokes the same script you'd run locally, just with matrix target-specific flags.
 
 ## Quick start
 
@@ -20,13 +20,13 @@ The workflow wraps the existing `run_pep_tf.sh` framework without changing its b
 | `pg_versions` | text | `all` | PG versions to test. Values: `16`, `17`, `18`, `all`, or CSV (e.g. `16,17`). **Matrix-driving.** |
 | `families` | text | `all` | Package families. Values: `rpm`, `deb`, `all`, or `rpm,deb`. **Matrix-driving.** |
 | `arches` | text | `all` | Architectures. Values: `arm64`, `amd64`, `all`, or CSV. **Matrix-driving.** |
-| `components` | text | `all` | Components to test. `all` or CSV of names (e.g. `pgbouncer,server`). Same vocabulary as `run_pep_tf.sh --components`. Passed through to every slice. |
+| `components` | text | `all` | Components to test. `all` or CSV of names (e.g. `pgbouncer,server`). Same vocabulary as `run_pep_tf.sh --components`. Passed through to every matrix target. |
 | `repo` | choice | `release` | pgEdge repo channel. `release` / `staging` / `daily`. Passed through. |
-| `execution_mode` | choice | `preview` | `preview` = `--help` + `--dry-run` only (no Docker pulls, no pytest, ~seconds per slice). `full` = real framework execution. |
+| `execution_mode` | choice | `preview` | `preview` = `--help` + `--dry-run` only (no Docker pulls, no pytest, ~seconds per matrix target). `full` = real framework execution. |
 
-The first three are cross-producted into a matrix. With all three at `all`, that's 3 × 2 × 2 = **12 slices** running in parallel.
+The first three are cross-producted into a matrix. With all three at `all`, that's 3 × 2 × 2 = **12 matrix targets** running in parallel.
 
-The `components` input is validated in the plan job — invalid component names fail the plan job before any test slice spawns. Same for invalid `pg_versions`, `families`, `arches`.
+The `components` input is validated in the plan job — invalid component names fail the plan job before any test matrix target spawns. Same for invalid `pg_versions`, `families`, `arches`.
 
 ## Matrix shape
 
@@ -39,11 +39,11 @@ pg_versions × families × arches
 | `arm64` | `ubuntu-24.04-arm` |
 | `amd64` | `ubuntu-24.04` |
 
-A small `plan` job runs first, validates the inputs, and emits the matrix as JSON to `$GITHUB_OUTPUT`. The `test` job consumes that via `fromJson(needs.plan.outputs.matrix)` and spawns one runner per slice.
+A small `plan` job runs first, validates the inputs, and emits the matrix as JSON to `$GITHUB_OUTPUT`. The `test` job consumes that via `fromJson(needs.plan.outputs.matrix)` and spawns one runner per matrix target.
 
-## What runs inside each slice
+## What runs inside each matrix target
 
-The slice's runner checks out the repo, sets up Python 3.11, installs `requirements.txt`, verifies Docker, and then invokes the framework with the slice's flags:
+The matrix target's runner checks out the repo, sets up Python 3.11, installs `requirements.txt`, verifies Docker, and then invokes the framework with the matrix target's flags:
 
 ```bash
 ./run_pep_tf.sh \
@@ -55,32 +55,32 @@ The slice's runner checks out the repo, sets up Python 3.11, installs `requireme
   [--dry-run]                  # only in preview mode
 ```
 
-The framework then iterates over every enabled container in `configuration/containers_list.json` that matches the slice's family+arch — exactly as `pytest` parametrizes locally. Multiple containers run sequentially **within** a single slice; slices run in **parallel** across separate runner VMs.
+The framework then iterates over every enabled container in `configuration/containers_list.json` that matches the matrix target's family+arch — exactly as `pytest` parametrizes locally. Multiple containers run sequentially **within** a single matrix target; matrix targets run in **parallel** across separate runner VMs.
 
 ## Preview vs full mode
 
-| Mode | What runs per slice | Cost | Side effects |
+| Mode | What runs per matrix target | Cost | Side effects |
 |---|---|---|---|
 | `preview` (default) | `./run_pep_tf.sh --help` + `--dry-run`. The dry-run resolves containers, prints `[container-resolution]` and `[image-resolution]` lines, then exits. | seconds | None — no Docker pulls, no pytest, no package installs |
-| `full` | `./run_pep_tf.sh` without `--dry-run` (the real framework). | minutes per container per slice | Docker pulls, prereq installs, pytest. Real regression. |
+| `full` | `./run_pep_tf.sh` without `--dry-run` (the real framework). | minutes per container per matrix target | Docker pulls, prereq installs, pytest. Real regression. |
 
 Use `preview` to verify the workflow would do the right thing without paying real CI cost — e.g. after changing `containers_list.json` or before kicking off a long matrix run.
 
 ## Artifacts
 
-Every slice uploads `test-logs/` as an artifact. Names include the run number and run attempt so successive runs (and re-runs of the same run) don't collide:
+Every matrix target uploads `test-logs/` as an artifact. Names include the run number and run attempt so successive runs (and re-runs of the same run) don't collide:
 
 ```
 test-logs-r{run_number}-a{run_attempt}-pg{N}-{family}-{arch}
 ```
 
-In addition, an `aggregate` job runs after the matrix and packages every per-slice artifact into a single consolidated archive:
+In addition, an `aggregate` job runs after the matrix and packages every per-target artifact into a single consolidated archive:
 
 ```
 pep-regression-r{run_number}-a{run_attempt}-all-slices
 ```
 
-One download for everything, or per-slice for targeted triage.
+One download for everything, or per-target for targeted triage.
 
 ### `workflow-summary.txt`
 
@@ -88,7 +88,7 @@ Every artifact contains a compact `workflow-summary.txt` (~25 lines) that captur
 
 - Timestamp, GitHub context (sha, ref, run_id, run_number, run_attempt, event_name, actor)
 - Runner identity (os, arch, name, label)
-- Slice metadata (pg, family, arch) and inputs (components, repo, execution_mode)
+- Matrix-target metadata (pg, family, arch) and inputs (components, repo, execution_mode)
 - Python and Docker versions on the runner
 - The exact framework CLI invocation (also captured separately as `framework-command.txt`)
 - Dry-run output (preview mode) or framework reports manifest (full mode)
@@ -97,7 +97,7 @@ For triage, attach this single file — it carries everything you'd otherwise di
 
 ### Full-mode artifact contents
 
-In full mode each slice's artifact also contains the framework's own outputs under `test-logs/`:
+In full mode each matrix target's artifact also contains the framework's own outputs under `test-logs/`:
 
 - `server/{pg}/report-{family}-server-{pg}.html` — pytest HTML report
 - `server/{pg}/report-{family}-server-{pg}.xml` — JUnit XML
@@ -112,24 +112,24 @@ A workflow run produces reports at three levels. They are easy to confuse, so:
 
 | Layer | Where | Scope | Produced by |
 |---|---|---|---|
-| **Per-component report** | `{component}/{pg}/report-{family}-{component}-{pg}.html` inside each per-slice artifact | One component, one PG, one slice | The framework (`run_pep_tf.sh`), unchanged |
-| **Per-slice consolidated** | `consolidated-{timestamp}/index.html` inside each per-slice artifact | All components within a single slice | The framework, unchanged |
-| **Cross-slice consolidated (new in v2.1)** | `consolidated-report.html` at the root of the `pep-regression-r{N}-a{M}-all-slices` aggregate artifact | Every component across every slice in the whole run | The CI-only generator `utillities/ci_consolidated_report.py`, run by the aggregate job |
+| **Per-component report** | `{component}/{pg}/report-{family}-{component}-{pg}.html` inside each per-target artifact | One component, one PG, one matrix target | The framework (`run_pep_tf.sh`), unchanged |
+| **Per-target consolidated** | `consolidated-{timestamp}/index.html` inside each per-target artifact | All components within a single matrix target | The framework, unchanged |
+| **Cross-target consolidated (new in v2.1)** | `consolidated-report.html` at the root of the `pep-regression-r{N}-a{M}-all-slices` aggregate artifact | Every component across every matrix target in the whole run | The CI-only generator `utillities/ci_consolidated_report.py`, run by the aggregate job |
 
 The **aggregate artifact** (`pep-regression-r{N}-a{M}-all-slices`) is the single
-downloadable archive. It bundles all per-slice trees (each with its own
-per-component and per-slice-consolidated reports) plus the new cross-slice
+downloadable archive. It bundles all per-target trees (each with its own
+per-component and per-target-consolidated reports) plus the new cross-target
 `consolidated-report.html` at its root. Open that file first for the
-whole-run view; drill into the per-slice trees for detail.
+whole-run view; drill into the per-target trees for detail.
 
 For preview-mode runs (execution_mode=preview) no tests run, so
 `consolidated-report.html` is a short placeholder noting that full mode is
 needed to produce results.
 
-Note on status: a slice/runner being green reflects workflow completion, not
-test outcomes. The cross-slice report carries an explicit banner about this,
+Note on status: a matrix target/runner being green reflects workflow completion, not
+test outcomes. The cross-target report carries an explicit banner about this,
 shows real PASS/FAILED/SKIPPED counts per row, and includes a "Report Issues"
-count for slices that produced no reports, unparseable reports, or zero test
+count for matrix targets that produced no reports, unparseable reports, or zero test
 cases — so report-integrity problems are visible even when no test failed.
 
 ## Optional: Docker Hub authentication
@@ -161,7 +161,7 @@ A `schedule:` block is committed in the workflow YAML but commented out. When th
 
 ## Local equivalents
 
-Each slice runs exactly what you can run on your laptop:
+Each matrix target runs exactly what you can run on your laptop:
 
 ```bash
 ./run_pep_tf.sh \
@@ -171,15 +171,15 @@ Each slice runs exactly what you can run on your laptop:
 
 The `--arch` flag is optional. Omitting it leaves all enabled containers of the matching family in scope (the pre-existing behavior). With `--arch arm64`, only containers whose name contains `-arm` are kept; with `--arch amd64`, only `-amd`. Validation rejects anything else with exit 2.
 
-The `--dry-run` flag (also optional) resolves containers, prints what would run, and exits. Useful for confirming a slice's container/image picks before paying the full runtime cost.
+The `--dry-run` flag (also optional) resolves containers, prints what would run, and exits. Useful for confirming a matrix target's container/image picks before paying the full runtime cost.
 
 ## `configuration/containers_list.json` is a test-time variable
 
-This file controls which containers each slice will actually exercise. Enable or disable entries depending on what coverage you want at any given time:
+This file controls which containers each matrix target will actually exercise. Enable or disable entries depending on what coverage you want at any given time:
 
 - A small enabled set → quick runs, narrow coverage
-- A wider enabled set → broader coverage, longer per-slice runtime
-- A slice whose enabled set resolves to zero containers → exits gracefully with `[container-resolution] … -> 0 container(s): (none)`
+- A wider enabled set → broader coverage, longer per-target runtime
+- A matrix target whose enabled set resolves to zero containers → exits gracefully with `[container-resolution] … -> 0 container(s): (none)`
 
 The framework and workflow are designed to handle any combination correctly. There is no single "correct" shape for this file. For broad regression coverage, enable as many entries as you have confidence in; for focused investigation, disable everything except the OSes you care about.
 
@@ -189,11 +189,11 @@ The framework and workflow are designed to handle any combination correctly. The
 |---|---|---|
 | Plan job exits 2 with `[plan-job] ERROR: invalid X value(s)` | An input value isn't in the allowed set | Fix the input value; see the input table above for accepted values |
 | Plan job exits 2 with `[plan-job] ERROR: components value … has no valid entries after parsing` | `components` is empty or all commas | Provide at least one valid component name, or leave at `all` |
-| A slice's `runs-on` header shows the wrong runner | (Should not happen — the plan job pins runner per arch) | File as a workflow bug if you see it |
+| A matrix target's `runs-on` header shows the wrong runner | (Should not happen — the plan job pins runner per arch) | File as a workflow bug if you see it |
 | `Login Succeeded` doesn't appear in `[dockerhub] Docker Hub login` step on a full-mode run | Secrets `DOCKERHUB_USERNAME` / `DOCKERHUB_TOKEN` not configured, or `execution_mode != full` | Configure secrets (see Docker Hub authentication section) |
-| Slice fails at framework prereq step on a specific OS | Framework-level finding — record but the workflow itself is correctly surfacing it | Triage as a framework issue, not a workflow issue |
-| Slice fails with `Base image 'X' not found and could not be pulled` | Docker Hub doesn't publish the requested image+arch combination | The container's docker-pull-fix correctly surfaces this; disable that container in `containers_list.json` until upstream availability is confirmed |
-| Run #N's deb slices were slow / hung at scale | Specific container interactions under wider matrix can surface framework-side issues | The main-branch `setup_debian` refactor (DEBIAN_FRONTEND, universe repo for sq) closed the previously-known hangs |
+| A matrix target fails at framework prereq step on a specific OS | Framework-level finding — record but the workflow itself is correctly surfacing it | Triage as a framework issue, not a workflow issue |
+| A matrix target fails with `Base image 'X' not found and could not be pulled` | Docker Hub doesn't publish the requested image+arch combination | The container's docker-pull-fix correctly surfaces this; disable that container in `containers_list.json` until upstream availability is confirmed |
+| Run #N's deb matrix targets were slow / hung at scale | Specific container interactions under wider matrix can surface framework-side issues | The main-branch `setup_debian` refactor (DEBIAN_FRONTEND, universe repo for sq) closed the previously-known hangs |
 
 ## Workflow-level acceptance summary
 
@@ -201,10 +201,10 @@ The workflow is designed to:
 
 - Spawn up to 12 parallel runners (PG × family × arch)
 - Pin each runner to the correct architecture
-- Validate inputs in the plan job before any test slice spawns
-- Iterate containers sequentially within a slice via pytest parametrize (the framework's design)
-- Capture compact per-slice triage info into `workflow-summary.txt`
-- Aggregate all per-slice artifacts into one consolidated archive
+- Validate inputs in the plan job before any test matrix target spawns
+- Iterate containers sequentially within a matrix target via pytest parametrize (the framework's design)
+- Capture compact per-target triage info into `workflow-summary.txt`
+- Aggregate all per-target artifacts into one consolidated archive
 - Keep `preview` mode the default so accidental cost is bounded
 
-Framework-level findings — the kinds of issues regression testing surfaces (OS-specific test failures, version mismatches, SBOM tool gaps) — are uploaded as part of the per-slice reports and remain the framework team's domain to triage. The workflow's job is to make them visible across the matrix, not to fix them.
+Framework-level findings — the kinds of issues regression testing surfaces (OS-specific test failures, version mismatches, SBOM tool gaps) — are uploaded as part of the per-target reports and remain the framework team's domain to triage. The workflow's job is to make them visible across the matrix, not to fix them.

@@ -43,6 +43,7 @@ def parse_slice_metadata(slice_dir: Path) -> dict:
         "runner_label": "", "runner_arch": "",
         "run_id": "", "run_attempt": "", "run_number": "",
         "event_name": "", "actor": "",
+        "repo": "", "components": "", "execution_mode": "", "sha": "", "ref": "",
         "metadata_source": "",
     }
     summary = slice_dir / "workflow-summary.txt"
@@ -62,6 +63,12 @@ def parse_slice_metadata(slice_dir: Path) -> dict:
         meta["run_number"] = kv.get("github.run_number", "")
         meta["event_name"] = kv.get("github.event_name", "")
         meta["actor"] = kv.get("github.actor", "")
+        # Effective run-selection fields (for the report header).
+        meta["repo"] = kv.get("repo", "")
+        meta["components"] = kv.get("components", "")
+        meta["execution_mode"] = kv.get("execution_mode", "")
+        meta["sha"] = kv.get("github.sha", "")
+        meta["ref"] = kv.get("github.ref", "")
         meta["metadata_source"] = "workflow-summary.txt"
         # If summary somehow lacked the slice keys, backfill from dir name.
         if meta["pg"] == "unknown" or meta["family"] == "unknown" or meta["arch"] == "unknown":
@@ -135,6 +142,19 @@ def _looks_like_container(name: str) -> bool:
     return name.startswith("auto-") or name.startswith("my-")
 
 
+# Two distinct non-container buckets (kept separate so the report can tell them
+# apart and totals stay honest). The labels double as the grouping keys; the
+# parentheses guarantee they never collide with a real container name.
+#   NO_CONTAINERS_LABEL      : pytest '[NOTSET]' placeholder skips emitted when a
+#                              matrix target resolved zero containers (empty
+#                              parameter set). These are report-scope metadata,
+#                              NOT real tests -> excluded from totals.
+#   NOT_CONTAINER_SCOPED_LABEL: genuine tests that simply are not parametrized by
+#                              container and actually ran -> counted normally.
+NO_CONTAINERS_LABEL = "(none in scope)"
+NOT_CONTAINER_SCOPED_LABEL = "(not container-scoped)"
+
+
 def parse_junit_xml(xml_path: Path) -> dict:
     """Parse one JUnit XML, grouping every test case by base container.
 
@@ -168,10 +188,19 @@ def parse_junit_xml(xml_path: Path) -> dict:
         else:
             m2 = re.search(r"\[([^\]]+)\]", name)
             if m2:
-                candidate = _normalize_container(m2.group(1))
-                container = candidate if _looks_like_container(candidate) else "unattributed"
+                raw = m2.group(1)
+                # 'NOTSET' is pytest's empty-parameter-set sentinel. It appears
+                # either alone ('[NOTSET]') or as a '-'-delimited token in a
+                # doubly-parametrized id ('[bloom-NOTSET]' = extension set,
+                # container empty). Both mean the matrix target had no containers
+                # in scope -> report metadata, not a real test.
+                if "NOTSET" in raw.split("-"):
+                    container = NO_CONTAINERS_LABEL
+                else:
+                    candidate = _normalize_container(raw)
+                    container = candidate if _looks_like_container(candidate) else NOT_CONTAINER_SCOPED_LABEL
             else:
-                container = "unattributed"
+                container = NOT_CONTAINER_SCOPED_LABEL
 
         g = bucket(container)
         g["tests"] += 1
@@ -250,6 +279,20 @@ def build_rows(aggregated_dir: Path) -> list:
                 continue
             for container in sorted(groups.keys()):
                 stats = groups[container]
+                if container == NO_CONTAINERS_LABEL:
+                    # Matrix target resolved zero containers (NOTSET placeholder
+                    # skips). Surface the row but zero the counts so it does not
+                    # inflate real test totals; render_html flags it as an
+                    # attention row and counts it under Report Issues.
+                    rows.append({
+                        "pg": meta["pg"], "family": meta["family"], "arch": meta["arch"],
+                        "runner_label": meta["runner_label"],
+                        "component": component, "container": container,
+                        "tests": 0, "passed": 0, "failed": 0, "skipped": 0, "time": 0.0,
+                        "status": "NO CONTAINERS SELECTED", "status_class": "noreports",
+                        "report_href": href,
+                    })
+                    continue
                 status, status_class = _status_for(stats)
                 rows.append({
                     "pg": meta["pg"], "family": meta["family"], "arch": meta["arch"],
@@ -271,7 +314,13 @@ def _esc(value) -> str:
 # Statuses that demand attention: test failures AND data/report problems.
 # Used both for sorting (these float to the top) and for the failures-only
 # toggle (these stay visible).
-_ATTENTION_STATUSES = ("FAILED", "PARSE ERROR", "NO REPORTS", "NO TESTCASES")
+_ATTENTION_STATUSES = (
+    "FAILED", "PARSE ERROR", "NO REPORTS", "NO TESTCASES", "NO CONTAINERS SELECTED",
+)
+# Statuses with no real test data — numeric cells render as a dash.
+_NO_DATA_STATUSES = ("NO REPORTS", "NO TESTCASES", "NO CONTAINERS SELECTED")
+# Statuses that represent a report/coverage problem (Report Issues card).
+_ISSUE_STATUSES = ("NO REPORTS", "PARSE ERROR", "NO TESTCASES", "NO CONTAINERS SELECTED")
 
 
 def render_html(rows: list, ctx: dict) -> str:
@@ -282,9 +331,7 @@ def render_html(rows: list, ctx: dict) -> str:
     total_time = sum(r["time"] for r in rows)
     # Report-data problems are counted separately so a run with missing/broken
     # reports but no test failures does not look all-green in the summary.
-    report_issues = sum(
-        1 for r in rows if r["status"] in ("NO REPORTS", "PARSE ERROR", "NO TESTCASES")
-    )
+    report_issues = sum(1 for r in rows if r["status"] in _ISSUE_STATUSES)
 
     # Sort: attention rows (failures, missing/broken reports) first, then by
     # pg/family/arch/component/container.
@@ -319,21 +366,32 @@ def render_html(rows: list, ctx: dict) -> str:
       .footer { margin-top:20px; text-align:center; color:#666; font-size:12px; }
     """
 
+    def _sel(key, fallback="—"):
+        v = ctx.get(key)
+        return _esc(v) if v else fallback
+
     head = f"""<!DOCTYPE html><html><head><meta charset="utf-8"/>
-<title>Cross-Slice Consolidated Report</title><style>{css}</style></head><body>
+<title>PEP Regression Consolidated Report</title><style>{css}</style></head><body>
 <div class="header">
-  <h1>Cross-Slice Consolidated Report</h1>
+  <h1>PEP Regression Consolidated Report</h1>
   <div class="context">
     Run #{_esc(ctx.get('run_number'))} (attempt {_esc(ctx.get('run_attempt'))}) &middot;
     run_id {_esc(ctx.get('run_id'))} &middot;
     event {_esc(ctx.get('event_name'))} &middot;
     by {_esc(ctx.get('actor'))} &middot;
-    {_esc(ctx.get('slice_count'))} slice(s)
+    branch {_sel('ref')} &middot; sha {_sel('sha')} &middot;
+    {_esc(ctx.get('slice_count'))} matrix target(s)
+  </div>
+  <div class="context" style="margin-top:8px">
+    <strong>Effective selection:</strong>
+    PG {_sel('pg_versions')} &middot; families {_sel('families')} &middot;
+    arches {_sel('arches')} &middot; components {_sel('components')} &middot;
+    repo {_sel('repo')} &middot; mode {_sel('execution_mode')}
   </div>
 </div>
 <div class="banner">
-  <strong>Note:</strong> A slice/runner showing green in GitHub Actions reflects
-  workflow completion, not whether every component test passed. Per-row
+  <strong>Note:</strong> A matrix target (runner) showing green in GitHub Actions
+  reflects workflow completion, not whether every component test passed. Per-row
   PASS/FAILED/SKIPPED counts below are the source of truth for test outcomes.
 </div>
 <div class="summary">
@@ -360,18 +418,26 @@ def render_html(rows: list, ctx: dict) -> str:
             link = f'<a class="report-link" href="{_esc(r["report_href"])}">View &rarr;</a>'
         else:
             link = "&mdash;"
+        # No-data statuses (no reports / no testcases / no containers) show a
+        # dash in the numeric columns instead of a misleading 0.
+        if r["status"] in _NO_DATA_STATUSES:
+            tcell = pcell = fcell = scell = timecell = "&mdash;"
+        else:
+            tcell, pcell = str(r["tests"]), str(r["passed"])
+            fcell, scell = str(r["failed"]), str(r["skipped"])
+            timecell = f"{r['time']:.2f}"
         body_rows.append(f"""<tr data-fail="{is_fail}">
   <td>{_esc(r['pg'])}</td><td>{_esc(r['family'])}</td><td>{_esc(r['arch'])}</td>
   <td>{_esc(r['component'])}</td><td class="mono">{_esc(r['container'])}</td>
   <td><span class="badge {_esc(r['status_class'])}">{_esc(r['status'])}</span></td>
-  <td class="mono">{r['tests']}</td><td class="mono">{r['passed']}</td>
-  <td class="mono">{r['failed']}</td><td class="mono">{r['skipped']}</td>
-  <td class="mono">{r['time']:.2f}</td><td>{link}</td>
+  <td class="mono">{tcell}</td><td class="mono">{pcell}</td>
+  <td class="mono">{fcell}</td><td class="mono">{scell}</td>
+  <td class="mono">{timecell}</td><td>{link}</td>
 </tr>""")
 
     tail = f"""</tbody></table>
 <div class="footer">
-  {len(rows)} row(s) &middot; total execution time {total_time:.2f}s across all slices.
+  {len(rows)} row(s) &middot; total execution time {total_time:.2f}s across all matrix targets.
 </div>
 <script>
 function toggleFailures() {{
@@ -388,21 +454,45 @@ function toggleFailures() {{
 
 
 def _run_context(aggregated_dir: Path, rows: list) -> dict:
-    """Pull run-level context from the first slice that has a workflow-summary."""
+    """Run-level context + effective selection, derived from the per-target
+    workflow-summary.txt files. The 'effective selection' (distinct pg/family/
+    arch + components/repo/execution_mode) is what the run actually covered;
+    raw workflow_dispatch inputs are not in the artifact (and effective values
+    are clearer anyway)."""
     ctx = {"run_number": "", "run_attempt": "", "run_id": "",
-           "event_name": "", "actor": "", "slice_count": 0}
+           "event_name": "", "actor": "", "slice_count": 0,
+           "pg_versions": "", "families": "", "arches": "",
+           "components": "", "repo": "", "execution_mode": "",
+           "sha": "", "ref": ""}
     slice_dirs = [d for d in aggregated_dir.iterdir()
                   if d.is_dir() and d.name.startswith("test-logs-")]
     ctx["slice_count"] = len(slice_dirs)
+
+    pgs, fams, arches = set(), set(), set()
+    run_fields_set = False
     for sd in sorted(slice_dirs):
         meta = parse_slice_metadata(sd)
-        if meta["run_id"] or meta["run_number"]:
+        if meta["pg"] and meta["pg"] != "unknown":
+            pgs.add(meta["pg"])
+        if meta["family"] and meta["family"] != "unknown":
+            fams.add(meta["family"])
+        if meta["arch"] and meta["arch"] != "unknown":
+            arches.add(meta["arch"])
+        # Run-level + same-across-targets fields: take from the first target
+        # that carries them.
+        if not run_fields_set and (meta["run_id"] or meta["run_number"]):
             ctx.update({
                 "run_number": meta["run_number"], "run_attempt": meta["run_attempt"],
                 "run_id": meta["run_id"], "event_name": meta["event_name"],
-                "actor": meta["actor"],
+                "actor": meta["actor"], "repo": meta["repo"],
+                "components": meta["components"], "execution_mode": meta["execution_mode"],
+                "sha": meta["sha"], "ref": meta["ref"],
             })
-            break
+            run_fields_set = True
+
+    ctx["pg_versions"] = ", ".join(sorted(pgs))
+    ctx["families"] = ", ".join(sorted(fams))
+    ctx["arches"] = ", ".join(sorted(arches))
     return ctx
 
 
@@ -427,7 +517,7 @@ def main(argv=None) -> int:
     out.write_text(render_html(rows, ctx))
 
     fails = sum(r["failed"] for r in rows)
-    print(f"[ci-report] slices={len(slice_dirs)} rows={len(rows)} "
+    print(f"[ci-report] targets={len(slice_dirs)} rows={len(rows)} "
           f"tests={sum(r['tests'] for r in rows)} failed={fails} "
           f"-> {out}")
     # Always exit 0: this is a reporting step, not a gate. It must not fail the

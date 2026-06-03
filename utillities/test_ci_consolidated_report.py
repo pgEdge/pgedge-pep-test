@@ -142,3 +142,48 @@ def test_parse_junit_non_container_bracket_is_unattributed(tmp_path):
     groups = ccr.parse_junit_xml(xml)
     assert "5432" not in groups
     assert groups["unattributed"]["tests"] == 1
+
+
+def test_build_rows_includes_empty_slice(tmp_path):
+    agg = tmp_path / "aggregated"
+    # Slice A: one component with results.
+    a = agg / "test-logs-r31-a1-pg17-deb-arm64"
+    _write_summary(a, pg="17", family="deb", arch="arm64",
+                   **{"runner.label": "ubuntu-24.04-arm"})
+    (a / "server" / "17").mkdir(parents=True)
+    (a / "server" / "17" / "report-deb-server-17.xml").write_text(_JUNIT_SAMPLE)
+    # Slice B: summary present but NO report XMLs (early-failure slice).
+    b = agg / "test-logs-r31-a1-pg17-rpm-amd64"
+    _write_summary(b, pg="17", family="rpm", arch="amd64",
+                   **{"runner.label": "ubuntu-24.04"})
+
+    rows = ccr.build_rows(agg)
+    # Slice A produced container rows; slice B produced one "no reports" row.
+    a_rows = [r for r in rows if r["family"] == "deb"]
+    b_rows = [r for r in rows if r["family"] == "rpm"]
+    assert len(a_rows) >= 1
+    assert len(b_rows) == 1
+    assert b_rows[0]["status"] == "NO REPORTS"
+    assert b_rows[0]["component"] == "-"
+    assert b_rows[0]["container"] == "-"
+
+
+def test_build_rows_report_with_zero_testcases(tmp_path):
+    # A report XML that parses but contains no <testcase> elements must surface
+    # a visible NO TESTCASES row, not be silently omitted.
+    agg = tmp_path / "aggregated"
+    sd = agg / "test-logs-r31-a1-pg17-deb-amd64"
+    _write_summary(sd, pg="17", family="deb", arch="amd64",
+                   **{"runner.label": "ubuntu-24.04"})
+    empty_dir = sd / "server" / "17"
+    empty_dir.mkdir(parents=True)
+    (empty_dir / "report-deb-server-17.xml").write_text(
+        '<?xml version="1.0"?><testsuites><testsuite name="pytest" '
+        'tests="0" failures="0" skipped="0"></testsuite></testsuites>'
+    )
+    rows = ccr.build_rows(agg)
+    assert len(rows) == 1
+    assert rows[0]["status"] == "NO TESTCASES"
+    assert rows[0]["component"] == "server"
+    assert rows[0]["container"] == "-"
+    assert rows[0]["tests"] == 0

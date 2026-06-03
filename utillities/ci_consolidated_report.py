@@ -186,5 +186,83 @@ def parse_junit_xml(xml_path: Path) -> dict:
     return groups
 
 
+def _status_for(stats: dict) -> tuple:
+    if stats["failed"] > 0:
+        return "FAILED", "failed"
+    if stats["tests"] > 0 and stats["skipped"] == stats["tests"]:
+        return "SKIPPED", "skipped"
+    return "PASSED", "passed"
+
+
+def build_rows(aggregated_dir: Path) -> list:
+    """Walk every per-slice directory under aggregated_dir and produce one row
+    per (slice, component, container). Slices with metadata but no report XMLs
+    yield a single 'NO REPORTS' row so they are visible, not silently omitted.
+    """
+    rows = []
+    slice_dirs = sorted(
+        d for d in aggregated_dir.iterdir()
+        if d.is_dir() and d.name.startswith("test-logs-")
+    )
+    for sd in slice_dirs:
+        meta = parse_slice_metadata(sd)
+        xmls = discover_report_xmls(sd)
+
+        if not xmls:
+            rows.append({
+                "pg": meta["pg"], "family": meta["family"], "arch": meta["arch"],
+                "runner_label": meta["runner_label"],
+                "component": "-", "container": "-",
+                "tests": 0, "passed": 0, "failed": 0, "skipped": 0, "time": 0.0,
+                "status": "NO REPORTS", "status_class": "noreports",
+                "report_href": "",
+            })
+            continue
+
+        for xml in xmls:
+            component = derive_component_from_path(xml, sd)
+            try:
+                groups = parse_junit_xml(xml)
+            except Exception as e:  # malformed XML must not abort the whole report
+                rows.append({
+                    "pg": meta["pg"], "family": meta["family"], "arch": meta["arch"],
+                    "runner_label": meta["runner_label"],
+                    "component": component, "container": "-",
+                    "tests": 0, "passed": 0, "failed": 0, "skipped": 0, "time": 0.0,
+                    "status": "PARSE ERROR", "status_class": "failed",
+                    "report_href": "",
+                    "note": str(e),
+                })
+                continue
+            html_path = xml.with_suffix(".html")
+            href = html_path.relative_to(aggregated_dir).as_posix() if html_path.is_file() else ""
+            if not groups:
+                # XML parsed but had zero <testcase> elements — surface it as a
+                # report-integrity issue rather than silently emitting nothing.
+                rows.append({
+                    "pg": meta["pg"], "family": meta["family"], "arch": meta["arch"],
+                    "runner_label": meta["runner_label"],
+                    "component": component, "container": "-",
+                    "tests": 0, "passed": 0, "failed": 0, "skipped": 0, "time": 0.0,
+                    "status": "NO TESTCASES", "status_class": "noreports",
+                    "report_href": href,
+                })
+                continue
+            for container in sorted(groups.keys()):
+                stats = groups[container]
+                status, status_class = _status_for(stats)
+                rows.append({
+                    "pg": meta["pg"], "family": meta["family"], "arch": meta["arch"],
+                    "runner_label": meta["runner_label"],
+                    "component": component, "container": container,
+                    "tests": stats["tests"], "passed": stats["passed"],
+                    "failed": stats["failed"], "skipped": stats["skipped"],
+                    "time": stats["time"],
+                    "status": status, "status_class": status_class,
+                    "report_href": href,
+                })
+    return rows
+
+
 if __name__ == "__main__":  # pragma: no cover (wired up in a later task)
     pass

@@ -37,6 +37,7 @@ elif platform_filter == "deb":
 # Common configuration
 repo = os.getenv("REPO", "release")
 pg_major_version = os.getenv("PG_MAJOR_VERSION", "16")
+upgrade_repo = os.getenv("UPGRADE_REPO", "staging")
 
 # Enterprise All package configuration
 enterprise_all_version = os.getenv(f"PGEDGE_ENTERPRISE_ALL_{pg_major_version}_VERSION", f"{pg_major_version}.11")
@@ -163,6 +164,49 @@ def test_install_enterprise_all(container_name, container_type):
 
     assert success, f"Failed to install {enterprise_package}: {message}"
     print(f"Successfully installed {enterprise_package} on {platform}")
+
+
+@pytest.mark.parametrize("container_name,container_type", all_containers)
+def test_upgrade_enterprise_all(container_name, container_type):
+    """Step 3.1: Upgrade pgedge-enterprise-all package if UPGRADE=true"""
+    if os.getenv("UPGRADE", "false").lower() != "true":
+        pytest.skip("Skipping upgrade test because UPGRADE=false in env")
+
+    container_name = container_name.strip()
+
+    if not container_name:
+        pytest.skip("Invalid container")
+
+    try:
+        container = client.containers.get(container_name)
+    except docker.errors.NotFound:
+        pytest.skip(f"Container {container_name} not found or not running.")
+
+    assert container.status == "running"
+
+    config = get_container_config(container_type)
+    enterprise_package = config["enterprise_package"]
+
+    print(f"\n--- Upgrading {enterprise_package} on {container_name} ({container_type}) ---")
+
+    # Switch to upgrade repo if needed
+    if upgrade_repo in ["staging", "daily"]:
+        try:
+            configure_repository.configure_pgedge_repository(container, upgrade_repo)
+        except Exception as e:
+            print(f"Warning: Could not switch to upgrade repo: {e}")
+
+    # Upgrade the package
+    try:
+        success, platform, message = package_management.upgrade_package(container, enterprise_package)
+        if not success:
+            if "already" in message.lower() or "newest" in message.lower():
+                pytest.skip(f"{enterprise_package} is already at newest version")
+        assert success, f"Package upgrade failed: {message}"
+        print(f"✅ {message}")
+        print(f"✅ Platform detected: {platform}")
+    except Exception as e:
+        pytest.fail(f"Failed to upgrade {enterprise_package}: {str(e)}")
 
 
 @pytest.mark.parametrize("container_name,container_type", all_containers)
@@ -390,6 +434,55 @@ def test_create_spock_node_on_all_nodes(container_name, container_type):
 
         assert exit_code == 0, f"Failed to create Spock node {node_name}: {output.decode()}"
         print(f"✅ Spock node '{node_name}' created successfully")
+
+
+@pytest.mark.parametrize("container_name,container_type", all_containers)
+def test_verify_spock_extension_version(container_name, container_type):
+    """Step 7.1: Verify Spock extension version matches expected version on all PostgreSQL nodes"""
+    container_name = container_name.strip()
+
+    if not container_name:
+        pytest.skip("Invalid container")
+
+    try:
+        container = client.containers.get(container_name)
+    except docker.errors.NotFound:
+        pytest.skip(f"Container {container_name} not found or not running.")
+
+    assert container.status == "running"
+
+    config = get_container_config(container_type)
+    pguser = config["pguser"]
+
+    expected_version = os.getenv(f"PGEDGE_SPOCK50_{pg_major_version}_VERSION", "")
+    if not expected_version:
+        pytest.skip(f"PGEDGE_SPOCK50_{pg_major_version}_VERSION not set in env")
+
+    print(f"\n--- Verifying Spock extension version on all nodes (expected: {expected_version}) ---")
+
+    for node_num in range(1, no_of_nodes + 1):
+        node_name = f"n{node_num}"
+        node_port = base_port + node_num - 1
+
+        print(f"\n▶️  Checking Spock extension version on {node_name} (port {node_port})")
+
+        exit_code, output = container.exec_run(
+            ["psql", "-h", "localhost", "-p", str(node_port), "-U", pguser, "-d", "postgres",
+             "-t", "-c", "SELECT extversion FROM pg_extension WHERE extname = 'spock';"],
+            user="root"
+        )
+
+        out = output.decode().strip()
+
+        assert exit_code == 0, f"Failed to query Spock extension version on {node_name}: {out}"
+        assert out, f"Spock extension not found in pg_extension on {node_name}"
+        assert expected_version in out, (
+            f"Spock version mismatch on {node_name}: expected '{expected_version}', got '{out}'"
+        )
+
+        print(f"✅ Spock extension version verified on {node_name}: {out.strip()}")
+
+    print(f"\n✅ Spock extension version {expected_version} confirmed on all nodes")
 
 
 @pytest.mark.parametrize("container_name,container_type", all_containers)

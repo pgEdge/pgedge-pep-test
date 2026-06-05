@@ -1134,6 +1134,177 @@ def test_n3_accepts_writes_after_promotion(container_name, container_type):
     print(f"n3 insert replicated to n1 via Spock (n1 count: {n1_count_before} -> {n1_count_after})")
 
 
+@pytest.mark.parametrize("container_name,container_type", all_containers)
+def test_spock_load_test(container_name, container_type):
+    """Step 19: Run Spock Northwind load test against n1 and n3 (promoted leader), then verify cluster health"""
+    container_name = container_name.strip()
+    if not container_name:
+        pytest.skip("Invalid container")
+
+    container = _get_container(container_name)
+    assert container.status == "running"
+
+    config = get_container_config(container_type)
+    pguser = config["pguser"]
+
+    load_duration   = int(os.getenv("SPOCK_LOAD_TEST_DURATION",    "30"))
+    load_interval   = int(os.getenv("SPOCK_LOAD_TEST_INTERVAL_US", "1000"))
+
+    project_root        = Path(__file__).parent.parent
+    northwind_sql_path  = project_root / "utillities" / "northwind.sql"
+    load_test_py_path   = project_root / "utillities" / "spock utils" / "spock_load_test.py"
+
+    if not northwind_sql_path.exists():
+        pytest.skip(f"northwind.sql not found at {northwind_sql_path}")
+    if not load_test_py_path.exists():
+        pytest.skip(f"spock_load_test.py not found at {load_test_py_path}")
+
+    # ── Ensure psycopg2 is available ──
+    print(f"\n--- Ensuring psycopg2 is available in {container_name} ---")
+    container.exec_run(
+        ["bash", "-c",
+         "pip3 install psycopg2-binary --quiet 2>&1 || pip install psycopg2-binary --quiet 2>&1"],
+        user="root"
+    )
+
+    # ── Load Northwind schema + data on n1 ──
+    print(f"\n--- Loading Northwind schema on n1 (port {n1_port}) ---")
+    with open(northwind_sql_path, 'r') as fh:
+        northwind_content = fh.read()
+
+    _exec(container,
+          f"cat > /tmp/northwind.sql << 'NWEOF'\n{northwind_content}\nNWEOF",
+          msg="Copy northwind.sql to container")
+
+    rc, out = container.exec_run(
+        ["bash", "-c",
+         f"psql -h localhost -p {n1_port} -U {pguser} -d postgres -f /tmp/northwind.sql 2>&1"],
+        user="root"
+    )
+    out_str = out.decode()
+    if rc != 0 and "already exists" not in out_str.lower():
+        pytest.fail(f"Failed to load Northwind on n1:\n{out_str}")
+    print(f"✅ Northwind loaded on n1")
+
+    # ── Add all public tables to the default Spock replication set on n1 ──
+    print(f"\n--- Adding Northwind tables to Spock default replication set ---")
+    rc, out = container.exec_run(
+        ["bash", "-c",
+         f"psql -h localhost -p {n1_port} -U {pguser} -d postgres "
+         f"-c \"SELECT spock.repset_add_all_tables('default', ARRAY['public']);\" 2>&1"],
+        user="root"
+    )
+    repset_out = out.decode()
+    if rc != 0:
+        print(f"⚠️  repset_add_all_tables warning (may already be added): {repset_out.strip()}")
+    else:
+        print(f"✅ All public tables added to default replication set")
+
+    # ── Provision Northwind schema on n3 so Spock can replicate rows into it ──
+    print(f"\n--- Provisioning Northwind schema on n3 (port {n3_port}) ---")
+    rc, out = container.exec_run(
+        ["bash", "-c",
+         f"psql -h localhost -p {n3_port} -U {pguser} -d postgres -f /tmp/northwind.sql 2>&1"],
+        user="root"
+    )
+    out_str = out.decode()
+    if rc != 0 and "already exists" not in out_str.lower() and "duplicate key" not in out_str.lower():
+        print(f"⚠️  Warning provisioning Northwind on n3: {out_str[:300]}")
+    else:
+        print(f"✅ Northwind schema ready on n3")
+
+    # ── Wait for initial replication sync ──
+    print(f"\n⏳ Waiting 10 seconds for Spock replication to sync initial Northwind data...")
+    time.sleep(10)
+
+    # ── Copy spock_load_test.py to the container ──
+    print(f"\n--- Copying spock_load_test.py to container ---")
+    with open(load_test_py_path, 'r') as fh:
+        load_test_content = fh.read()
+
+    _exec(container,
+          f"cat > /tmp/spock_load_test.py << 'LTEOF'\n{load_test_content}\nLTEOF",
+          msg="Copy spock_load_test.py to container")
+    print(f"✅ spock_load_test.py copied to /tmp/spock_load_test.py")
+
+    # ── Non-interactive runner: reads config from env vars, calls module functions directly ──
+    runner = (
+        "import sys, time, os\n"
+        "sys.path.insert(0, '/tmp')\n"
+        "from spock_load_test import run_node, check_cluster_health, print_load_report\n"
+        "from concurrent.futures import ThreadPoolExecutor, as_completed\n"
+        "\n"
+        "n1_port     = int(os.environ['LT_N1_PORT'])\n"
+        "n3_port     = int(os.environ['LT_N3_PORT'])\n"
+        "pguser      = os.environ['LT_PGUSER']\n"
+        "pgpass      = os.environ['LT_PGPASS']\n"
+        "duration    = int(os.environ['LT_DURATION'])\n"
+        "interval_us = int(os.environ['LT_INTERVAL_US'])\n"
+        "\n"
+        "nodes = {\n"
+        "    'n1': {'host': 'localhost', 'port': n1_port, 'database': 'postgres', 'user': pguser, 'password': pgpass},\n"
+        "    'n3': {'host': 'localhost', 'port': n3_port, 'database': 'postgres', 'user': pguser, 'password': pgpass},\n"
+        "}\n"
+        "\n"
+        "print('Running load test: n1=INSERT n3=UPDATE for {}s ...'.format(duration))\n"
+        "all_stats = []\n"
+        "with ThreadPoolExecutor(max_workers=2) as ex:\n"
+        "    futures = {\n"
+        "        ex.submit(run_node, 'n1', nodes['n1'], 'insert', duration, interval_us): 'n1',\n"
+        "        ex.submit(run_node, 'n3', nodes['n3'], 'update', duration, interval_us): 'n3',\n"
+        "    }\n"
+        "    for f in as_completed(futures):\n"
+        "        r = f.result()\n"
+        "        if r:\n"
+        "            all_stats.append(r)\n"
+        "\n"
+        "if all_stats:\n"
+        "    print_load_report(all_stats)\n"
+        "    total_fail = sum(s.summary()['failure'] for s in all_stats)\n"
+        "    total_ops  = sum(s.summary()['total']   for s in all_stats)\n"
+        "    fail_pct   = (total_fail / total_ops * 100) if total_ops > 0 else 0\n"
+        "    print('LOAD_RESULT ops={} failures={}'.format(total_ops, total_fail))\n"
+        "    print('FAIL_PCT={:.2f}'.format(fail_pct))\n"
+        "\n"
+        "print('Waiting 15s for replication to settle...')\n"
+        "time.sleep(15)\n"
+        "\n"
+        "health = check_cluster_health(nodes)\n"
+        "consistent = health.get('all_consistent', False)\n"
+        "print('HEALTH_CONSISTENT={}'.format(consistent))\n"
+        "print('COUNT_MISMATCHES={}'.format(health.get('count_mismatches', 0)))\n"
+        "print('CHECKSUM_DIVERGENCES={}'.format(health.get('checksum_divergences', 0)))\n"
+        "sys.exit(0 if consistent else 1)\n"
+    )
+
+    _exec(container,
+          f"cat > /tmp/lt_runner.py << 'RNEOF'\n{runner}\nRNEOF",
+          msg="Copy load test runner to container")
+
+    # ── Execute the load test ──
+    print(f"\n--- Executing Spock load test (duration={load_duration}s, interval={load_interval}µs) ---")
+    print(f"   n1 (port {n1_port}): INSERT into Northwind tables")
+    print(f"   n3 (port {n3_port}): UPDATE Northwind tables")
+
+    env_prefix = (
+        f"LT_N1_PORT={n1_port} LT_N3_PORT={n3_port} "
+        f"LT_PGUSER={pguser} LT_PGPASS={pg_password} "
+        f"LT_DURATION={load_duration} LT_INTERVAL_US={load_interval}"
+    )
+    rc, output = container.exec_run(
+        ["bash", "-c", f"{env_prefix} python3 /tmp/lt_runner.py 2>&1"],
+        user="root"
+    )
+    out = output.decode()
+    print(out)
+
+    assert rc == 0, f"Spock load test runner exited with code {rc}:\n{out}"
+    assert "HEALTH_CONSISTENT=True" in out, (
+        f"Cluster health check failed after load test — nodes are inconsistent:\n{out}"
+    )
+    print(f"\n✅ Spock load test passed — cluster is consistent after {load_duration}s of load")
+
+
 # ============================================================================
 # CLEANUP
 # ============================================================================

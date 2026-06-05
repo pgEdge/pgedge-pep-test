@@ -218,6 +218,15 @@ def detect_component_from_test_file(config):
             'rhel_package_default': 'pgedge-radar',
             'deb_package_env': 'DEB_RADAR_PACKAGE',
             'deb_package_default': 'pgedge-radar'
+        },
+        'test_pep_llvmjit': {
+            'name': 'LLVM JIT',
+            'version_env': '',
+            'version_default': '',
+            'rhel_package_env': 'LLVMJIT_PACKAGE',
+            'rhel_package_default': f'pgedge-postgresql{os.getenv("PG_MAJOR_VERSION", "16")}-llvmjit',
+            'deb_package_env': 'DEB_LLVMJIT_PACKAGE',
+            'deb_package_default': f'pgedge-postgresql{os.getenv("PG_MAJOR_VERSION", "16")}-llvmjit'
         }
     }
 

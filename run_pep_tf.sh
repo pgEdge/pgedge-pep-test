@@ -71,7 +71,7 @@ OPTIONS:
   --components <names>    Components to test (default: all)
                           Values: server, snowflake, pgbouncer, pgbackrest, postgrest, lolor, postgis,
                                   system_stats, vectorizer, zerodowntime, mcp, rag, ace, repo_health,
-                                  docloader, anonymizer, pg_vectorize, pg_tokenizer, vchord_bm25, pgaudit, pgadmin4, patroni, pg_stat_monitor, ai_db_workbench, radar, spock_patroni_failover, all
+                                  docloader, anonymizer, pg_vectorize, pg_tokenizer, vchord_bm25, pgaudit, pgadmin4, patroni, pg_stat_monitor, ai_db_workbench, radar, spock_patroni_failover, llvmjit, all
                           Comma-separated for multiple: lolor,postgis
 
   --repo <repository>     Repository to use (default: staging)

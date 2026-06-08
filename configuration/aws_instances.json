@@ -7,11 +7,11 @@
   "rhel": [
     {
       "name":        "z_RHEL9AMD",
-      "host":        "ec2-43-205-145-209.ap-south-1.compute.amazonaws.com",
+      "host":        "ec2-52-66-209-211.ap-south-1.compute.amazonaws.com",
       "username":    "rocky",
       "key_file":    "",
       "description": "Rocky Linux 9 / ap-south-1",
-      "enabled":     false
+      "enabled":     true
     },
     {
       "name":        "z_Rocky9_ARM",
@@ -23,7 +23,7 @@
     },
     {
       "name":        "z_Rocky10_AMD",
-      "host":        "ec2-13-235-79-40.ap-south-1.compute.amazonaws.com",
+      "host":        "ec2-35-154-17-78.ap-south-1.compute.amazonaws.com",
       "username":    "rocky",
       "key_file":    "",
       "description": "Rocky Linux 10 AMD / ap-south-1",
@@ -50,7 +50,7 @@
     },
     {
       "name":        "z_Debian12_AMD",
-      "host":        "ec2-15-206-151-102.ap-south-1.compute.amazonaws.com",
+      "host":        "ec2-35-154-105-66.ap-south-1.compute.amazonaws.com",
       "username":    "admin",
       "key_file":    "",
       "description": "Debian 12 AMD / ap-south-1",
@@ -58,7 +58,7 @@
     },
     {
       "name":        "z_Debian12_ARM",
-      "host":        "ec2-13-232-45-226.ap-south-1.compute.amazonaws.com",
+      "host":        "ec2-35-154-105-66.ap-south-1.compute.amazonaws.com",
       "username":    "admin",
       "key_file":    "",
       "description": "Debian 12 ARM / ap-south-1",
@@ -66,7 +66,7 @@
     },
     {
       "name":        "z_Debain11_AMD",
-      "host":        "ec2-13-233-154-67.ap-south-1.compute.amazonaws.com",
+      "host":        "ec2-13-233-104-123.ap-south-1.compute.amazonaws.com",
       "username":    "admin",
       "key_file":    "",
       "description": "Debian 11 ARM / ap-south-1",
@@ -74,7 +74,7 @@
     },
     {
       "name":        "z_Ubuntu22.04_AMD",
-      "host":        "ec2-13-207-3-110.ap-south-1.compute.amazonaws.com",
+      "host":        "ec2-13-203-18-145.ap-south-1.compute.amazonaws.com",
       "username":    "ubuntu",
       "key_file":    "",
       "description": "Ubuntu 22.04 AMD / ap-south-1",
@@ -90,7 +90,7 @@
     },
     {
       "name":        "z_Ubuntu2404_AMD",
-      "host":        "ec2-13-233-32-207.ap-south-1.compute.amazonaws.com",
+      "host":        "ec2-13-207-176-156.ap-south-1.compute.amazonaws.com",
       "username":    "ubuntu",
       "key_file":    "",
       "description": "Ubuntu 24.04 AMD / ap-south-1",

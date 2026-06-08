@@ -77,7 +77,7 @@ jobs:
               'mcp', 'rag', 'ace', 'repo_health', 'docloader', 'anonymizer',
               'pg_vectorize', 'pg_tokenizer', 'vchord_bm25', 'pgaudit',
               'pgadmin4', 'patroni', 'pg_stat_monitor', 'ai_db_workbench',
-              'radar', 'spock_patroni_failover',
+              'radar', 'spock_patroni_failover', 'llvmjit',
           ]
           RUNNER_FOR = {'arm64': 'ubuntu-24.04-arm', 'amd64': 'ubuntu-24.04'}
 

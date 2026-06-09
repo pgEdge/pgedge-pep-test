@@ -12,6 +12,8 @@ PLATFORMS=""
 COMPONENTS=""
 REPO_OVERRIDE=""
 TARGET="docker"   # default: local Docker containers
+ARCH=""
+DRY_RUN="false"
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -40,6 +42,16 @@ while [[ $# -gt 0 ]]; do
       CLI_MODE=true
       shift 2
       ;;
+    --arch)
+      ARCH="$2"
+      CLI_MODE=true
+      shift 2
+      ;;
+    --dry-run)
+      DRY_RUN="true"
+      CLI_MODE=true
+      shift 1
+      ;;
     --help|-h)
       cat <<HELPTEXT
 Usage: $(basename "$0") [OPTIONS]
@@ -59,7 +71,7 @@ OPTIONS:
   --components <names>    Components to test (default: all)
                           Values: server, snowflake, pgbouncer, pgbackrest, postgrest, lolor, postgis,
                                   system_stats, vectorizer, zerodowntime, mcp, rag, ace, repo_health,
-                                  docloader, anonymizer, pg_vectorize, pg_tokenizer, vchord_bm25, pgaudit, pgadmin4, patroni, pg_stat_monitor, ai_db_workbench, radar, spock_patroni_failover, all
+                                  docloader, anonymizer, pg_vectorize, pg_tokenizer, vchord_bm25, pgaudit, pgadmin4, patroni, pg_stat_monitor, ai_db_workbench, radar, spock_patroni_failover, llvmjit, all
                           Comma-separated for multiple: lolor,postgis
 
   --repo <repository>     Repository to use (default: staging)
@@ -70,6 +82,14 @@ OPTIONS:
                           docker: run against local Docker containers (containers_list.json)
                           aws:    run against live AWS EC2 instances (aws_instances.json)
                           Key files for AWS must exist under keys/ (gitignored).
+
+  --arch <arch>           Filter enabled containers by architecture (default: no filter)
+                          Values: arm64, amd64
+                          Filters by container-name suffix: -arm or -amd
+                          Used by the GitHub Actions workflow to scope slices per arch.
+
+  --dry-run               Resolve containers and print what would run, then exit
+                          (no pytest, no Docker pulls, no package installs, no repo setup)
 
   --help, -h              Show this help message and exit
 
@@ -83,6 +103,12 @@ EXAMPLES:
   # Test all versions, DEB only, lolor and postgis
   ./$(basename "$0") --pgver all --platforms deb --components lolor,postgis
 
+  # Test PG 17 RPM ARM64 only
+  ./$(basename "$0") --pgver 17 --platforms rpm --arch arm64 --components server
+
+  # Show resolved containers without launching tests (no Docker required)
+  ./$(basename "$0") --pgver 17 --platforms deb --arch arm64 --components pgbouncer --dry-run
+
   # Test everything with release repo
   ./$(basename "$0") --pgver all --platforms all --components all --repo release
 HELPTEXT
@@ -95,6 +121,18 @@ HELPTEXT
       ;;
   esac
 done
+
+# Validate --arch (empty == absent == no filter)
+if [[ -n "$ARCH" ]]; then
+  case "$ARCH" in
+    arm64|amd64) ;;
+    *)
+      echo "[arch-filter] ERROR: --arch must be 'arm64' or 'amd64' (got '$ARCH')"
+      exit 2
+      ;;
+  esac
+fi
+export PEP_ARCH_FILTER="$ARCH"
 
 mkdir -p test-logs
 
@@ -300,6 +338,13 @@ for env in "${env_list[@]}"; do
   source "$envfile"
   set +a
 
+  # Apply repo override BEFORE the JSON loader and --dry-run block so that the
+  # dry-run output reflects the effective REPO (not the envfile's default).
+  if [[ -n "$REPO_OVERRIDE" ]]; then
+    export REPO="$REPO_OVERRIDE"
+    echo "   Overriding REPO to: $REPO_OVERRIDE"
+  fi
+
   # Load target instances — Docker containers or AWS EC2 instances
   if [[ "$TARGET" == "aws" ]]; then
     # ── AWS mode ────────────────────────────────────────────────────────────
@@ -336,35 +381,117 @@ except Exception as e:
     # Load containers from containers_list.json (overrides empty CONTAINERS/DEB_CONTAINERS from env file)
     CONTAINERS_JSON="${ENV_DIR}/containers_list.json"
     if [[ -f "$CONTAINERS_JSON" ]]; then
-      _loaded_containers=$(python3 -c "
-import json, sys
+      _arch_filter="${PEP_ARCH_FILTER:-}"
+      # Lowercased platform list so the inline Python can decide whether to print
+      # [container-resolution] for a given family. Both loaders still run so that
+      # CONTAINERS/DEB_CONTAINERS env vars are always populated, but the
+      # informational line is suppressed for families not in --platforms scope.
+      _platforms_for_resolution="$(echo "${platform_list[*]}" | tr '[:upper:]' '[:lower:]')"
+      _loaded_containers=$(PEP_ARCH_FILTER="$_arch_filter" PEP_PLATFORM_SCOPE="$_platforms_for_resolution" python3 -c "
+import json, os, sys
+arch = os.environ.get('PEP_ARCH_FILTER', '').strip()
+suffix = '-arm' if arch == 'arm64' else ('-amd' if arch == 'amd64' else '')
+plats = os.environ.get('PEP_PLATFORM_SCOPE', '').lower().split()
+in_scope = (not plats) or ('rpm' in plats) or ('all' in plats)
 try:
     d = json.load(open('$CONTAINERS_JSON'))
-    print(','.join(c['name'] for c in d.get('rhel', []) if c.get('enabled')))
+    enabled = [c for c in d.get('rhel', []) if c.get('enabled')]
+    if suffix:
+        enabled = [c for c in enabled if suffix in c['name']]
+    names = [c['name'] for c in enabled]
+    arch_label = arch if arch else '<none>'
+    if in_scope:
+        sys.stderr.write(f\"[container-resolution] platforms=rpm arch={arch_label} -> {len(names)} container(s): {', '.join(names) if names else '(none)'}\n\")
+    print(','.join(names))
 except Exception as e:
-    sys.stderr.write(f'Warning: failed to parse containers_list.json: {e}\n')
+    sys.stderr.write(f'[container-resolution] ERROR: failed to parse containers_list.json: {e}\n')
     print('')
 ")
-      _loaded_deb_containers=$(python3 -c "
-import json, sys
+      _loaded_deb_containers=$(PEP_ARCH_FILTER="$_arch_filter" PEP_PLATFORM_SCOPE="$_platforms_for_resolution" python3 -c "
+import json, os, sys
+arch = os.environ.get('PEP_ARCH_FILTER', '').strip()
+suffix = '-arm' if arch == 'arm64' else ('-amd' if arch == 'amd64' else '')
+plats = os.environ.get('PEP_PLATFORM_SCOPE', '').lower().split()
+in_scope = (not plats) or ('deb' in plats) or ('all' in plats)
 try:
     d = json.load(open('$CONTAINERS_JSON'))
-    print(','.join(c['name'] for c in d.get('deb', []) if c.get('enabled')))
+    enabled = [c for c in d.get('deb', []) if c.get('enabled')]
+    if suffix:
+        enabled = [c for c in enabled if suffix in c['name']]
+    names = [c['name'] for c in enabled]
+    arch_label = arch if arch else '<none>'
+    if in_scope:
+        sys.stderr.write(f\"[container-resolution] platforms=deb arch={arch_label} -> {len(names)} container(s): {', '.join(names) if names else '(none)'}\n\")
+    print(','.join(names))
 except Exception as e:
-    sys.stderr.write(f'Warning: failed to parse containers_list.json: {e}\n')
+    sys.stderr.write(f'[container-resolution] ERROR: failed to parse containers_list.json: {e}\n')
     print('')
 ")
       [[ -n "$_loaded_containers" ]] && export CONTAINERS="$_loaded_containers"
       [[ -n "$_loaded_deb_containers" ]] && export DEB_CONTAINERS="$_loaded_deb_containers"
-      unset _loaded_containers _loaded_deb_containers
+      unset _loaded_containers _loaded_deb_containers _arch_filter _platforms_for_resolution
     fi
     export AWS_MODE=false
   fi
 
-  # Apply repo override if specified via CLI
-  if [[ -n "$REPO_OVERRIDE" ]]; then
-    export REPO="$REPO_OVERRIDE"
-    echo "   Overriding REPO to: $REPO_OVERRIDE"
+  # --dry-run: resolve containers, print platform-scoped image/platform inference, exit env iteration.
+  # Side-effect-free: no pytest, no Docker pull/create/start, no package install, no repo setup.
+  # Image/platform map intentionally inlined (mirrors aspects/container_management.py CONTAINER_IMAGES
+  # and the suffix-detection in ensure_container_running) so --dry-run does not require the `docker`
+  # Python package. Keep these in sync; verified during periodic cleanup.
+  if [[ "$DRY_RUN" == "true" ]]; then
+    _platforms_lc="$(echo "${platform_list[*]}" | tr '[:upper:]' '[:lower:]')"
+    echo "[dry-run] env=${env} platforms=${_platforms_lc} arch=${PEP_ARCH_FILTER:-<none>} repo=${REPO:-}"
+
+    case " $_platforms_lc " in
+      *" rpm "*|*" all "*) echo "[dry-run] CONTAINERS (rpm)=${CONTAINERS:-}" ;;
+    esac
+    case " $_platforms_lc " in
+      *" deb "*|*" all "*) echo "[dry-run] DEB_CONTAINERS (deb)=${DEB_CONTAINERS:-}" ;;
+    esac
+
+    PEP_DRY_RUN_PLATFORMS="$_platforms_lc" \
+    PEP_DRY_RUN_RHEL="${CONTAINERS:-}" \
+    PEP_DRY_RUN_DEB="${DEB_CONTAINERS:-}" \
+    python3 -c "
+import os
+plats = os.environ.get('PEP_DRY_RUN_PLATFORMS', '').lower().split()
+include_rpm = ('rpm' in plats) or ('all' in plats)
+include_deb = ('deb' in plats) or ('all' in plats)
+rhel = [n.strip() for n in os.environ.get('PEP_DRY_RUN_RHEL', '').split(',') if n.strip()]
+deb  = [n.strip() for n in os.environ.get('PEP_DRY_RUN_DEB',  '').split(',') if n.strip()]
+selected = []
+if include_rpm:
+    selected += [('rpm', n) for n in rhel]
+if include_deb:
+    selected += [('deb', n) for n in deb]
+IMAGES = {
+    'rocky9': 'rockylinux:9', 'rocky10': 'rockylinux:10', 'rocky8': 'rockylinux:8',
+    'alma9': 'almalinux:9',  'alma10': 'almalinux:10',  'alma8': 'almalinux:8',
+    'oel9':  'oraclelinux:9', 'oel10': 'oraclelinux:10', 'oel8': 'oraclelinux:8',
+    'debian11': 'debian:11', 'debian12': 'debian:12', 'debian13': 'debian:13',
+    'ubuntu2204': 'ubuntu:22.04', 'ubuntu2404': 'ubuntu:24.04',
+}
+def infer(name):
+    n = name.lower()
+    image = next((img for k, img in IMAGES.items() if k in n), '<unknown>')
+    if '-arm' in n or 'arm64' in n:
+        platform = 'linux/arm64'
+    elif '-amd' in n or 'amd64' in n or 'x86' in n:
+        platform = 'linux/amd64'
+    else:
+        platform = '<unknown>'
+    return image, platform
+if not selected:
+    print('[image-resolution] (no containers in scope for this slice)')
+for fam, name in selected:
+    img, plat = infer(name)
+    print(f'[image-resolution] family={fam} container={name} image={img} platform={plat}')
+"
+
+    echo "[dry-run] skipping test execution (no pytest, no Docker, no package install, no repo setup)"
+    unset _platforms_lc
+    continue
   fi
 
   for platform in "${platform_list[@]}"; do
@@ -555,6 +682,13 @@ except Exception as e:
     done
   done
 done
+
+# --dry-run: env loop is the only place that produces results; nothing real
+# happened, so skip the report/index/consolidated generation entirely.
+if [[ "$DRY_RUN" == "true" ]]; then
+  echo "[dry-run] env loop complete; skipping report/index/consolidated generation"
+  exit 0
+fi
 
 echo ""
 echo "=========================================="

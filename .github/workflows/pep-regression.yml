@@ -1,19 +1,353 @@
 name: PEP Regression
 
-# This is a placeholder on the default branch.
-# The real workflow lives on the `gha` branch (and eventually merges here).
-# When triggering manually, use "Use workflow from: gha" (in progress) to run the real version that 
-# will eventually be merged here
-
 on:
   workflow_dispatch:
+    inputs:
+      pg_versions:
+        description: "PG versions: '16' | '17' | '18' | 'all' | CSV (e.g. '16,17')"
+        default: 'all'
+      families:
+        description: "Package families: 'rpm' | 'deb' | 'all' | 'rpm,deb'"
+        default: 'all'
+      arches:
+        description: "Architectures: 'arm64' | 'amd64' | 'all' | CSV"
+        default: 'all'
+      components:
+        description: "Components: 'all' or CSV (e.g. 'pgbouncer,server'). See run_pep_tf.sh --help for the full list."
+        default: 'all'
+      repo:
+        description: "Repo channel"
+        type: choice
+        options: [release, staging, daily]
+        default: release
+      execution_mode:
+        description: "preview = --help + --dry-run only (cheap, side-effect-free). full = real framework execution (Docker pulls, package installs, pytest)."
+        type: choice
+        options: [preview, full]
+        default: preview
+
+  # Scheduled trigger intentionally disabled for v1.
+  # Will be enabled once the workflow is fully validated.
+  #
+  # When enabling later: schedule fires with empty `inputs.*`. The plan job's
+  # parse() helper treats empty as "all" and the test job's `inputs.X || 'default'`
+  # fallbacks cover the rest, so no further code changes should be needed —
+  # but verify by triggering workflow_dispatch with all defaults (equivalent shape).
+  #
+  # schedule:
+  #   - cron: "0 2 * * *"   # 02:00 UTC nightly, full matrix, repo=release
+
+# Concurrency: protect an in-flight matrix run from being cancelled by a
+# re-trigger on the same ref. GitHub's behavior here is "at most one running +
+# at most one pending per group" — a third trigger cancels the pending one in
+# place rather than queueing FIFO. The running job is what we care about
+# protecting; that's preserved.
+concurrency:
+  group: pep-regression-${{ github.ref }}
+  cancel-in-progress: false
 
 jobs:
-  placeholder:
+  plan:
+    name: 'Plan matrix'
     runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      matrix:     ${{ steps.build.outputs.matrix }}
+      components: ${{ steps.build.outputs.components }}
     steps:
-      - name: 'Placeholder — real workflow lives on gha'
+      - name: '[plan-job] Build matrix'
+        id: build
+        shell: bash
+        env:
+          IN_PG:         ${{ inputs.pg_versions }}
+          IN_FAM:        ${{ inputs.families }}
+          IN_ARCH:       ${{ inputs.arches }}
+          IN_COMPONENTS: ${{ inputs.components }}
         run: |
-          echo "This is the placeholder workflow on the default branch."
-          echo "If you're seeing this output, you triggered with 'Use workflow from: main'."
-          echo "To run the real PEP regression, retrigger with 'Use workflow from: gha'."
+          python3 - <<'PY' >> "$GITHUB_OUTPUT"
+          import json, os, sys
+
+          ALL_PGS        = ['16', '17', '18']
+          ALL_FAMILIES   = ['rpm', 'deb']
+          ALL_ARCHES     = ['arm64', 'amd64']
+          # Must match the components --help advertises in run_pep_tf.sh
+          ALL_COMPONENTS = [
+              'server', 'snowflake', 'pgbouncer', 'pgbackrest', 'postgrest',
+              'lolor', 'postgis', 'system_stats', 'vectorizer', 'zerodowntime',
+              'mcp', 'rag', 'ace', 'repo_health', 'docloader', 'anonymizer',
+              'pg_vectorize', 'pg_tokenizer', 'vchord_bm25', 'pgaudit',
+              'pgadmin4', 'patroni', 'pg_stat_monitor', 'ai_db_workbench',
+              'radar', 'spock_patroni_failover', 'llvmjit',
+          ]
+          RUNNER_FOR = {'arm64': 'ubuntu-24.04-arm', 'amd64': 'ubuntu-24.04'}
+
+          def parse(raw, valid, name):
+              # Treat truly-empty or whitespace-only as "default to all".
+              # An explicit comma-only / all-empty CSV (e.g. ",") is a user
+              # error and must fail loudly, not silently produce an empty list.
+              raw_stripped = (raw or '').strip()
+              if not raw_stripped or raw_stripped == 'all':
+                  return list(valid)
+              parts = [p.strip() for p in raw_stripped.split(',') if p.strip()]
+              if not parts:
+                  sys.stderr.write(
+                      f"[plan-job] ERROR: {name} value '{raw}' has no valid entries after parsing\n"
+                  )
+                  sys.exit(2)
+              bad = [p for p in parts if p not in valid]
+              if bad:
+                  sys.stderr.write(
+                      f"[plan-job] ERROR: invalid {name} value(s): {bad}; valid: {valid}\n"
+                  )
+                  sys.exit(2)
+              seen, out = set(), []
+              for p in parts:
+                  if p not in seen:
+                      seen.add(p); out.append(p)
+              return out
+
+          pgs        = parse(os.environ.get('IN_PG'),         ALL_PGS,        'pg_versions')
+          families   = parse(os.environ.get('IN_FAM'),        ALL_FAMILIES,   'families')
+          arches     = parse(os.environ.get('IN_ARCH'),       ALL_ARCHES,     'arches')
+          components = parse(os.environ.get('IN_COMPONENTS'), ALL_COMPONENTS, 'components')
+
+          slices = [
+              {'pg': pg, 'family': fam, 'arch': arch, 'runner': RUNNER_FOR[arch]}
+              for pg in pgs for fam in families for arch in arches
+          ]
+          payload = {'include': slices}
+          # Normalized components value emitted as a job output so the test
+          # job uses the trimmed/validated string instead of inputs.components
+          # raw — otherwise "pgbouncer, server" (with space) would word-split
+          # in bash and break the framework's CLI parser.
+          components_normalized = ','.join(components)
+          sys.stderr.write(
+              f"[plan-job] inputs pg={pgs} fam={families} arch={arches} components={components}\n"
+          )
+          sys.stderr.write(f"[plan-job] {len(slices)} slice(s): {json.dumps(payload)}\n")
+          sys.stderr.write(f"[plan-job] components normalized: {components_normalized}\n")
+          print(f"matrix={json.dumps(payload)}")
+          print(f"components={components_normalized}")
+          PY
+
+  test:
+    needs: plan
+    name: 'PG${{ matrix.pg }} ${{ matrix.family }} ${{ matrix.arch }}'
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJson(needs.plan.outputs.matrix) }}
+    steps:
+      - name: '[slice] Identity'
+        run: |
+          echo "[slice] pg=${{ matrix.pg }} family=${{ matrix.family }} arch=${{ matrix.arch }} runner=${{ matrix.runner }}"
+
+      - name: '[checkout] Source'
+        uses: actions/checkout@v6
+
+      - name: '[python] Set up Python'
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+
+      - name: '[deps] Install Python deps'
+        run: pip install -r requirements.txt
+
+      - name: '[docker] Verify Docker available'
+        run: docker version
+
+      # Conditional Docker Hub auth.
+      # Two gates, both must pass:
+      #   1. The slice is in full mode (no point logging in if no images will
+      #      be pulled).
+      #   2. Both DOCKERHUB_USERNAME and DOCKERHUB_TOKEN secrets are set.
+      # We test secret presence by mapping them to env vars in a small bash
+      # step (well-supported pattern) rather than referencing `secrets.X` in
+      # the login step's `if:` directly. This avoids edge cases around
+      # secret-context redaction in expression evaluators and keeps the gate
+      # explicit. If either gate is open the login step shows as skipped
+      # (clean, not failed); pulls then run anonymously and may hit Docker
+      # Hub rate limits.
+      - name: '[dockerhub] Check credentials available'
+        id: dockerhub_creds
+        shell: bash
+        env:
+          DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+          DOCKERHUB_TOKEN:    ${{ secrets.DOCKERHUB_TOKEN }}
+        run: |
+          if [[ -n "$DOCKERHUB_USERNAME" && -n "$DOCKERHUB_TOKEN" ]]; then
+            echo "have_creds=true"  >> "$GITHUB_OUTPUT"
+            echo "[dockerhub] credentials present"
+          else
+            echo "have_creds=false" >> "$GITHUB_OUTPUT"
+            echo "[dockerhub] credentials NOT present (will skip login; anonymous pulls)"
+          fi
+
+      - name: '[dockerhub] Docker Hub login (conditional)'
+        if: ${{ inputs.execution_mode == 'full' && steps.dockerhub_creds.outputs.have_creds == 'true' }}
+        uses: docker/login-action@v4
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: '[framework-help] CLI sanity'
+        shell: bash
+        run: |
+          set -o pipefail
+          ./run_pep_tf.sh --help
+          ./run_pep_tf.sh --help | grep -- '--arch'    > /dev/null
+          ./run_pep_tf.sh --help | grep -- '--dry-run' > /dev/null
+          echo "[framework-help] OK (--arch and --dry-run advertised)"
+
+      - name: '[framework-command] Preview (--help + --dry-run)'
+        if: ${{ inputs.execution_mode != 'full' }}
+        shell: bash
+        env:
+          IN_COMPONENTS: ${{ needs.plan.outputs.components }}
+          IN_REPO:       ${{ inputs.repo       || 'release' }}
+        run: |
+          set -o pipefail
+          mkdir -p test-logs
+          CMD="./run_pep_tf.sh --pgver ${{ matrix.pg }} --platforms ${{ matrix.family }} --arch ${{ matrix.arch }} --components $IN_COMPONENTS --repo $IN_REPO --dry-run"
+          # Capture the constructed CLI to a file so the exact invocation is in
+          # the artifact, not only in the GH Actions step log.
+          echo "$CMD" | tee test-logs/framework-command.txt
+          echo "[framework-command] $CMD"
+          $CMD 2>&1 | tee test-logs/dry-run-output.txt
+
+      - name: '[framework-command] Full (real framework execution)'
+        if: ${{ inputs.execution_mode == 'full' }}
+        shell: bash
+        env:
+          IN_COMPONENTS: ${{ needs.plan.outputs.components }}
+          IN_REPO:       ${{ inputs.repo       || 'release' }}
+        run: |
+          set -o pipefail
+          mkdir -p test-logs
+          CMD="./run_pep_tf.sh --pgver ${{ matrix.pg }} --platforms ${{ matrix.family }} --arch ${{ matrix.arch }} --components $IN_COMPONENTS --repo $IN_REPO"
+          # Capture the constructed CLI to a file so the exact invocation is in
+          # the artifact, not only in the GH Actions step log.
+          echo "$CMD" | tee test-logs/framework-command.txt
+          echo "[framework-command] $CMD"
+          $CMD
+
+      - name: '[summary] Write workflow summary artifact'
+        if: always()
+        shell: bash
+        env:
+          MATRIX_PG:     ${{ matrix.pg }}
+          MATRIX_FAMILY: ${{ matrix.family }}
+          MATRIX_ARCH:   ${{ matrix.arch }}
+          MATRIX_RUNNER: ${{ matrix.runner }}
+          IN_EXEC_MODE:  ${{ inputs.execution_mode || 'preview' }}
+          IN_COMPONENTS: ${{ needs.plan.outputs.components }}
+          IN_REPO:       ${{ inputs.repo           || 'release' }}
+        run: |
+          mkdir -p test-logs
+          {
+            echo "[workflow-summary] ============================================================"
+            echo "[workflow-summary] timestamp=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+            echo "[workflow-summary] github.sha=${{ github.sha }}"
+            echo "[workflow-summary] github.ref=${{ github.ref }}"
+            echo "[workflow-summary] github.run_id=${{ github.run_id }}"
+            echo "[workflow-summary] github.run_number=${{ github.run_number }}"
+            echo "[workflow-summary] github.run_attempt=${{ github.run_attempt }}"
+            echo "[workflow-summary] github.event_name=${{ github.event_name }}"
+            echo "[workflow-summary] github.actor=${{ github.actor }}"
+            echo "[workflow-summary] runner.os=${{ runner.os }}"
+            echo "[workflow-summary] runner.arch=${{ runner.arch }}"
+            echo "[workflow-summary] runner.name=${{ runner.name }}"
+            echo "[workflow-summary] runner.label=$MATRIX_RUNNER"
+            echo "[workflow-summary] execution_mode=$IN_EXEC_MODE"
+            echo "[workflow-summary] pg=$MATRIX_PG"
+            echo "[workflow-summary] family=$MATRIX_FAMILY"
+            echo "[workflow-summary] arch=$MATRIX_ARCH"
+            echo "[workflow-summary] repo=$IN_REPO"
+            echo "[workflow-summary] components=$IN_COMPONENTS"
+            echo "[workflow-summary] python=$(python3 --version 2>&1)"
+            echo "[workflow-summary] docker=$(docker --version 2>&1 || echo 'not available')"
+            echo "[workflow-summary] ------------------------------------------------------------"
+            echo "[workflow-summary] framework command:"
+            if [[ -f test-logs/framework-command.txt ]]; then
+              sed 's/^/  /' test-logs/framework-command.txt
+            else
+              echo "  (test-logs/framework-command.txt not present — framework step likely never ran)"
+            fi
+            echo "[workflow-summary] ------------------------------------------------------------"
+            echo "[workflow-summary] dry-run output:"
+            if [[ -f test-logs/dry-run-output.txt ]]; then
+              grep -E '\[container-resolution\]|\[image-resolution\]|\[dry-run\]|\[arch-filter\]' test-logs/dry-run-output.txt || echo "  (no tagged lines captured)"
+            else
+              echo "  (test-logs/dry-run-output.txt not present — likely full-mode run)"
+            fi
+            if [[ "$IN_EXEC_MODE" == "full" ]]; then
+              echo "[workflow-summary] ------------------------------------------------------------"
+              echo "[workflow-summary] framework reports produced:"
+              manifest=$(find test-logs -maxdepth 4 -type f \( -name 'report-*.html' -o -name 'report-*.xml' -o -name 'index.html' \) 2>/dev/null | sort)
+              if [[ -n "$manifest" ]]; then
+                echo "$manifest" | sed 's/^/  /'
+              else
+                echo "  (no framework reports found — framework may have failed early)"
+              fi
+            fi
+            echo "[workflow-summary] ============================================================"
+          } | tee test-logs/workflow-summary.txt
+
+      - name: '[artifact] Upload test-logs'
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          # Prefix with run_number AND run_attempt so artifact names are
+          # unique across separate runs AND across reruns of the same run.
+          # upload-artifact names are immutable, so a same-named upload from
+          # a rerun would collide with the previous attempt's artifact.
+          # Each artifact is also packaged into the consolidated aggregate
+          # by the aggregate job below.
+          name: test-logs-r${{ github.run_number }}-a${{ github.run_attempt }}-pg${{ matrix.pg }}-${{ matrix.family }}-${{ matrix.arch }}
+          path: test-logs/
+          retention-days: 14
+          if-no-files-found: warn
+
+    permissions:
+      contents: read
+
+  # Aggregates every per-slice artifact into a single consolidated archive so
+  # a tester can download all-slice results in one click. Per-slice artifacts
+  # are still available individually for targeted triage. Runs after the full
+  # test matrix and tolerates partial failure (if: always()).
+  aggregate:
+    name: 'Aggregate artifacts'
+    needs: [plan, test]
+    if: always()
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: '[aggregate] Download all per-slice artifacts'
+        uses: actions/download-artifact@v7
+        with:
+          path: aggregated/
+          # Match this run AND this attempt only - reruns produce a fresh
+          # attempt with a different a<N> suffix, so we don't accidentally
+          # pull artifacts from a prior attempt of the same run.
+          pattern: test-logs-r${{ github.run_number }}-a${{ github.run_attempt }}-*
+
+      - name: '[aggregate] List what we got'
+        shell: bash
+        run: |
+          echo "[aggregate] per-slice directories under aggregated/:"
+          find aggregated -mindepth 1 -maxdepth 1 -type d | sort | sed 's/^/  /'
+          echo "[aggregate] workflow-summary.txt files found:"
+          find aggregated -maxdepth 3 -type f -name workflow-summary.txt | wc -l
+
+      - name: '[aggregate] Upload consolidated archive'
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: pep-regression-r${{ github.run_number }}-a${{ github.run_attempt }}-all-slices
+          path: aggregated/
+          retention-days: 14
+          if-no-files-found: warn
+
+    permissions:
+      contents: read

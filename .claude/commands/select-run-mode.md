@@ -44,7 +44,7 @@ If the mode is **single**, ask:
 Then ask:
 
 > Which DEB container should be active?
-> Available: `auto-debian11`, `auto-debian12-arm`, `auto-debian13-arm`, `auto-debian13-amd`, `auto-ubuntu2204-arm`, `auto-ubuntu2404-arm`
+> Available: `auto-debian11-arm`, `auto-debian12-arm`, `auto-debian13-arm`, `auto-debian13-amd`, `auto-ubuntu2204-arm`, `auto-ubuntu2404-arm`
 > (default: `auto-ubuntu2204-arm` — press Enter to accept)
 
 Wait for the user to respond. Use the defaults if the user presses Enter without typing.
@@ -68,7 +68,7 @@ The three CONTAINERS lines in each file (by their content pattern):
 - **Line A** (all RHEL): `export CONTAINERS=auto-rocky9-arm,auto-rocky10-arm,...` (rocky9-arm first, then others)
 
 The two DEB_CONTAINERS lines in each file:
-- **Line DA** (all DEB): `export DEB_CONTAINERS=auto-debian11,...` or similar multi-container line
+- **Line DA** (all DEB): `export DEB_CONTAINERS=auto-debian11-arm,...` or similar multi-container line
 - **Line DS** (single DEB): `export DEB_CONTAINERS=auto-ubuntu2204-arm` (single container)
 
 ---
@@ -124,7 +124,7 @@ Changes to apply in configuration/config16.env, config17.env, config18.env:
     uncomment: #export CONTAINERS=auto-rocky10-arm,auto-alma9-arm,...
 
   DEB_CONTAINERS lines:
-    uncomment: #export DEB_CONTAINERS=auto-debian11,auto-debian12-arm,...
+    uncomment: #export DEB_CONTAINERS=auto-debian11-arm,auto-debian12-arm,...
     comment:   export DEB_CONTAINERS=auto-ubuntu2204-arm
 ```
 

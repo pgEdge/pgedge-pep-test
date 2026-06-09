@@ -113,7 +113,7 @@ docker run -d --name auto-rocky9-arm \
   rockylinux:9 tail -f /dev/null
 
 # Start Debian container
-docker run -d --name auto-debian11 \
+docker run -d --name auto-debian11-arm \
   --hostname debian11 \
   debian:11 tail -f /dev/null
 ```
@@ -141,7 +141,7 @@ touch env
 ```bash
 # Container Configuration
 export CONTAINERS=auto-rocky9-arm
-export DEB_CONTAINERS=auto-debian11
+export DEB_CONTAINERS=auto-debian11-arm
 
 # PostgreSQL Configuration
 export PG_MAJOR_VERSION=18

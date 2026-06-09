@@ -323,6 +323,9 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
+      - name: '[aggregate] Checkout (for the report generator script)'
+        uses: actions/checkout@v6
+
       - name: '[aggregate] Download all per-slice artifacts'
         uses: actions/download-artifact@v7
         with:
@@ -339,6 +342,32 @@ jobs:
           find aggregated -mindepth 1 -maxdepth 1 -type d | sort | sed 's/^/  /'
           echo "[aggregate] workflow-summary.txt files found:"
           find aggregated -maxdepth 3 -type f -name workflow-summary.txt | wc -l
+
+      - name: '[aggregate] Build cross-slice consolidated report'
+        if: always()
+        shell: bash
+        run: |
+          if ls aggregated/test-logs-*/ >/dev/null 2>&1 && \
+             find aggregated -name 'report-*.xml' -not -path '*/consolidated-*/*' | grep -q .; then
+            python3 utillities/ci_consolidated_report.py \
+              --input-dir aggregated \
+              --output aggregated/consolidated-report.html
+          else
+            # Preview-mode (or no-XML) runs: write a small placeholder so the
+            # artifact always contains the file, and the step never fails.
+            mkdir -p aggregated
+            cat > aggregated/consolidated-report.html <<'HTML'
+          <!DOCTYPE html><html><head><meta charset="utf-8"/>
+          <title>Cross-Slice Consolidated Report</title></head><body>
+          <h1>Cross-Slice Consolidated Report</h1>
+          <p>No test report XMLs were produced by this run. This is expected for
+          preview-mode runs (execution_mode=preview), which run --help + --dry-run
+          only and do not execute pytest. Trigger with execution_mode=full to
+          produce test results.</p>
+          </body></html>
+          HTML
+            echo "[aggregate] no report XMLs found — wrote preview placeholder"
+          fi
 
       - name: '[aggregate] Upload consolidated archive'
         if: always()

@@ -25,6 +25,9 @@ on:
         type: choice
         options: [preview, full]
         default: preview
+      containers:
+        description: "Custom container override (csv). Empty = use containers_list.json defaults. 'all' (sole token) = entire catalog. Example: 'rocky9-arm64, ubuntu2404-arm64'. See docs/CI.md for the alias list."
+        default: ''
 
   # Scheduled trigger intentionally disabled for v1.
   # Will be enabled once the workflow is fully validated.
@@ -55,6 +58,9 @@ jobs:
       matrix:     ${{ steps.build.outputs.matrix }}
       components: ${{ steps.build.outputs.components }}
     steps:
+      - name: '[plan-job] Checkout (needed for container_resolver + catalog)'
+        uses: actions/checkout@v6
+
       - name: '[plan-job] Build matrix'
         id: build
         shell: bash
@@ -129,6 +135,30 @@ jobs:
           print(f"matrix={json.dumps(payload)}")
           print(f"components={components_normalized}")
           PY
+
+      - name: '[plan-job] Validate container override (global-zero gate)'
+        shell: bash
+        env:
+          IN_FAM:        ${{ inputs.families }}
+          IN_ARCH:       ${{ inputs.arches }}
+          IN_CONTAINERS: ${{ inputs.containers }}
+          # Explicitly blank PEP_CONTAINERS so a repo-level Variable / inherited
+          # env value cannot leak into an empty workflow input. In CI the
+          # `containers` workflow input is the single authoritative source.
+          PEP_CONTAINERS: ''
+        run: |
+          # Build the user-facing scope strings for validate-global.
+          # Inputs may be 'all', single value, or csv. The resolver expects csv;
+          # 'all' is expanded here for clarity.
+          _fam="${IN_FAM:-all}"
+          [[ "$_fam" == "all" || -z "$_fam" ]] && _fam="rpm,deb"
+          _arch="${IN_ARCH:-all}"
+          [[ "$_arch" == "all" || -z "$_arch" ]] && _arch="arm64,amd64"
+
+          python3 utillities/container_resolver.py validate-global \
+            --containers "$IN_CONTAINERS" \
+            --scope-families "$_fam" \
+            --scope-arches   "$_arch"
 
   test:
     needs: plan

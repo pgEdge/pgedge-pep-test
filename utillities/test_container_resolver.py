@@ -239,3 +239,75 @@ def test_override_dedup_alias_and_canonical(tmp_path, capsys):
     assert canonical == ["auto-rocky9-arm"]
     err = capsys.readouterr().err
     assert "dedup'd" in err
+
+
+def test_validate_global_default_path_returns_enabled_subset(tmp_path):
+    p = _minimal_valid_catalog(tmp_path)
+    catalog = cr.load_catalog(p)
+    resolved, source = cr.validate_global(
+        catalog, None, None,
+        scope_families={"rpm", "deb"}, scope_arches={"arm64", "amd64"},
+    )
+    assert source == "default"
+    assert set(resolved) == {"auto-rocky9-arm", "auto-debian12-arm",
+                             "auto-debian13-amd"}  # enabled:true entries
+
+
+def test_validate_global_override_in_scope_passes(tmp_path):
+    p = _minimal_valid_catalog(tmp_path)
+    catalog = cr.load_catalog(p)
+    resolved, source = cr.validate_global(
+        catalog, "rocky9-arm64, debian12-arm64", None,
+        scope_families={"rpm", "deb"}, scope_arches={"arm64", "amd64"},
+    )
+    assert source == "cli"
+    assert set(resolved) == {"auto-rocky9-arm", "auto-debian12-arm"}
+
+
+def test_validate_global_global_zero_fails(tmp_path):
+    p = _minimal_valid_catalog(tmp_path)
+    catalog = cr.load_catalog(p)
+    # Asking for deb containers with rpm-only scope -> global zero
+    with pytest.raises(cr.ResolverError, match="out of scope for the selected"):
+        cr.validate_global(
+            catalog, "debian12-arm64, debian13-amd64", None,
+            scope_families={"rpm"}, scope_arches={"arm64", "amd64"},
+        )
+
+
+def test_validate_global_default_path_skips_global_zero(tmp_path):
+    """Even if the catalog default produces an empty set for a narrow scope,
+    the default path must not fail-fast. Global-zero applies to overrides only.
+    """
+    # Build a catalog where ALL enabled entries are deb-family.
+    p = _write_catalog(tmp_path,
+        rhel=[{"name": "auto-rocky9-arm", "alias": "rocky9-arm64",
+               "description": "x", "enabled": False}],
+        deb=[{"name": "auto-debian12-arm", "alias": "debian12-arm64",
+              "description": "y", "enabled": True}])
+    catalog = cr.load_catalog(p)
+    # Scope = rpm only. Default path -> enabled subset has only the deb entry.
+    # We expect this to RETURN (not raise) because no override was supplied.
+    resolved, source = cr.validate_global(
+        catalog, None, None,
+        scope_families={"rpm"}, scope_arches={"arm64"},
+    )
+    assert source == "default"
+    # validate_global returns the entire enabled subset; downstream
+    # resolve_for_target() narrows per target.
+    assert resolved == ["auto-debian12-arm"]
+
+
+def test_validate_global_partial_match_ok(tmp_path):
+    """Some containers in scope, some out: passes (per-target filter handles them)."""
+    p = _minimal_valid_catalog(tmp_path)
+    catalog = cr.load_catalog(p)
+    resolved, source = cr.validate_global(
+        catalog, "rocky9-arm64, debian12-arm64", None,
+        scope_families={"rpm"}, scope_arches={"arm64"},
+    )
+    # rocky9-arm64 is in (rpm,arm64); debian12-arm64 is in (deb,arm64).
+    # With scope={rpm}, only rocky9 is in_scope_anywhere; debian12 is not.
+    # But in_scope_anywhere is true (rocky9 matches), so validate_global passes.
+    assert source == "cli"
+    assert set(resolved) == {"auto-rocky9-arm", "auto-debian12-arm"}

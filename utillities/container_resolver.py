@@ -192,3 +192,37 @@ def _resolve_override_tokens(catalog, raw_override, env_override):
         seen.add(canon)
         canonical.append(canon)
     return canonical, source
+
+
+def validate_global(catalog, raw_override, env_override, scope_families, scope_arches):
+    """Run-level validation. Returns (resolved_canonical_names, source_label).
+
+    Source label: 'cli', 'env', or 'default'.
+
+    On the override path, fails fast if no requested container's
+    (family, arch) is in the (scope_families, scope_arches) cross-product.
+
+    On the default path, returns the catalog's enabled:true subset and does
+    NOT perform the global-zero check (preserves pre-v2.2 behavior).
+    """
+    resolved, source = _resolve_override_tokens(catalog, raw_override, env_override)
+
+    if source == "default":
+        resolved = [e.name for e in catalog.entries if e.enabled]
+        return resolved, source
+
+    by_name = {e.name: e for e in catalog.entries}
+    in_scope_anywhere = any(
+        by_name[c].family in scope_families and by_name[c].arch in scope_arches
+        for c in resolved
+    )
+    if not in_scope_anywhere:
+        raise ResolverError(
+            f"All {len(resolved)} requested containers are out of scope for the "
+            f"selected --platforms / --arch.\n"
+            f"Requested: {resolved}.\n"
+            f"Scope: families={sorted(scope_families)}, "
+            f"arches={sorted(scope_arches)}.\n"
+            f"Either expand the scope, or pick containers that match it."
+        )
+    return resolved, source

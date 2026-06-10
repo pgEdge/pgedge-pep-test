@@ -106,6 +106,21 @@ _check "all -> source=cli" 'container-override\] source=cli' "$OUT"
 # vary, but at minimum rpm and deb both have non-empty effective lines.
 _check "all -> rpm effective non-empty" 'effective for target rpm/.*: auto-' "$OUT"
 _check "all -> deb effective non-empty" 'effective for target deb/.*: auto-' "$OUT"
+
+echo "=== Scenario 6b: 'all' includes enabled:false catalog entries (shell-layer proof) ==="
+# Specifically run rpm/amd64 + --containers all. The catalog currently has
+# auto-alma9-amd as enabled:false; a default-path rpm/amd64 run would omit
+# it. The 'all' shortcut must pull it back in through the resolver -> shell
+# integration path, end-to-end (not just at the unit-test layer).
+OUT=$(./run_pep_tf.sh --pgver 17 --platforms rpm --arch amd64 --components server --containers all --dry-run 2>&1)
+RC=$?
+_check "rpm/amd64 + all: alma9-amd in effective set" 'effective for target rpm/amd64:.*auto-alma9-amd' "$OUT"
+_check "rpm/amd64 + all: alma9-amd in [container-resolution]" 'platforms=rpm arch=amd64 ->.*auto-alma9-amd' "$OUT"
+if [[ $RC -eq 0 ]]; then
+  echo "  PASS  rpm/amd64 + all exits 0"; PASS=$((PASS+1))
+else
+  echo "  FAIL  rpm/amd64 + all exit code: $RC"; FAIL=$((FAIL+1))
+fi
 if [[ $RC -eq 0 ]]; then
   echo "  PASS  'all' shortcut exits 0"; PASS=$((PASS+1))
 else

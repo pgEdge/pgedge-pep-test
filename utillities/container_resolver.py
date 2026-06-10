@@ -53,7 +53,15 @@ def load_catalog(path) -> Catalog:
 
     entries = []
     for block_name in ("rhel", "deb"):
-        block = data.get(block_name, [])
+        if block_name not in data:
+            raise ResolverError(
+                f"{path}: required '{block_name}' block is missing"
+            )
+        block = data[block_name]
+        if not isinstance(block, list):
+            raise ResolverError(
+                f"{path}: '{block_name}' block must be a list (got {type(block).__name__})"
+            )
         family = _BLOCK_TO_FAMILY[block_name]
         for idx, raw in enumerate(block):
             entries.append(_build_entry(raw, family, block_name, idx, path))
@@ -67,10 +75,39 @@ def load_catalog(path) -> Catalog:
 
 
 def _build_entry(raw, family, block_name, idx, path):
+    if not isinstance(raw, dict):
+        raise ResolverError(
+            f"{path}: entry at {block_name}[{idx}] is not an object"
+        )
     name = (raw.get("name") or "").strip()
+
+    # description: must be present and a string
+    if "description" not in raw:
+        raise ResolverError(
+            f"{path}: {block_name}[{idx}] ({name or 'unnamed'}): description missing"
+        )
+    description = raw["description"]
+    if not isinstance(description, str):
+        raise ResolverError(
+            f"{path}: {block_name}[{idx}] ({name or 'unnamed'}): description must be a string"
+        )
+
+    # enabled: must be present and a real JSON bool. JSON's true/false parse to
+    # Python bool; anything else (string, number, null, missing) is rejected.
+    # Note: bool is a subclass of int in Python, but isinstance(x, bool) is
+    # True only for actual bools, so this rejects integers like 0/1 correctly.
+    if "enabled" not in raw:
+        raise ResolverError(
+            f"{path}: {block_name}[{idx}] ({name or 'unnamed'}): enabled missing"
+        )
+    enabled = raw["enabled"]
+    if not isinstance(enabled, bool):
+        raise ResolverError(
+            f"{path}: {block_name}[{idx}] ({name or 'unnamed'}): "
+            f"enabled must be a JSON bool (got {type(enabled).__name__})"
+        )
+
     alias = (raw.get("alias") or "").strip()
-    description = raw.get("description", "")
-    enabled = bool(raw.get("enabled", False))
 
     if not name:
         raise ResolverError(f"{path}: entry at {block_name}[{idx}] has empty name")
@@ -111,6 +148,17 @@ def _derive_arch_from_alias(alias):
 
 
 def _validate_uniqueness(entries):
+    # Canonical name uniqueness (case-insensitive, matching the lookup namespace).
+    seen_name = {}
+    for e in entries:
+        key = e.name.lower()
+        if key in seen_name:
+            raise ResolverError(
+                f"duplicate name {e.name!r} (also seen as {seen_name[key]!r})"
+            )
+        seen_name[key] = e.name
+
+    # Alias uniqueness (case-insensitive).
     seen_alias = {}
     names = {e.name for e in entries}
     for e in entries:

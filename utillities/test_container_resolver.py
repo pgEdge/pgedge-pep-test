@@ -516,3 +516,91 @@ def test_cli_env_override_used_when_cli_absent():
     assert cp.returncode == 0
     assert "source=env" in cp.stderr
     assert "auto-rocky9-arm" in cp.stdout
+
+
+def test_load_catalog_enabled_missing_fails(tmp_path):
+    p = _write_catalog(tmp_path, rhel=[
+        {"name": "auto-rocky9-arm", "alias": "rocky9-arm64", "description": "x"}
+        # 'enabled' deliberately missing
+    ])
+    with pytest.raises(cr.ResolverError, match="enabled"):
+        cr.load_catalog(p)
+
+
+def test_load_catalog_enabled_string_value_fails(tmp_path):
+    # JSON string "false" must NOT pass (truthy in Python, but not a bool).
+    p = _write_catalog(tmp_path, rhel=[
+        {"name": "auto-rocky9-arm", "alias": "rocky9-arm64",
+         "description": "x", "enabled": "false"}
+    ])
+    with pytest.raises(cr.ResolverError, match="enabled.*bool"):
+        cr.load_catalog(p)
+
+
+def test_load_catalog_enabled_numeric_value_fails(tmp_path):
+    p = _write_catalog(tmp_path, rhel=[
+        {"name": "auto-rocky9-arm", "alias": "rocky9-arm64",
+         "description": "x", "enabled": 1}
+    ])
+    with pytest.raises(cr.ResolverError, match="enabled.*bool"):
+        cr.load_catalog(p)
+
+
+def test_load_catalog_description_missing_fails(tmp_path):
+    p = _write_catalog(tmp_path, rhel=[
+        {"name": "auto-rocky9-arm", "alias": "rocky9-arm64", "enabled": True}
+        # 'description' deliberately missing
+    ])
+    with pytest.raises(cr.ResolverError, match="description"):
+        cr.load_catalog(p)
+
+
+def test_load_catalog_description_non_string_fails(tmp_path):
+    p = _write_catalog(tmp_path, rhel=[
+        {"name": "auto-rocky9-arm", "alias": "rocky9-arm64",
+         "description": 123, "enabled": True}
+    ])
+    with pytest.raises(cr.ResolverError, match="description.*string"):
+        cr.load_catalog(p)
+
+
+def test_load_catalog_duplicate_canonical_name_fails(tmp_path):
+    p = _write_catalog(tmp_path, rhel=[
+        {"name": "auto-rocky9-arm", "alias": "rocky9-arm64",
+         "description": "first", "enabled": True},
+        {"name": "auto-rocky9-arm", "alias": "alma9-arm64",
+         "description": "second", "enabled": True},
+    ])
+    with pytest.raises(cr.ResolverError, match="duplicate name"):
+        cr.load_catalog(p)
+
+
+def test_load_catalog_duplicate_name_case_insensitive_fails(tmp_path):
+    # The lookup index is lowercased, so a case-only difference is still a
+    # collision in the override-resolution namespace.
+    p = _write_catalog(tmp_path,
+        rhel=[
+            {"name": "auto-rocky9-arm", "alias": "rocky9-arm64",
+             "description": "x", "enabled": True}
+        ],
+        deb=[
+            {"name": "AUTO-rocky9-arm", "alias": "differentalias-arm64",
+             "description": "y", "enabled": True}
+        ])
+    with pytest.raises(cr.ResolverError, match="duplicate name"):
+        cr.load_catalog(p)
+
+
+def test_load_catalog_missing_rhel_block_fails(tmp_path):
+    # 'rhel' key absent entirely.
+    p = tmp_path / "containers_list.json"
+    p.write_text(json.dumps({"deb": []}))
+    with pytest.raises(cr.ResolverError, match="rhel.*block"):
+        cr.load_catalog(p)
+
+
+def test_load_catalog_rhel_not_a_list_fails(tmp_path):
+    p = tmp_path / "containers_list.json"
+    p.write_text(json.dumps({"rhel": "oops", "deb": []}))
+    with pytest.raises(cr.ResolverError, match="rhel.*list"):
+        cr.load_catalog(p)

@@ -160,6 +160,15 @@ if [[ "$LIST_CONTAINERS" == "true" ]]; then
   exit $?
 fi
 
+# --containers / PEP_CONTAINERS is docker-only. Reject the combination with
+# --target aws loudly rather than silently ignoring the override.
+if [[ "$TARGET" == "aws" ]] && { [[ -n "$CONTAINERS_OVERRIDE" ]] || [[ -n "${PEP_CONTAINERS:-}" ]]; }; then
+  echo "[container-override] ERROR: --containers / PEP_CONTAINERS override is only" >&2
+  echo "                            supported with --target docker (got --target aws)." >&2
+  echo "                            Edit configuration/aws_instances.json directly for AWS runs." >&2
+  exit 2
+fi
+
 mkdir -p test-logs
 
 # Generate timestamp for this test run

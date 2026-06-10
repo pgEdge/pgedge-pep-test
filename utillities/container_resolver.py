@@ -21,6 +21,7 @@ class ResolverError(Exception):
 
 _BLOCK_TO_FAMILY = {"rhel": "rpm", "deb": "deb"}
 _CANONICAL_ARCH_SUFFIXES = {"-arm": "arm64", "-amd": "amd64"}
+_ALIAS_ARCH_SUFFIXES = {"-arm64": "arm64", "-amd64": "amd64"}
 
 
 @dataclass(frozen=True)
@@ -56,9 +57,11 @@ def load_catalog(path) -> Catalog:
         for idx, raw in enumerate(block):
             entries.append(_build_entry(raw, family, block_name, idx, path))
 
-    # alias index built later as more rules land
-    lookup_index = {e.name.lower(): e.name for e in entries}
-
+    _validate_uniqueness(entries)
+    lookup_index = {}
+    for e in entries:
+        lookup_index[e.name.lower()] = e.name
+        lookup_index[e.alias.lower()] = e.name
     return Catalog(entries=tuple(entries), lookup_index=lookup_index)
 
 
@@ -76,6 +79,18 @@ def _build_entry(raw, family, block_name, idx, path):
             f"{path}: name {name!r} must end with -arm or -amd "
             f"(arch suffix is load-bearing)"
         )
+    if not alias:
+        raise ResolverError(f"{path}: {name}: alias missing")
+    alias_arch = _derive_arch_from_alias(alias)
+    if alias_arch is None:
+        raise ResolverError(
+            f"{path}: alias {alias!r} must end with -arm64 or -amd64"
+        )
+    if alias_arch != arch:
+        raise ResolverError(
+            f"{path}: entry {name}: alias {alias!r} arch ({alias_arch}) "
+            f"disagrees with name's arch ({arch})"
+        )
     return CatalogEntry(name=name, alias=alias, description=description,
                         enabled=enabled, family=family, arch=arch)
 
@@ -85,3 +100,30 @@ def _derive_arch_from_name(name):
         if name.endswith(suf):
             return val
     return None
+
+
+def _derive_arch_from_alias(alias):
+    for suf, val in _ALIAS_ARCH_SUFFIXES.items():
+        if alias.endswith(suf):
+            return val
+    return None
+
+
+def _validate_uniqueness(entries):
+    seen_alias = {}
+    names = {e.name for e in entries}
+    for e in entries:
+        key = e.alias.lower()
+        if key in seen_alias:
+            raise ResolverError(
+                f"alias {e.alias!r} used by both {seen_alias[key]} and {e.name}"
+            )
+        seen_alias[key] = e.name
+        # Defense-in-depth: with the current suffix rules (names end in
+        # -arm/-amd, aliases end in -arm64/-amd64) this branch is unreachable
+        # for catalogs that pass per-entry suffix validation. Kept anyway in
+        # case the suffix policy is ever relaxed in a future release.
+        if e.alias in names and e.alias != e.name:
+            raise ResolverError(
+                f"alias {e.alias!r} collides with name of another entry"
+            )

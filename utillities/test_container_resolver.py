@@ -86,3 +86,56 @@ def test_load_catalog_unparseable_json_fails(tmp_path):
     p.write_text("{not json")
     with pytest.raises(cr.ResolverError, match="parse error"):
         cr.load_catalog(p)
+
+
+def test_load_catalog_missing_alias_fails(tmp_path):
+    p = _write_catalog(tmp_path, rhel=[
+        {"name": "auto-rocky9-arm", "alias": "", "description": "x", "enabled": True}
+    ])
+    with pytest.raises(cr.ResolverError, match="alias missing"):
+        cr.load_catalog(p)
+
+
+def test_load_catalog_alias_wrong_suffix_fails(tmp_path):
+    # 'rocky9' has no -arm64 or -amd64 suffix.
+    p = _write_catalog(tmp_path, rhel=[
+        {"name": "auto-rocky9-arm", "alias": "rocky9",
+         "description": "x", "enabled": True}
+    ])
+    with pytest.raises(cr.ResolverError, match="must end with -arm64 or -amd64"):
+        cr.load_catalog(p)
+
+
+def test_load_catalog_alias_arch_disagrees_with_name_fails(tmp_path):
+    # name says -arm (arm64) but alias says -amd64; load must fail.
+    p = _write_catalog(tmp_path, rhel=[
+        {"name": "auto-rocky9-arm", "alias": "rocky9-amd64",
+         "description": "x", "enabled": True}
+    ])
+    with pytest.raises(cr.ResolverError, match="arch.*disagrees"):
+        cr.load_catalog(p)
+
+
+def test_load_catalog_duplicate_alias_fails(tmp_path):
+    p = _write_catalog(tmp_path,
+        rhel=[
+            {"name": "auto-rocky9-arm", "alias": "shared-arm64",
+             "description": "x", "enabled": True}
+        ],
+        deb=[
+            {"name": "auto-debian12-arm", "alias": "shared-arm64",
+             "description": "y", "enabled": True}
+        ])
+    with pytest.raises(cr.ResolverError, match="used by both"):
+        cr.load_catalog(p)
+
+
+def test_lookup_index_resolves_aliases_and_canonical(tmp_path):
+    p = _minimal_valid_catalog(tmp_path)
+    catalog = cr.load_catalog(p)
+    # alias -> canonical
+    assert catalog.lookup_index["rocky9-arm64"] == "auto-rocky9-arm"
+    # canonical -> canonical
+    assert catalog.lookup_index["auto-debian13-amd"] == "auto-debian13-amd"
+    # case-insensitive lookups
+    assert catalog.lookup_index["DEBIAN12-arm64".lower()] == "auto-debian12-arm"

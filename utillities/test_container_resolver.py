@@ -604,3 +604,39 @@ def test_load_catalog_rhel_not_a_list_fails(tmp_path):
     p.write_text(json.dumps({"rhel": "oops", "deb": []}))
     with pytest.raises(cr.ResolverError, match="rhel.*list"):
         cr.load_catalog(p)
+
+
+def test_load_catalog_name_missing_key_fails(tmp_path):
+    p = _write_catalog(tmp_path, rhel=[
+        {"alias": "rocky9-arm64", "description": "x", "enabled": True}
+        # 'name' key absent
+    ])
+    with pytest.raises(cr.ResolverError, match="name"):
+        cr.load_catalog(p)
+
+
+def test_load_catalog_name_non_string_fails(tmp_path):
+    p = _write_catalog(tmp_path, rhel=[
+        {"name": 123, "alias": "rocky9-arm64",
+         "description": "x", "enabled": True}
+    ])
+    with pytest.raises(cr.ResolverError, match="name must be a string"):
+        cr.load_catalog(p)
+
+
+def test_load_catalog_alias_missing_key_fails(tmp_path):
+    p = _write_catalog(tmp_path, rhel=[
+        {"name": "auto-rocky9-arm", "description": "x", "enabled": True}
+        # 'alias' key absent — distinct from the existing "empty alias" test
+    ])
+    with pytest.raises(cr.ResolverError, match="alias missing"):
+        cr.load_catalog(p)
+
+
+def test_load_catalog_alias_non_string_fails(tmp_path):
+    p = _write_catalog(tmp_path, rhel=[
+        {"name": "auto-rocky9-arm", "alias": 123,
+         "description": "x", "enabled": True}
+    ])
+    with pytest.raises(cr.ResolverError, match="alias must be a string"):
+        cr.load_catalog(p)

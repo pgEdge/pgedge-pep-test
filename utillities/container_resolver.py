@@ -79,7 +79,20 @@ def _build_entry(raw, family, block_name, idx, path):
         raise ResolverError(
             f"{path}: entry at {block_name}[{idx}] is not an object"
         )
-    name = (raw.get("name") or "").strip()
+
+    # name: must be present and a string. Type-check BEFORE .strip() to avoid
+    # raw AttributeError on numeric/list/dict values.
+    if "name" not in raw:
+        raise ResolverError(
+            f"{path}: {block_name}[{idx}]: name missing"
+        )
+    raw_name = raw["name"]
+    if not isinstance(raw_name, str):
+        raise ResolverError(
+            f"{path}: {block_name}[{idx}]: name must be a string "
+            f"(got {type(raw_name).__name__})"
+        )
+    name = raw_name.strip()
 
     # description: must be present and a string
     if "description" not in raw:
@@ -107,7 +120,16 @@ def _build_entry(raw, family, block_name, idx, path):
             f"enabled must be a JSON bool (got {type(enabled).__name__})"
         )
 
-    alias = (raw.get("alias") or "").strip()
+    # alias: must be present and a string. Type-check BEFORE .strip().
+    if "alias" not in raw:
+        raise ResolverError(f"{path}: {name}: alias missing")
+    raw_alias = raw["alias"]
+    if not isinstance(raw_alias, str):
+        raise ResolverError(
+            f"{path}: {name}: alias must be a string "
+            f"(got {type(raw_alias).__name__})"
+        )
+    alias = raw_alias.strip()
 
     if not name:
         raise ResolverError(f"{path}: entry at {block_name}[{idx}] has empty name")

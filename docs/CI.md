@@ -23,10 +23,11 @@ The workflow wraps the existing `run_pep_tf.sh` framework without changing its b
 | `components` | text | `all` | Components to test. `all` or CSV of names (e.g. `pgbouncer,server`). Same vocabulary as `run_pep_tf.sh --components`. Passed through to every matrix target. |
 | `repo` | choice | `release` | pgEdge repo channel. `release` / `staging` / `daily`. Passed through. |
 | `execution_mode` | choice | `preview` | `preview` = `--help` + `--dry-run` only (no Docker pulls, no pytest, ~seconds per matrix target). `full` = real framework execution. |
+| `containers` | text | *(empty)* | Custom container override (csv). Empty = use `containers_list.json` defaults. Special value `all` (sole token) = entire catalog, including `enabled: false`. Example: `'rocky9-arm64, ubuntu2404-arm64'`. Accepts both aliases and canonical names. See [Selecting container targets at runtime](#selecting-container-targets-at-runtime) for the full table and validation behavior. |
 
 The first three are cross-producted into a matrix. With all three at `all`, that's 3 × 2 × 2 = **12 matrix targets** running in parallel.
 
-The `components` input is validated in the plan job — invalid component names fail the plan job before any test matrix target spawns. Same for invalid `pg_versions`, `families`, `arches`.
+The `components` input is validated in the plan job — invalid component names fail the plan job before any test matrix target spawns. Same for invalid `pg_versions`, `families`, `arches`, and `containers` (global-zero, unknown names, etc.).
 
 ## Matrix shape
 

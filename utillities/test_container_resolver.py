@@ -139,3 +139,23 @@ def test_lookup_index_resolves_aliases_and_canonical(tmp_path):
     assert catalog.lookup_index["auto-debian13-amd"] == "auto-debian13-amd"
     # case-insensitive lookups
     assert catalog.lookup_index["DEBIAN12-arm64".lower()] == "auto-debian12-arm"
+
+
+def test_real_catalog_loads_with_all_aliases():
+    """The shipped configuration/containers_list.json must load cleanly
+    and expose an alias on every entry."""
+    catalog = cr.load_catalog("configuration/containers_list.json")
+    assert len(catalog.entries) == 15, (
+        f"expected 15 catalog entries, got {len(catalog.entries)}"
+    )
+    for e in catalog.entries:
+        assert e.alias, f"{e.name}: alias must be non-empty"
+        assert e.alias.endswith(("-arm64", "-amd64"))
+
+
+def test_real_catalog_specific_aliases():
+    catalog = cr.load_catalog("configuration/containers_list.json")
+    by_name = {e.name: e.alias for e in catalog.entries}
+    assert by_name["auto-rocky9-arm"] == "rocky9-arm64"
+    assert by_name["auto-debian13-amd"] == "debian13-amd64"
+    assert by_name["auto-ubuntu2404-arm"] == "ubuntu2404-arm64"

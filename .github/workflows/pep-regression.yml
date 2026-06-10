@@ -247,6 +247,12 @@ jobs:
           # Block any inherited env from leaking when the workflow input is empty.
           # In CI the `containers` workflow input is the single source of truth.
           PEP_CONTAINERS: ''
+          # Signal to run_pep_tf.sh that the plan job already ran validate-global
+          # with the user's full --platforms/--arch scope. Per-target invocations
+          # arrive here with a narrowed scope; re-running validate-global would
+          # falsely global-zero whenever the override has any entry outside this
+          # single cell (the per-target filter handles that case cleanly).
+          PEP_GLOBAL_VALIDATED: 'true'
         run: |
           set -o pipefail
           mkdir -p test-logs
@@ -279,6 +285,12 @@ jobs:
           # Block any inherited env from leaking when the workflow input is empty.
           # In CI the `containers` workflow input is the single source of truth.
           PEP_CONTAINERS: ''
+          # Signal to run_pep_tf.sh that the plan job already ran validate-global
+          # with the user's full --platforms/--arch scope. Per-target invocations
+          # arrive here with a narrowed scope; re-running validate-global would
+          # falsely global-zero whenever the override has any entry outside this
+          # single cell (the per-target filter handles that case cleanly).
+          PEP_GLOBAL_VALIDATED: 'true'
         run: |
           set -o pipefail
           mkdir -p test-logs

@@ -366,7 +366,16 @@ run_pytest_with_tracking() {
 # fail-fast above already handled the misuse case). For docker, this runs
 # whether or not the user supplied an override: the resolver's default path
 # is a no-op (no chatter, no failure) so it's cheap.
-if [[ "$TARGET" == "docker" ]]; then
+#
+# Also skipped when PEP_GLOBAL_VALIDATED is set. In CI, the workflow's plan
+# job already runs validate-global with the USER'S FULL scope (families=all,
+# arches=all if so chosen). Each per-target test-job invocation arrives here
+# with a narrowed --platforms/--arch — running validate-global again at that
+# narrow scope would falsely global-zero whenever the user's override has
+# entries outside the current cell (e.g. arm64 entries on an amd64 target).
+# The plan job sets PEP_GLOBAL_VALIDATED=true to signal "already done
+# globally; per-target work only".
+if [[ "$TARGET" == "docker" && -z "${PEP_GLOBAL_VALIDATED:-}" ]]; then
   # Scope strings in user-facing names (rpm/deb, arm64/amd64). platform_list
   # uses uppercase RPM/DEB; lowercase + comma-join for the resolver.
   _scope_families="$(echo "${platform_list[*]}" | tr '[:upper:]' '[:lower:]' | tr ' ' ',')"

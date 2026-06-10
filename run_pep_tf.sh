@@ -154,6 +154,12 @@ if [[ -n "$ARCH" ]]; then
 fi
 export PEP_ARCH_FILTER="$ARCH"
 
+# Discovery shortcut: print the catalog and exit.
+if [[ "$LIST_CONTAINERS" == "true" ]]; then
+  python3 utillities/container_resolver.py list-containers
+  exit $?
+fi
+
 mkdir -p test-logs
 
 # Generate timestamp for this test run

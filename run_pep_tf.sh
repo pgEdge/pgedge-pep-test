@@ -12,6 +12,8 @@ PLATFORMS=""
 COMPONENTS=""
 REPO_OVERRIDE=""
 TARGET="docker"   # default: local Docker containers
+CONTAINERS_OVERRIDE=""
+LIST_CONTAINERS=false
 ARCH=""
 DRY_RUN="false"
 
@@ -41,6 +43,16 @@ while [[ $# -gt 0 ]]; do
       TARGET="$2"
       CLI_MODE=true
       shift 2
+      ;;
+    --containers)
+      CONTAINERS_OVERRIDE="$2"
+      CLI_MODE=true
+      shift 2
+      ;;
+    --list-containers)
+      LIST_CONTAINERS=true
+      CLI_MODE=true
+      shift 1
       ;;
     --arch)
       ARCH="$2"
@@ -82,6 +94,14 @@ OPTIONS:
                           docker: run against local Docker containers (containers_list.json)
                           aws:    run against live AWS EC2 instances (aws_instances.json)
                           Key files for AWS must exist under keys/ (gitignored).
+
+  --containers <csv>      Runtime container override (default: use containers_list.json
+                          enabled:true subset). Accepts aliases (e.g. rocky9-arm64) and
+                          canonical names. Special value 'all' (sole token) = entire
+                          catalog regardless of enabled. See --list-containers.
+
+  --list-containers       Print the catalog (alias, canonical name, family, arch,
+                          enabled, description) and exit.
 
   --arch <arch>           Filter enabled containers by architecture (default: no filter)
                           Values: arm64, amd64

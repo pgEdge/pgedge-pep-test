@@ -53,10 +53,16 @@ The matrix target's runner checks out the repo, sets up Python 3.11, installs `r
   --arch <A> \
   --components <CSV from inputs.components> \
   --repo <inputs.repo> \
-  [--dry-run]                  # only in preview mode
+  --containers <inputs.containers>   # empty = catalog defaults; otherwise a custom allow-list
+  [--dry-run]                        # only in preview mode
 ```
 
-The framework then iterates over every enabled container in `configuration/containers_list.json` that matches the matrix target's family+arch — exactly as `pytest` parametrizes locally. Multiple containers run sequentially **within** a single matrix target; matrix targets run in **parallel** across separate runner VMs.
+The framework then iterates over the containers selected for this matrix target's family+arch — exactly as `pytest` parametrizes locally. The selected set is either:
+
+- The catalog's `enabled: true` entries (the default behavior, used when `inputs.containers` is empty), or
+- The user's custom allow-list, filtered down to this matrix target's `(family, arch)` cell (when `inputs.containers` is non-empty — see [Selecting container targets at runtime](#selecting-container-targets-at-runtime)).
+
+Multiple containers run sequentially **within** a single matrix target; matrix targets run in **parallel** across separate runner VMs.
 
 ## Preview vs full mode
 

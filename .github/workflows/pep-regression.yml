@@ -150,9 +150,14 @@ jobs:
           # Build the user-facing scope strings for validate-global.
           # Inputs may be 'all', single value, or csv. The resolver expects csv;
           # 'all' is expanded here for clarity.
+          # Trim leading/trailing whitespace first — the matrix parser already
+          # tolerates it, but this step's 'all'/-z checks would otherwise miss
+          # values like ' all ' and pass them through verbatim to the resolver.
           _fam="${IN_FAM:-all}"
+          _fam="$(echo "$_fam" | xargs)"
           [[ "$_fam" == "all" || -z "$_fam" ]] && _fam="rpm,deb"
           _arch="${IN_ARCH:-all}"
+          _arch="$(echo "$_arch" | xargs)"
           [[ "$_arch" == "all" || -z "$_arch" ]] && _arch="arm64,amd64"
 
           python3 utillities/container_resolver.py validate-global \
@@ -226,9 +231,11 @@ jobs:
         run: |
           set -o pipefail
           ./run_pep_tf.sh --help
-          ./run_pep_tf.sh --help | grep -- '--arch'    > /dev/null
-          ./run_pep_tf.sh --help | grep -- '--dry-run' > /dev/null
-          echo "[framework-help] OK (--arch and --dry-run advertised)"
+          ./run_pep_tf.sh --help | grep -- '--arch'             > /dev/null
+          ./run_pep_tf.sh --help | grep -- '--dry-run'          > /dev/null
+          ./run_pep_tf.sh --help | grep -- '--containers'       > /dev/null
+          ./run_pep_tf.sh --help | grep -- '--list-containers'  > /dev/null
+          echo "[framework-help] OK (--arch, --dry-run, --containers, --list-containers advertised)"
 
       - name: '[framework-command] Preview (--help + --dry-run)'
         if: ${{ inputs.execution_mode != 'full' }}
@@ -343,7 +350,7 @@ jobs:
             echo "[workflow-summary] ------------------------------------------------------------"
             echo "[workflow-summary] dry-run output:"
             if [[ -f test-logs/dry-run-output.txt ]]; then
-              grep -E '\[container-resolution\]|\[image-resolution\]|\[dry-run\]|\[arch-filter\]' test-logs/dry-run-output.txt || echo "  (no tagged lines captured)"
+              grep -E '\[container-resolution\]|\[container-override\]|\[image-resolution\]|\[dry-run\]|\[arch-filter\]' test-logs/dry-run-output.txt || echo "  (no tagged lines captured)"
             else
               echo "  (test-logs/dry-run-output.txt not present — likely full-mode run)"
             fi

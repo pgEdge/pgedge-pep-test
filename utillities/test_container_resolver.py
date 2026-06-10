@@ -396,3 +396,123 @@ def test_list_containers_table_includes_required_columns(tmp_path):
     assert "rpm" in table
     assert "deb" in table
     assert "rhel" not in table
+
+
+import subprocess
+
+
+def _run_cli(*args, env_extra=None, cwd=None):
+    """Invoke the resolver module as a script. Returns CompletedProcess."""
+    env = dict(__import__("os").environ)
+    if env_extra:
+        env.update(env_extra)
+    return subprocess.run(
+        ["python3", "utillities/container_resolver.py", *args],
+        capture_output=True, text=True, env=env, cwd=cwd,
+    )
+
+
+def test_cli_list_containers_against_real_catalog():
+    cp = _run_cli("list-containers")
+    assert cp.returncode == 0
+    # Real catalog has 15 entries
+    body_lines = [l for l in cp.stdout.splitlines() if l and "ALIAS" not in l]
+    assert len(body_lines) == 15
+
+
+def test_cli_validate_global_default_emits_no_override_chatter():
+    cp = _run_cli(
+        "validate-global",
+        "--scope-families", "rpm,deb",
+        "--scope-arches", "arm64,amd64",
+    )
+    assert cp.returncode == 0
+    # Default path: stdout is the enabled-subset CSV; stderr is intentionally
+    # silent on [container-override] so logs stay byte-identical to pre-v2.2.
+    assert "[container-override]" not in cp.stderr
+    # Non-empty CSV
+    assert cp.stdout.strip()
+
+
+def test_cli_validate_global_override_in_scope_returns_csv(tmp_path):
+    cp = _run_cli(
+        "validate-global",
+        "--containers", "rocky9-arm64, debian12-arm64",
+        "--scope-families", "rpm,deb",
+        "--scope-arches", "arm64",
+    )
+    assert cp.returncode == 0
+    assert "source=cli" in cp.stderr
+    assert "auto-rocky9-arm" in cp.stdout
+    assert "auto-debian12-arm" in cp.stdout
+
+
+def test_cli_validate_global_global_zero_exits_2():
+    cp = _run_cli(
+        "validate-global",
+        "--containers", "debian12-arm64",
+        "--scope-families", "rpm",
+        "--scope-arches", "arm64",
+    )
+    assert cp.returncode == 2
+    assert "out of scope" in cp.stderr
+
+
+def test_cli_validate_global_unknown_token_exits_2():
+    cp = _run_cli(
+        "validate-global",
+        "--containers", "not-a-real-thing-arm64",
+        "--scope-families", "rpm,deb",
+        "--scope-arches", "arm64,amd64",
+    )
+    assert cp.returncode == 2
+    assert "Unknown container" in cp.stderr
+
+
+def test_cli_resolve_for_target_emits_out_of_scope_log():
+    cp = _run_cli(
+        "resolve-for-target",
+        "--containers", "rocky9-arm64, debian12-arm64",
+        "--target-family", "rpm",
+        "--target-arch", "arm64",
+    )
+    assert cp.returncode == 0
+    assert "out-of-scope for this target" in cp.stderr
+    assert "auto-rocky9-arm" in cp.stdout
+    assert "auto-debian12-arm" not in cp.stdout  # filtered out
+
+
+def test_cli_resolve_for_target_default_path_is_silent_on_override():
+    """Default path (no --containers) must not emit [container-override] lines
+    so default-path runs look like pre-v2.2 runs in the logs."""
+    cp = _run_cli(
+        "resolve-for-target",
+        "--target-family", "rpm",
+        "--target-arch", "arm64",
+    )
+    assert cp.returncode == 0
+    assert "[container-override]" not in cp.stderr
+
+
+def test_cli_resolve_for_target_no_arch_filter_includes_both_arches():
+    cp = _run_cli(
+        "resolve-for-target",
+        "--containers", "debian12-arm64, debian13-amd64",
+        "--target-family", "deb",
+        # --target-arch omitted -> empty string -> None (no arch filter)
+    )
+    assert cp.returncode == 0
+    assert "auto-debian12-arm" in cp.stdout
+    assert "auto-debian13-amd" in cp.stdout
+
+
+def test_cli_env_override_used_when_cli_absent():
+    cp = _run_cli(
+        "validate-global",
+        "--scope-families", "rpm",
+        "--scope-arches", "arm64",
+        env_extra={"PEP_CONTAINERS": "rocky9-arm64"},
+    )
+    assert cp.returncode == 0
+    assert "source=env" in cp.stderr
+    assert "auto-rocky9-arm" in cp.stdout

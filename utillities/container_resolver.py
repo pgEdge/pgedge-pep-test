@@ -275,3 +275,111 @@ def list_containers(catalog):
             f"{e.arch:<7} {enabled_str:<8} {e.description}"
         )
     return "\n".join(lines)
+
+
+import argparse
+import os
+
+
+def _csv_to_set(value):
+    return {tok.strip() for tok in value.split(",") if tok.strip()}
+
+
+def main(argv=None):
+    parser = argparse.ArgumentParser(
+        prog="container_resolver",
+        description="Catalog & runtime override resolver for the PEP Regression framework.",
+    )
+    parser.add_argument(
+        "--catalog", default="configuration/containers_list.json",
+        help="Path to containers_list.json (default: %(default)s)",
+    )
+    sub = parser.add_subparsers(dest="command", required=True)
+
+    p_vg = sub.add_parser("validate-global",
+        help="Validate override against the user's full scope (CI plan job / local startup).")
+    p_vg.add_argument("--containers", default="",
+        help="--containers override value (may be empty).")
+    p_vg.add_argument("--scope-families", required=True,
+        help="CSV of user-facing family names (rpm, deb).")
+    p_vg.add_argument("--scope-arches", required=True,
+        help="CSV of user-facing arch names (arm64, amd64).")
+
+    p_rft = sub.add_parser("resolve-for-target",
+        help="Resolve effective containers for one (family, arch) call.")
+    p_rft.add_argument("--containers", default="")
+    p_rft.add_argument("--target-family", required=True)
+    p_rft.add_argument("--target-arch", default="",
+        help="Empty string = no arch filter.")
+
+    sub.add_parser("list-containers",
+        help="Print the catalog as a human-readable table.")
+
+    args = parser.parse_args(argv)
+
+    try:
+        catalog = load_catalog(args.catalog)
+    except ResolverError as e:
+        sys.stderr.write(f"[container-override] ERROR: {e}\n")
+        return 2
+
+    env_override = os.environ.get("PEP_CONTAINERS")
+
+    if args.command == "validate-global":
+        try:
+            resolved, source = validate_global(
+                catalog, args.containers or None, env_override,
+                _csv_to_set(args.scope_families), _csv_to_set(args.scope_arches),
+            )
+        except ResolverError as e:
+            sys.stderr.write(f"[container-override] ERROR: {e}\n")
+            return 2
+        # On the default path emit NO override-related stderr lines, so logs
+        # are byte-identical to pre-v2.2 for runs that don't use the feature.
+        # Only chatter when the user actually supplied an override.
+        if source != "default":
+            sys.stderr.write(f"[container-override] source={source}\n")
+            sys.stderr.write(
+                f"[container-override] requested: {', '.join(resolved)}\n"
+            )
+        print(",".join(resolved))
+        return 0
+
+    if args.command == "resolve-for-target":
+        target_arch = args.target_arch or None
+        try:
+            effective, oos, source = resolve_for_target(
+                catalog, args.containers or None, env_override,
+                args.target_family, target_arch,
+            )
+        except ResolverError as e:
+            sys.stderr.write(f"[container-override] ERROR: {e}\n")
+            return 2
+        # Suppress [container-override] log noise on the default path so
+        # non-override runs see the same logs as pre-v2.2. The [container-
+        # resolution] line is emitted by the shell caller and is unchanged.
+        if source != "default":
+            target_label = f"{args.target_family}/{target_arch or 'any-arch'}"
+            by_name = {e.name: e for e in catalog.entries}
+            for c in oos:
+                entry = by_name[c]
+                sys.stderr.write(
+                    f"[container-override] out-of-scope for this target: "
+                    f"{c} ({entry.family}/{entry.arch}; current target {target_label})\n"
+                )
+            sys.stderr.write(
+                f"[container-override] effective for target {target_label}: "
+                f"{', '.join(effective) if effective else '(none)'}\n"
+            )
+        print(",".join(effective))
+        return 0
+
+    if args.command == "list-containers":
+        print(list_containers(catalog))
+        return 0
+
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

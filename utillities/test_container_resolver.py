@@ -380,3 +380,19 @@ def test_resolve_for_target_override_can_select_disabled_container(tmp_path):
     )
     assert effective == ["auto-alma9-amd"]
     assert source == "cli"
+
+
+def test_list_containers_table_includes_required_columns(tmp_path):
+    p = _minimal_valid_catalog(tmp_path)
+    catalog = cr.load_catalog(p)
+    table = cr.list_containers(catalog)
+    # Header presence
+    for col in ("ALIAS", "CANONICAL NAME", "FAMILY", "ARCH", "ENABLED", "DESCRIPTION"):
+        assert col in table
+    # Each entry's alias + canonical appears
+    assert "rocky9-arm64" in table
+    assert "auto-rocky9-arm" in table
+    # Family is user-facing (rpm/deb, not rhel)
+    assert "rpm" in table
+    assert "deb" in table
+    assert "rhel" not in table

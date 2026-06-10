@@ -259,3 +259,19 @@ def resolve_for_target(catalog, raw_override, env_override, target_family, targe
         else:
             per_target_out_of_scope.append(c)
     return effective, per_target_out_of_scope, source
+
+
+def list_containers(catalog):
+    """Return a printable text table for --list-containers."""
+    header = (
+        f"{'ALIAS':<20} {'CANONICAL NAME':<23} {'FAMILY':<7} "
+        f"{'ARCH':<7} {'ENABLED':<8} DESCRIPTION"
+    )
+    lines = [header]
+    for e in catalog.entries:
+        enabled_str = "true" if e.enabled else "false"
+        lines.append(
+            f"{e.alias:<20} {e.name:<23} {e.family:<7} "
+            f"{e.arch:<7} {enabled_str:<8} {e.description}"
+        )
+    return "\n".join(lines)

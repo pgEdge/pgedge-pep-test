@@ -357,6 +357,35 @@ run_pytest_with_tracking() {
   echo "      - Consolidated: ${consolidated_html_report}"
 }
 
+# v2.2: Once-per-invocation override validation. Runs before the per-env
+# loop because the override and the user's --platforms/--arch scope don't
+# change between envs — there's no value in re-validating per env, and the
+# resolver's stderr (source/requested lines) would otherwise duplicate.
+#
+# Skipped for --target aws (the override is docker-only; the aws+override
+# fail-fast above already handled the misuse case). For docker, this runs
+# whether or not the user supplied an override: the resolver's default path
+# is a no-op (no chatter, no failure) so it's cheap.
+if [[ "$TARGET" == "docker" ]]; then
+  # Scope strings in user-facing names (rpm/deb, arm64/amd64). platform_list
+  # uses uppercase RPM/DEB; lowercase + comma-join for the resolver.
+  _scope_families="$(echo "${platform_list[*]}" | tr '[:upper:]' '[:lower:]' | tr ' ' ',')"
+  if [[ -z "$_scope_families" || "$_scope_families" == "all" ]]; then
+    _scope_families="rpm,deb"
+  fi
+  _scope_arches="${ARCH:-arm64,amd64}"
+  [[ "$_scope_arches" == "all" ]] && _scope_arches="arm64,amd64"
+
+  if ! python3 utillities/container_resolver.py validate-global \
+        --containers "$CONTAINERS_OVERRIDE" \
+        --scope-families "$_scope_families" \
+        --scope-arches "$_scope_arches" >/dev/null; then
+    echo "[container-override] ERROR: validate-global failed (see message above)" >&2
+    exit 2
+  fi
+  unset _scope_families _scope_arches
+fi
+
 # Run tests for each combination
 for env in "${env_list[@]}"; do
   envfile="${ENV_DIR}/config${env}.env"
@@ -412,33 +441,6 @@ except Exception as e:
     echo "   🌐 AWS mode: CONTAINERS=${CONTAINERS}  DEB_CONTAINERS=${DEB_CONTAINERS}"
     unset _loaded_containers _loaded_deb_containers
   else
-    # ── Docker mode (default) ────────────────────────────────────────────────
-    # Docker mode only: run the resolver's global validation once. CI's plan job
-    # already does this for workflow_dispatch runs; this call covers local
-    # invocations (and any future direct script invocation outside the workflow).
-    #
-    # NOTE (v2.2 sub-checkpoint B-flags): the call below only validates the
-    # override (rejecting unknown names, global-zero scopes, etc.). The actual
-    # per-target container selection is still driven by the existing
-    # containers_list.json heredocs below; replacing those is B5/B6.
-    if [[ "$TARGET" == "docker" ]]; then
-      # Build scope strings in user-facing names (rpm/deb, arm64/amd64).
-      _scope_families="$(echo "${platform_list[*]}" | tr '[:upper:]' '[:lower:]' | tr ' ' ',')"
-      if [[ -z "$_scope_families" || "$_scope_families" == "all" ]]; then
-        _scope_families="rpm,deb"
-      fi
-      _scope_arches="${ARCH:-arm64,amd64}"
-      [[ "$_scope_arches" == "all" ]] && _scope_arches="arm64,amd64"
-
-      if ! python3 utillities/container_resolver.py validate-global \
-            --containers "$CONTAINERS_OVERRIDE" \
-            --scope-families "$_scope_families" \
-            --scope-arches "$_scope_arches" >/dev/null; then
-        echo "[container-override] ERROR: validate-global failed (see message above)" >&2
-        exit 2
-      fi
-    fi
-
     # Load containers from containers_list.json (overrides empty CONTAINERS/DEB_CONTAINERS from env file)
     CONTAINERS_JSON="${ENV_DIR}/containers_list.json"
     if [[ -f "$CONTAINERS_JSON" ]]; then

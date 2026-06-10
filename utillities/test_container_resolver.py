@@ -311,3 +311,72 @@ def test_validate_global_partial_match_ok(tmp_path):
     # But in_scope_anywhere is true (rocky9 matches), so validate_global passes.
     assert source == "cli"
     assert set(resolved) == {"auto-rocky9-arm", "auto-debian12-arm"}
+
+
+def test_resolve_for_target_concrete_arch_filters_out_other_family(tmp_path):
+    p = _minimal_valid_catalog(tmp_path)
+    catalog = cr.load_catalog(p)
+    effective, oos, source = cr.resolve_for_target(
+        catalog, "rocky9-arm64, debian12-arm64", None,
+        target_family="rpm", target_arch="arm64",
+    )
+    assert effective == ["auto-rocky9-arm"]
+    assert oos == ["auto-debian12-arm"]
+    assert source == "cli"
+
+
+def test_resolve_for_target_concrete_arch_filters_out_other_arch(tmp_path):
+    p = _minimal_valid_catalog(tmp_path)
+    catalog = cr.load_catalog(p)
+    effective, oos, source = cr.resolve_for_target(
+        catalog, "debian12-arm64, debian13-amd64", None,
+        target_family="deb", target_arch="arm64",
+    )
+    assert effective == ["auto-debian12-arm"]
+    assert oos == ["auto-debian13-amd"]
+    assert source == "cli"
+
+
+def test_resolve_for_target_no_arch_filter_returns_both_arches(tmp_path):
+    """target_arch=None means 'no arch filter' — both arm64 and amd64
+    entries of the target family must land in `effective`."""
+    p = _minimal_valid_catalog(tmp_path)
+    catalog = cr.load_catalog(p)
+    effective, oos, source = cr.resolve_for_target(
+        catalog, "debian12-arm64, debian13-amd64", None,
+        target_family="deb", target_arch=None,
+    )
+    assert set(effective) == {"auto-debian12-arm", "auto-debian13-amd"}
+    assert oos == []
+    assert source == "cli"
+
+
+def test_resolve_for_target_default_path_uses_enabled_subset(tmp_path):
+    p = _minimal_valid_catalog(tmp_path)
+    catalog = cr.load_catalog(p)
+    effective, oos, source = cr.resolve_for_target(
+        catalog, None, None,
+        target_family="rpm", target_arch="arm64",
+    )
+    # Default catalog: rocky9-arm enabled:true, alma9-amd enabled:false.
+    # Target rpm/arm64 → only rocky9.
+    assert effective == ["auto-rocky9-arm"]
+    assert source == "default"
+    # On default path, deb-family enabled entries also get filtered out per
+    # target — but the resolver's job is to filter, not to label them as
+    # "out-of-scope overrides". oos is therefore populated; callers should
+    # treat it as informational only on the default path (the CLI dispatcher
+    # suppresses the per-entry out-of-scope log on default path).
+    assert "auto-debian12-arm" in oos
+
+
+def test_resolve_for_target_override_can_select_disabled_container(tmp_path):
+    """An explicit override may select a container with enabled:false."""
+    p = _minimal_valid_catalog(tmp_path)
+    catalog = cr.load_catalog(p)
+    effective, oos, source = cr.resolve_for_target(
+        catalog, "alma9-amd64", None,                # enabled:false
+        target_family="rpm", target_arch="amd64",
+    )
+    assert effective == ["auto-alma9-amd"]
+    assert source == "cli"

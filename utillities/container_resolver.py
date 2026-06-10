@@ -226,3 +226,36 @@ def validate_global(catalog, raw_override, env_override, scope_families, scope_a
             f"Either expand the scope, or pick containers that match it."
         )
     return resolved, source
+
+
+def resolve_for_target(catalog, raw_override, env_override, target_family, target_arch):
+    """Per-(family, arch) filter on top of the resolved override.
+
+    target_arch may be None ('no arch filter' — accepts both arches of the
+    target_family). This matches pre-v2.2 local behavior when --arch is omitted.
+
+    Returns: (effective, per_target_out_of_scope, source) where source is
+    'cli', 'env', or 'default'. The source label lets the CLI dispatcher
+    decide whether to emit override-related log lines (suppressed on default
+    path so logs stay byte-identical to pre-v2.2 for non-override runs).
+
+    Re-parses the override defensively in case this function is called
+    without validate_global (e.g. by a future code path). Catalog errors
+    surface here too.
+    """
+    resolved, source = _resolve_override_tokens(catalog, raw_override, env_override)
+    if source == "default":
+        resolved = [e.name for e in catalog.entries if e.enabled]
+
+    by_name = {e.name: e for e in catalog.entries}
+    effective = []
+    per_target_out_of_scope = []
+    for c in resolved:
+        entry = by_name[c]
+        family_matches = (entry.family == target_family)
+        arch_matches = (target_arch is None) or (entry.arch == target_arch)
+        if family_matches and arch_matches:
+            effective.append(c)
+        else:
+            per_target_out_of_scope.append(c)
+    return effective, per_target_out_of_scope, source

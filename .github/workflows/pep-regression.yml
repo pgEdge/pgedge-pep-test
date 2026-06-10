@@ -236,15 +236,31 @@ jobs:
         env:
           IN_COMPONENTS: ${{ needs.plan.outputs.components }}
           IN_REPO:       ${{ inputs.repo       || 'release' }}
+          CONTAINERS_OVERRIDE_INPUT: ${{ inputs.containers }}
+          # Block any inherited env from leaking when the workflow input is empty.
+          # In CI the `containers` workflow input is the single source of truth.
+          PEP_CONTAINERS: ''
         run: |
           set -o pipefail
           mkdir -p test-logs
-          CMD="./run_pep_tf.sh --pgver ${{ matrix.pg }} --platforms ${{ matrix.family }} --arch ${{ matrix.arch }} --components $IN_COMPONENTS --repo $IN_REPO --dry-run"
+          # Build the framework invocation as an array so each token (including
+          # the possibly-empty --containers value) is preserved exactly.
+          CMD=(
+            ./run_pep_tf.sh
+            --pgver "${{ matrix.pg }}"
+            --platforms "${{ matrix.family }}"
+            --arch "${{ matrix.arch }}"
+            --components "$IN_COMPONENTS"
+            --repo "$IN_REPO"
+            --containers "$CONTAINERS_OVERRIDE_INPUT"
+            --dry-run
+          )
           # Capture the constructed CLI to a file so the exact invocation is in
           # the artifact, not only in the GH Actions step log.
-          echo "$CMD" | tee test-logs/framework-command.txt
-          echo "[framework-command] $CMD"
-          $CMD 2>&1 | tee test-logs/dry-run-output.txt
+          printf '%q ' "${CMD[@]}" | tee test-logs/framework-command.txt
+          echo                       | tee -a test-logs/framework-command.txt
+          echo "[framework-command] ${CMD[*]}"
+          "${CMD[@]}" 2>&1 | tee test-logs/dry-run-output.txt
 
       - name: '[framework-command] Full (real framework execution)'
         if: ${{ inputs.execution_mode == 'full' }}
@@ -252,15 +268,30 @@ jobs:
         env:
           IN_COMPONENTS: ${{ needs.plan.outputs.components }}
           IN_REPO:       ${{ inputs.repo       || 'release' }}
+          CONTAINERS_OVERRIDE_INPUT: ${{ inputs.containers }}
+          # Block any inherited env from leaking when the workflow input is empty.
+          # In CI the `containers` workflow input is the single source of truth.
+          PEP_CONTAINERS: ''
         run: |
           set -o pipefail
           mkdir -p test-logs
-          CMD="./run_pep_tf.sh --pgver ${{ matrix.pg }} --platforms ${{ matrix.family }} --arch ${{ matrix.arch }} --components $IN_COMPONENTS --repo $IN_REPO"
+          # Build the framework invocation as an array so each token (including
+          # the possibly-empty --containers value) is preserved exactly.
+          CMD=(
+            ./run_pep_tf.sh
+            --pgver "${{ matrix.pg }}"
+            --platforms "${{ matrix.family }}"
+            --arch "${{ matrix.arch }}"
+            --components "$IN_COMPONENTS"
+            --repo "$IN_REPO"
+            --containers "$CONTAINERS_OVERRIDE_INPUT"
+          )
           # Capture the constructed CLI to a file so the exact invocation is in
           # the artifact, not only in the GH Actions step log.
-          echo "$CMD" | tee test-logs/framework-command.txt
-          echo "[framework-command] $CMD"
-          $CMD
+          printf '%q ' "${CMD[@]}" | tee test-logs/framework-command.txt
+          echo                       | tee -a test-logs/framework-command.txt
+          echo "[framework-command] ${CMD[*]}"
+          "${CMD[@]}"
 
       - name: '[summary] Write workflow summary artifact'
         if: always()
@@ -273,6 +304,10 @@ jobs:
           IN_EXEC_MODE:  ${{ inputs.execution_mode || 'preview' }}
           IN_COMPONENTS: ${{ needs.plan.outputs.components }}
           IN_REPO:       ${{ inputs.repo           || 'release' }}
+          CONTAINERS_OVERRIDE_INPUT: ${{ inputs.containers }}
+          # Block any inherited env from leaking when the workflow input is empty.
+          # In CI the `containers` workflow input is the single source of truth.
+          PEP_CONTAINERS: ''
         run: |
           mkdir -p test-logs
           {
@@ -295,6 +330,7 @@ jobs:
             echo "[workflow-summary] arch=$MATRIX_ARCH"
             echo "[workflow-summary] repo=$IN_REPO"
             echo "[workflow-summary] components=$IN_COMPONENTS"
+            echo "[workflow-summary] containers=${{ inputs.containers }}"
             echo "[workflow-summary] python=$(python3 --version 2>&1)"
             echo "[workflow-summary] docker=$(docker --version 2>&1 || echo 'not available')"
             echo "[workflow-summary] ------------------------------------------------------------"

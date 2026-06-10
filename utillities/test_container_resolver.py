@@ -9,11 +9,17 @@ import pytest
 # `pytest utillities/test_container_resolver.py` invocations (the repo has
 # no pytest config / __init__.py in utillities/, and v2.1's
 # test_ci_consolidated_report.py uses the same pattern).
+#
+# The module is registered in sys.modules before exec_module so dataclass
+# forward-ref resolution (which uses cls.__module__) works under Python's
+# `from __future__ import annotations` semantics.
+import sys
 _spec = importlib.util.spec_from_file_location(
     "container_resolver",
     str(Path(__file__).parent / "container_resolver.py"),
 )
 cr = importlib.util.module_from_spec(_spec)
+sys.modules["container_resolver"] = cr
 _spec.loader.exec_module(cr)
 
 

@@ -1,10 +1,20 @@
 """Unit tests for utillities.container_resolver — synthetic-catalog only."""
+import importlib.util
 import json
 from pathlib import Path
 
 import pytest
 
-import utillities.container_resolver as cr
+# Load the module under test by path so this test file works under bare
+# `pytest utillities/test_container_resolver.py` invocations (the repo has
+# no pytest config / __init__.py in utillities/, and v2.1's
+# test_ci_consolidated_report.py uses the same pattern).
+_spec = importlib.util.spec_from_file_location(
+    "container_resolver",
+    str(Path(__file__).parent / "container_resolver.py"),
+)
+cr = importlib.util.module_from_spec(_spec)
+_spec.loader.exec_module(cr)
 
 
 def _write_catalog(tmp_path, rhel=None, deb=None):

@@ -11,6 +11,7 @@ See docs/superpowers/specs/2026-06-04-v2.2-container-target-override-design.md
 from __future__ import annotations
 
 import json
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -127,3 +128,67 @@ def _validate_uniqueness(entries):
             raise ResolverError(
                 f"alias {e.alias!r} collides with name of another entry"
             )
+
+
+def _parse_override(raw):
+    """Split-and-trim a raw override string. Returns list[str] of >=1 token,
+    or None if raw is None/whitespace. Raises ResolverError if raw is non-empty
+    but parses to zero entries (e.g. ',' or ', ,')."""
+    if raw is None:
+        return None
+    stripped = raw.strip()
+    if not stripped:
+        return None
+    tokens = [t.strip() for t in stripped.split(",")]
+    tokens = [t for t in tokens if t]
+    if not tokens:
+        raise ResolverError(
+            f"override value {raw!r} has no valid entries"
+        )
+    return tokens
+
+
+def _resolve_override_tokens(catalog, raw_override, env_override):
+    """Apply the preference hierarchy and resolve tokens to canonical names.
+
+    Returns: (canonical_names: list[str], source: 'cli'|'env'|'default').
+    Default-path returns ([], 'default'); callers materialize the enabled
+    subset themselves.
+    """
+    tokens = _parse_override(raw_override)
+    source = "cli" if tokens is not None else None
+    if tokens is None:
+        tokens = _parse_override(env_override)
+        if tokens is not None:
+            source = "env"
+    if tokens is None:
+        return [], "default"
+
+    # 'all' handling
+    if any(t.lower() == "all" for t in tokens):
+        if len(tokens) > 1:
+            raise ResolverError(
+                f"'all' must be the only token in --containers; "
+                f"mix not supported (got: {', '.join(tokens)})"
+            )
+        return [e.name for e in catalog.entries], source
+
+    canonical = []
+    seen = set()
+    for tok in tokens:
+        canon = catalog.lookup_index.get(tok.lower())
+        if canon is None:
+            valid_aliases = sorted({e.alias for e in catalog.entries})
+            valid_names = sorted({e.name for e in catalog.entries})
+            raise ResolverError(
+                f"Unknown container {tok!r}. "
+                f"Valid aliases: {valid_aliases}; valid names: {valid_names}"
+            )
+        if canon in seen:
+            sys.stderr.write(
+                f"[container-override] dedup'd {tok!r} (same as {canon!r})\n"
+            )
+            continue
+        seen.add(canon)
+        canonical.append(canon)
+    return canonical, source

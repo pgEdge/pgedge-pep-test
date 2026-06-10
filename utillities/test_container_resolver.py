@@ -159,3 +159,83 @@ def test_real_catalog_specific_aliases():
     assert by_name["auto-rocky9-arm"] == "rocky9-arm64"
     assert by_name["auto-debian13-amd"] == "debian13-amd64"
     assert by_name["auto-ubuntu2404-arm"] == "ubuntu2404-arm64"
+
+
+def test_override_default_path_returns_enabled_subset(tmp_path, capsys):
+    p = _minimal_valid_catalog(tmp_path)
+    catalog = cr.load_catalog(p)
+    canonical, source = cr._resolve_override_tokens(catalog, None, None)
+    assert source == "default"
+    # Default path returns [] here; the enabled subset is materialized by callers.
+    assert canonical == []
+
+
+def test_override_cli_beats_env(tmp_path):
+    p = _minimal_valid_catalog(tmp_path)
+    catalog = cr.load_catalog(p)
+    canonical, source = cr._resolve_override_tokens(
+        catalog, "rocky9-arm64", "alma9-amd64"
+    )
+    assert source == "cli"
+    assert canonical == ["auto-rocky9-arm"]
+
+
+def test_override_env_used_when_cli_absent(tmp_path):
+    p = _minimal_valid_catalog(tmp_path)
+    catalog = cr.load_catalog(p)
+    canonical, source = cr._resolve_override_tokens(catalog, None, "rocky9-arm64")
+    assert source == "env"
+    assert canonical == ["auto-rocky9-arm"]
+
+
+def test_override_cli_whitespace_falls_through_to_env(tmp_path):
+    p = _minimal_valid_catalog(tmp_path)
+    catalog = cr.load_catalog(p)
+    canonical, source = cr._resolve_override_tokens(
+        catalog, "   ", "rocky9-arm64"
+    )
+    assert source == "env"
+
+
+def test_override_comma_only_fails(tmp_path):
+    p = _minimal_valid_catalog(tmp_path)
+    catalog = cr.load_catalog(p)
+    with pytest.raises(cr.ResolverError, match="no valid entries"):
+        cr._resolve_override_tokens(catalog, ", ,", None)
+
+
+def test_override_unknown_token_fails(tmp_path):
+    p = _minimal_valid_catalog(tmp_path)
+    catalog = cr.load_catalog(p)
+    with pytest.raises(cr.ResolverError, match="Unknown container 'foo'"):
+        cr._resolve_override_tokens(catalog, "foo", None)
+
+
+def test_override_all_token_returns_full_catalog(tmp_path):
+    p = _minimal_valid_catalog(tmp_path)
+    catalog = cr.load_catalog(p)
+    canonical, source = cr._resolve_override_tokens(catalog, "all", None)
+    assert source == "cli"
+    # All 4 entries from the fixture, including the enabled:false ones.
+    assert set(canonical) == {
+        "auto-rocky9-arm", "auto-alma9-amd",
+        "auto-debian12-arm", "auto-debian13-amd",
+    }
+
+
+def test_override_all_must_be_sole_token(tmp_path):
+    p = _minimal_valid_catalog(tmp_path)
+    catalog = cr.load_catalog(p)
+    with pytest.raises(cr.ResolverError, match="'all' must be the only token"):
+        cr._resolve_override_tokens(catalog, "all, rocky9-arm64", None)
+
+
+def test_override_dedup_alias_and_canonical(tmp_path, capsys):
+    p = _minimal_valid_catalog(tmp_path)
+    catalog = cr.load_catalog(p)
+    canonical, source = cr._resolve_override_tokens(
+        catalog, "rocky9-arm64, auto-rocky9-arm", None
+    )
+    assert canonical == ["auto-rocky9-arm"]
+    err = capsys.readouterr().err
+    assert "dedup'd" in err

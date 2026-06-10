@@ -445,54 +445,75 @@ except Exception as e:
     CONTAINERS_JSON="${ENV_DIR}/containers_list.json"
     if [[ -f "$CONTAINERS_JSON" ]]; then
       _arch_filter="${PEP_ARCH_FILTER:-}"
-      # Lowercased platform list so the inline Python can decide whether to print
-      # [container-resolution] for a given family. Both loaders still run so that
-      # CONTAINERS/DEB_CONTAINERS env vars are always populated, but the
-      # informational line is suppressed for families not in --platforms scope.
       _platforms_for_resolution="$(echo "${platform_list[*]}" | tr '[:upper:]' '[:lower:]')"
-      _loaded_containers=$(PEP_ARCH_FILTER="$_arch_filter" PEP_PLATFORM_SCOPE="$_platforms_for_resolution" python3 -c "
-import json, os, sys
-arch = os.environ.get('PEP_ARCH_FILTER', '').strip()
-suffix = '-arm' if arch == 'arm64' else ('-amd' if arch == 'amd64' else '')
-plats = os.environ.get('PEP_PLATFORM_SCOPE', '').lower().split()
-in_scope = (not plats) or ('rpm' in plats) or ('all' in plats)
-try:
-    d = json.load(open('$CONTAINERS_JSON'))
-    enabled = [c for c in d.get('rhel', []) if c.get('enabled')]
-    if suffix:
-        enabled = [c for c in enabled if suffix in c['name']]
-    names = [c['name'] for c in enabled]
-    arch_label = arch if arch else '<none>'
-    if in_scope:
-        sys.stderr.write(f\"[container-resolution] platforms=rpm arch={arch_label} -> {len(names)} container(s): {', '.join(names) if names else '(none)'}\n\")
-    print(','.join(names))
-except Exception as e:
-    sys.stderr.write(f'[container-resolution] ERROR: failed to parse containers_list.json: {e}\n')
-    print('')
-")
-      _loaded_deb_containers=$(PEP_ARCH_FILTER="$_arch_filter" PEP_PLATFORM_SCOPE="$_platforms_for_resolution" python3 -c "
-import json, os, sys
-arch = os.environ.get('PEP_ARCH_FILTER', '').strip()
-suffix = '-arm' if arch == 'arm64' else ('-amd' if arch == 'amd64' else '')
-plats = os.environ.get('PEP_PLATFORM_SCOPE', '').lower().split()
-in_scope = (not plats) or ('deb' in plats) or ('all' in plats)
-try:
-    d = json.load(open('$CONTAINERS_JSON'))
-    enabled = [c for c in d.get('deb', []) if c.get('enabled')]
-    if suffix:
-        enabled = [c for c in enabled if suffix in c['name']]
-    names = [c['name'] for c in enabled]
-    arch_label = arch if arch else '<none>'
-    if in_scope:
-        sys.stderr.write(f\"[container-resolution] platforms=deb arch={arch_label} -> {len(names)} container(s): {', '.join(names) if names else '(none)'}\n\")
-    print(','.join(names))
-except Exception as e:
-    sys.stderr.write(f'[container-resolution] ERROR: failed to parse containers_list.json: {e}\n')
-    print('')
-")
+
+      # Whether each family is in the user-selected --platforms scope. Used
+      # below to suppress the legacy [container-resolution] log AND the
+      # resolver's [container-override] chatter for out-of-scope families,
+      # matching pre-v2.2 logging behavior.
+      _rpm_in_scope=false
+      _deb_in_scope=false
+      [[ " ${_platforms_for_resolution} " == *" rpm "* || " ${_platforms_for_resolution} " == *" all "* ]] && _rpm_in_scope=true
+      [[ " ${_platforms_for_resolution} " == *" deb "* || " ${_platforms_for_resolution} " == *" all "* ]] && _deb_in_scope=true
+
+      _arch_label="${_arch_filter:-<none>}"
+
+      # ── rpm-side resolution via container_resolver.py ─────────────────────
+      _rpm_err=$(mktemp)
+      _loaded_containers=$(python3 utillities/container_resolver.py resolve-for-target \
+            --containers "$CONTAINERS_OVERRIDE" \
+            --target-family rpm \
+            --target-arch "$_arch_filter" 2>"$_rpm_err")
+      _rpm_exit=$?
+      if [[ $_rpm_exit -ne 0 ]]; then
+        cat "$_rpm_err" >&2
+        rm -f "$_rpm_err"
+        echo "[container-override] ERROR: rpm-side resolver failed (see above)" >&2
+        exit 2
+      fi
+      if [[ "$_rpm_in_scope" == "true" ]]; then
+        # Forward the resolver's [container-override] stderr (already empty on
+        # default path; populated only on override path).
+        cat "$_rpm_err" >&2
+        # Emit the legacy [container-resolution] line in its original shape.
+        if [[ -n "$_loaded_containers" ]]; then
+          _rpm_count=$(echo "$_loaded_containers" | awk -F',' '{print NF}')
+          echo "[container-resolution] platforms=rpm arch=$_arch_label -> $_rpm_count container(s): ${_loaded_containers//,/, }" >&2
+        else
+          echo "[container-resolution] platforms=rpm arch=$_arch_label -> 0 container(s): (none)" >&2
+        fi
+      fi
+      rm -f "$_rpm_err"
+
+      # ── deb-side resolution (symmetric) ─────────────────────────────────
+      _deb_err=$(mktemp)
+      _loaded_deb_containers=$(python3 utillities/container_resolver.py resolve-for-target \
+            --containers "$CONTAINERS_OVERRIDE" \
+            --target-family deb \
+            --target-arch "$_arch_filter" 2>"$_deb_err")
+      _deb_exit=$?
+      if [[ $_deb_exit -ne 0 ]]; then
+        cat "$_deb_err" >&2
+        rm -f "$_deb_err"
+        echo "[container-override] ERROR: deb-side resolver failed (see above)" >&2
+        exit 2
+      fi
+      if [[ "$_deb_in_scope" == "true" ]]; then
+        cat "$_deb_err" >&2
+        if [[ -n "$_loaded_deb_containers" ]]; then
+          _deb_count=$(echo "$_loaded_deb_containers" | awk -F',' '{print NF}')
+          echo "[container-resolution] platforms=deb arch=$_arch_label -> $_deb_count container(s): ${_loaded_deb_containers//,/, }" >&2
+        else
+          echo "[container-resolution] platforms=deb arch=$_arch_label -> 0 container(s): (none)" >&2
+        fi
+      fi
+      rm -f "$_deb_err"
+
       [[ -n "$_loaded_containers" ]] && export CONTAINERS="$_loaded_containers"
       [[ -n "$_loaded_deb_containers" ]] && export DEB_CONTAINERS="$_loaded_deb_containers"
-      unset _loaded_containers _loaded_deb_containers _arch_filter _platforms_for_resolution
+      unset _loaded_containers _loaded_deb_containers _arch_filter \
+            _platforms_for_resolution _arch_label _rpm_in_scope _deb_in_scope \
+            _rpm_count _deb_count _rpm_exit _deb_exit
     fi
     export AWS_MODE=false
   fi

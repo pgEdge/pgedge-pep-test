@@ -420,6 +420,45 @@ jobs:
           # pull artifacts from a prior attempt of the same run.
           pattern: test-logs-r${{ github.run_number }}-a${{ github.run_attempt }}-*
 
+      - name: '[aggregate] Normalize layout (handle single-target flattening)'
+        shell: bash
+        run: |
+          # actions/download-artifact@v7 with `pattern:` flattens the
+          # contents to the root of `path:` when only ONE artifact matches
+          # (i.e. single-target matrices like --pgver 17 --platforms rpm
+          # --arch arm64). Multi-target matches each get their own
+          # test-logs-r{N}-a{M}-pg{P}-{family}-{arch}/ subdir.
+          #
+          # The consolidated report generator expects per-target subdirs
+          # uniformly, so recreate the missing subdir from workflow-
+          # summary.txt metadata when needed.
+          if ! ls aggregated/test-logs-*/ >/dev/null 2>&1; then
+            summary=$(find aggregated -maxdepth 2 -type f -name workflow-summary.txt | head -1)
+            if [[ -n "$summary" ]]; then
+              pg=$(grep '^\[workflow-summary\] pg='     "$summary" | head -1 | sed 's/.*=//')
+              family=$(grep '^\[workflow-summary\] family=' "$summary" | head -1 | sed 's/.*=//')
+              arch=$(grep '^\[workflow-summary\] arch='   "$summary" | head -1 | sed 's/.*=//')
+              if [[ -n "$pg" && -n "$family" && -n "$arch" ]]; then
+                subdir="aggregated/test-logs-r${{ github.run_number }}-a${{ github.run_attempt }}-pg${pg}-${family}-${arch}"
+                mkdir -p "$subdir"
+                shopt -s dotglob
+                for item in aggregated/*; do
+                  base=$(basename "$item")
+                  [[ "$base" == "test-logs-"* ]] && continue
+                  mv "$item" "$subdir/"
+                done
+                shopt -u dotglob
+                echo "[aggregate] normalized single-target flat layout into $subdir"
+              else
+                echo "[aggregate] WARN: could not parse pg/family/arch from workflow-summary.txt; layout not normalized"
+              fi
+            else
+              echo "[aggregate] no workflow-summary.txt found; layout normalization skipped (likely preview-mode or zero-target run)"
+            fi
+          else
+            echo "[aggregate] multi-target subdirs already present; no normalization needed"
+          fi
+
       - name: '[aggregate] List what we got'
         shell: bash
         run: |

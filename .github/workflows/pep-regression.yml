@@ -467,19 +467,45 @@ jobs:
           echo "[aggregate] workflow-summary.txt files found:"
           find aggregated -maxdepth 3 -type f -name workflow-summary.txt | wc -l
 
-      - name: '[aggregate] Build cross-slice consolidated report'
+      - name: '[aggregate] Build cross-target consolidated report'
         if: always()
         shell: bash
         run: |
-          if ls aggregated/test-logs-*/ >/dev/null 2>&1 && \
-             find aggregated -name 'report-*.xml' -not -path '*/consolidated-*/*' | grep -q .; then
-            python3 utillities/ci_consolidated_report.py \
-              --input-dir aggregated \
-              --output aggregated/consolidated-report.html
-          else
-            # Preview-mode (or no-XML) runs: write a small placeholder so the
-            # artifact always contains the file, and the step never fails.
-            mkdir -p aggregated
+          mkdir -p aggregated
+
+          # Always invoke the generator. It tolerates an empty input dir
+          # (writes a zero-row report). Decide afterwards whether the
+          # generated output looks empty enough that the friendly
+          # placeholder is more useful for triage.
+          #
+          # The previous structure was an `if ls test-logs-*/ && find ... |
+          # grep -q .; then GEN else PLACEHOLDER` gate, which (run #50)
+          # fell through to the placeholder branch even when XMLs were
+          # present in the artifact — root cause not pinned down without
+          # the runner-side log. The simpler unconditional-invocation
+          # structure here removes that whole class of failures.
+          set +e
+          gen_out=$(python3 utillities/ci_consolidated_report.py \
+                      --input-dir aggregated \
+                      --output aggregated/consolidated-report.html 2>&1)
+          gen_rc=$?
+          set -e
+          echo "$gen_out"
+
+          # Decide whether to overwrite with the placeholder.
+          write_placeholder=false
+          if [[ $gen_rc -ne 0 ]]; then
+            echo "[aggregate] generator exited $gen_rc; falling back to placeholder"
+            write_placeholder=true
+          elif grep -qE 'rows=0( |$)' <<<"$gen_out"; then
+            echo "[aggregate] generator produced a zero-row report (no XMLs to summarize); writing placeholder"
+            write_placeholder=true
+          elif [[ ! -s aggregated/consolidated-report.html ]]; then
+            echo "[aggregate] generator did not write a non-empty output file; writing placeholder"
+            write_placeholder=true
+          fi
+
+          if [[ "$write_placeholder" == "true" ]]; then
             cat > aggregated/consolidated-report.html <<'HTML'
           <!DOCTYPE html><html><head><meta charset="utf-8"/>
           <title>PEP Regression Consolidated Report</title></head><body>
@@ -502,7 +528,8 @@ jobs:
           reports may still be present.</p>
           </body></html>
           HTML
-            echo "[aggregate] no report XMLs found — wrote placeholder"
+          else
+            echo "[aggregate] real consolidated report generated; not overwriting"
           fi
 
       - name: '[aggregate] Upload consolidated archive'

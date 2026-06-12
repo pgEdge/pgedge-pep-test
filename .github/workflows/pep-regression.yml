@@ -482,15 +482,27 @@ jobs:
             mkdir -p aggregated
             cat > aggregated/consolidated-report.html <<'HTML'
           <!DOCTYPE html><html><head><meta charset="utf-8"/>
-          <title>Cross-Slice Consolidated Report</title></head><body>
-          <h1>Cross-Slice Consolidated Report</h1>
-          <p>No test report XMLs were produced by this run. This is expected for
-          preview-mode runs (execution_mode=preview), which run --help + --dry-run
-          only and do not execute pytest. Trigger with execution_mode=full to
-          produce test results.</p>
+          <title>PEP Regression Consolidated Report</title></head><body>
+          <h1>PEP Regression Consolidated Report</h1>
+          <p>No test report XMLs were found in the aggregated per-target artifacts.
+          Common reasons:</p>
+          <ul>
+            <li>The run was in <code>execution_mode=preview</code> (no pytest, no
+                XMLs are produced).</li>
+            <li>The run was in <code>execution_mode=full</code> but the test
+                targets failed before pytest produced any reports (e.g. Docker
+                pull failure, prerequisite install error).</li>
+            <li>All matrix targets resolved to zero containers (each cell would
+                surface as <em>NO CONTAINERS SELECTED</em> in the real report;
+                check workflow-summary.txt per target).</li>
+          </ul>
+          <p>If you triggered <code>execution_mode=full</code> and expected a real
+          report here, inspect the per-target <code>test-logs-r&lt;N&gt;-a&lt;M&gt;-&hellip;</code>
+          subdirectories in this archive — the framework's own per-component HTML/XML
+          reports may still be present.</p>
           </body></html>
           HTML
-            echo "[aggregate] no report XMLs found — wrote preview placeholder"
+            echo "[aggregate] no report XMLs found — wrote placeholder"
           fi
 
       - name: '[aggregate] Upload consolidated archive'

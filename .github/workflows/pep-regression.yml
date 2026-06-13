@@ -130,7 +130,7 @@ jobs:
           sys.stderr.write(
               f"[plan-job] inputs pg={pgs} fam={families} arch={arches} components={components}\n"
           )
-          sys.stderr.write(f"[plan-job] {len(slices)} slice(s): {json.dumps(payload)}\n")
+          sys.stderr.write(f"[plan-job] {len(slices)} matrix target(s): {json.dumps(payload)}\n")
           sys.stderr.write(f"[plan-job] components normalized: {components_normalized}\n")
           print(f"matrix={json.dumps(payload)}")
           print(f"components={components_normalized}")
@@ -174,9 +174,9 @@ jobs:
       fail-fast: false
       matrix: ${{ fromJson(needs.plan.outputs.matrix) }}
     steps:
-      - name: '[slice] Identity'
+      - name: '[target] Identity'
         run: |
-          echo "[slice] pg=${{ matrix.pg }} family=${{ matrix.family }} arch=${{ matrix.arch }} runner=${{ matrix.runner }}"
+          echo "[target] pg=${{ matrix.pg }} family=${{ matrix.family }} arch=${{ matrix.arch }} runner=${{ matrix.runner }}"
 
       - name: '[checkout] Source'
         uses: actions/checkout@v6
@@ -194,8 +194,8 @@ jobs:
 
       # Conditional Docker Hub auth.
       # Two gates, both must pass:
-      #   1. The slice is in full mode (no point logging in if no images will
-      #      be pulled).
+      #   1. The matrix target is in full mode (no point logging in if no
+      #      images will be pulled).
       #   2. Both DOCKERHUB_USERNAME and DOCKERHUB_TOKEN secrets are set.
       # We test secret presence by mapping them to env vars in a small bash
       # step (well-supported pattern) rather than referencing `secrets.X` in
@@ -397,8 +397,8 @@ jobs:
     permissions:
       contents: read
 
-  # Aggregates every per-slice artifact into a single consolidated archive so
-  # a tester can download all-slice results in one click. Per-slice artifacts
+  # Aggregates every per-target artifact into a single consolidated archive
+  # so a tester can download all results in one click. Per-target artifacts
   # are still available individually for targeted triage. Runs after the full
   # test matrix and tolerates partial failure (if: always()).
   aggregate:
@@ -411,7 +411,7 @@ jobs:
       - name: '[aggregate] Checkout (for the report generator script)'
         uses: actions/checkout@v6
 
-      - name: '[aggregate] Download all per-slice artifacts'
+      - name: '[aggregate] Download all per-target artifacts'
         uses: actions/download-artifact@v7
         with:
           path: aggregated/
@@ -462,7 +462,7 @@ jobs:
       - name: '[aggregate] List what we got'
         shell: bash
         run: |
-          echo "[aggregate] per-slice directories under aggregated/:"
+          echo "[aggregate] per-target directories under aggregated/:"
           find aggregated -mindepth 1 -maxdepth 1 -type d | sort | sed 's/^/  /'
           echo "[aggregate] workflow-summary.txt files found:"
           find aggregated -maxdepth 3 -type f -name workflow-summary.txt | wc -l

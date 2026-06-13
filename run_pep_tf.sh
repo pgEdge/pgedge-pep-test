@@ -106,7 +106,7 @@ OPTIONS:
   --arch <arch>           Filter enabled containers by architecture (default: no filter)
                           Values: arm64, amd64
                           Filters by container-name suffix: -arm or -amd
-                          Used by the GitHub Actions workflow to scope slices per arch.
+                          Used by the GitHub Actions workflow to scope matrix targets per arch.
 
   --dry-run               Resolve containers and print what would run, then exit
                           (no pytest, no Docker pulls, no package installs, no repo setup)
@@ -576,7 +576,7 @@ def infer(name):
         platform = '<unknown>'
     return image, platform
 if not selected:
-    print('[image-resolution] (no containers in scope for this slice)')
+    print('[image-resolution] (no containers in scope for this target)')
 for fam, name in selected:
     img, plat = infer(name)
     print(f'[image-resolution] family={fam} container={name} image={img} platform={plat}')

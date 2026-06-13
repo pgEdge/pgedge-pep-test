@@ -6,7 +6,8 @@ Owns:
 - Per-(family, arch) target filtering
 - The --list-containers display
 
-See docs/superpowers/specs/2026-06-04-v2.2-container-target-override-design.md
+User-facing docs: see the "Selecting container targets at runtime" section
+in docs/CI.md.
 """
 from __future__ import annotations
 

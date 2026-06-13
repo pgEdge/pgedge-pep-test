@@ -106,6 +106,11 @@ _check "all -> source=cli" 'container-override\] source=cli' "$OUT"
 # vary, but at minimum rpm and deb both have non-empty effective lines.
 _check "all -> rpm effective non-empty" 'effective for target rpm/.*: auto-' "$OUT"
 _check "all -> deb effective non-empty" 'effective for target deb/.*: auto-' "$OUT"
+if [[ $RC -eq 0 ]]; then
+  echo "  PASS  'all' shortcut exits 0"; PASS=$((PASS+1))
+else
+  echo "  FAIL  'all' shortcut exit code: $RC"; FAIL=$((FAIL+1))
+fi
 
 echo "=== Scenario 6b: 'all' includes enabled:false catalog entries (shell-layer proof) ==="
 # Specifically run rpm/amd64 + --containers all. The catalog currently has
@@ -120,11 +125,6 @@ if [[ $RC -eq 0 ]]; then
   echo "  PASS  rpm/amd64 + all exits 0"; PASS=$((PASS+1))
 else
   echo "  FAIL  rpm/amd64 + all exit code: $RC"; FAIL=$((FAIL+1))
-fi
-if [[ $RC -eq 0 ]]; then
-  echo "  PASS  'all' shortcut exits 0"; PASS=$((PASS+1))
-else
-  echo "  FAIL  'all' shortcut exit code: $RC"; FAIL=$((FAIL+1))
 fi
 
 echo "=== Scenario 7: unknown container -> exit 2 with helpful list ==="

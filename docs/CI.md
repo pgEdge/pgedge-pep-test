@@ -23,10 +23,11 @@ The workflow wraps the existing `run_pep_tf.sh` framework without changing its b
 | `components` | text | `all` | Components to test. `all` or CSV of names (e.g. `pgbouncer,server`). Same vocabulary as `run_pep_tf.sh --components`. Passed through to every matrix target. |
 | `repo` | choice | `release` | pgEdge repo channel. `release` / `staging` / `daily`. Passed through. |
 | `execution_mode` | choice | `preview` | `preview` = `--help` + `--dry-run` only (no Docker pulls, no pytest, ~seconds per matrix target). `full` = real framework execution. |
+| `containers` | text | *(empty)* | Custom container override (csv). Empty = use `containers_list.json` defaults. Special value `all` (sole token) = entire catalog, including `enabled: false`. Example: `'rocky9-arm64, ubuntu2404-arm64'`. Accepts both aliases and canonical names. See [Selecting container targets at runtime](#selecting-container-targets-at-runtime) for the full table and validation behavior. |
 
 The first three are cross-producted into a matrix. With all three at `all`, that's 3 × 2 × 2 = **12 matrix targets** running in parallel.
 
-The `components` input is validated in the plan job — invalid component names fail the plan job before any test matrix target spawns. Same for invalid `pg_versions`, `families`, `arches`.
+The `components` input is validated in the plan job — invalid component names fail the plan job before any test matrix target spawns. Same for invalid `pg_versions`, `families`, `arches`, and `containers` (global-zero, unknown names, etc.).
 
 ## Matrix shape
 
@@ -52,10 +53,16 @@ The matrix target's runner checks out the repo, sets up Python 3.11, installs `r
   --arch <A> \
   --components <CSV from inputs.components> \
   --repo <inputs.repo> \
-  [--dry-run]                  # only in preview mode
+  --containers <inputs.containers>   # empty = catalog defaults; otherwise a custom allow-list
+  [--dry-run]                        # only in preview mode
 ```
 
-The framework then iterates over every enabled container in `configuration/containers_list.json` that matches the matrix target's family+arch — exactly as `pytest` parametrizes locally. Multiple containers run sequentially **within** a single matrix target; matrix targets run in **parallel** across separate runner VMs.
+The framework then iterates over the containers selected for this matrix target's family+arch — exactly as `pytest` parametrizes locally. The selected set is either:
+
+- The catalog's `enabled: true` entries (the default behavior, used when `inputs.containers` is empty), or
+- The user's custom allow-list, filtered down to this matrix target's `(family, arch)` cell (when `inputs.containers` is non-empty — see [Selecting container targets at runtime](#selecting-container-targets-at-runtime)).
+
+Multiple containers run sequentially **within** a single matrix target; matrix targets run in **parallel** across separate runner VMs.
 
 ## Preview vs full mode
 
@@ -131,6 +138,90 @@ test outcomes. The cross-target report carries an explicit banner about this,
 shows real PASS/FAILED/SKIPPED counts per row, and includes a "Report Issues"
 count for matrix targets that produced no reports, unparseable reports, or zero test
 cases — so report-integrity problems are visible even when no test failed.
+
+## Selecting container targets at runtime
+
+By default, every matrix target uses the containers marked `enabled: true` in
+`configuration/containers_list.json`. To choose a custom set per run without
+editing the catalog file, use the `containers` workflow input (in CI) or the
+`--containers` flag (locally). The override is a **global allow-list**: each
+matrix target filters it down to that target's own `(family, arch)`.
+
+### Catalog aliases (user-facing names)
+
+Both the user-facing alias and the canonical name are accepted by the override.
+Aliases are shorter and match the workflow's `arches` vocabulary (`-arm64` /
+`-amd64`).
+
+| Alias              | Canonical name             | Family | Arch    | Enabled (default) | Description                |
+|---|---|---|---|---|---|
+| `rocky9-arm64`     | `auto-rocky9-arm`          | rpm    | arm64   | false             | Rocky Linux 9 / ARM64      |
+| `rocky10-arm64`    | `auto-rocky10-arm`         | rpm    | arm64   | false             | Rocky Linux 10 / ARM64     |
+| `alma9-arm64`      | `auto-alma9-arm`           | rpm    | arm64   | true              | AlmaLinux 9 / ARM64        |
+| `alma10-arm64`     | `auto-alma10-arm`          | rpm    | arm64   | true              | AlmaLinux 10 / ARM64       |
+| `oel9-arm64`       | `auto-oel9-arm`            | rpm    | arm64   | true              | Oracle Linux 9 / ARM64     |
+| `oel10-arm64`      | `auto-oel10-arm`           | rpm    | arm64   | true              | Oracle Linux 10 / ARM64    |
+| `rocky9-amd64`     | `my-rocky9-amd`            | rpm    | amd64   | true              | Rocky Linux 9 / AMD64      |
+| `alma9-amd64`      | `auto-alma9-amd`           | rpm    | amd64   | false             | AlmaLinux 9 / AMD64        |
+| `oel9-amd64`       | `auto-oel9-amd`            | rpm    | amd64   | true              | Oracle Linux 9 / AMD64     |
+| `ubuntu2204-arm64` | `auto-ubuntu2204-arm`      | deb    | arm64   | true              | Ubuntu 22.04 LTS / ARM64   |
+| `ubuntu2404-arm64` | `auto-ubuntu2404-arm`      | deb    | arm64   | true              | Ubuntu 24.04 LTS / ARM64   |
+| `debian11-arm64`   | `auto-debian11-arm`        | deb    | arm64   | true              | Debian 11 Bullseye / ARM64 |
+| `debian12-arm64`   | `auto-debian12-arm`        | deb    | arm64   | true              | Debian 12 Bookworm / ARM64 |
+| `debian13-arm64`   | `auto-debian13-arm`        | deb    | arm64   | true              | Debian 13 Trixie / ARM64   |
+| `debian13-amd64`   | `auto-debian13-amd`        | deb    | amd64   | true              | Debian 13 Trixie / AMD64   |
+
+The "Enabled (default)" column reflects the current state of
+`configuration/containers_list.json` at v2.2 time. It changes as the catalog is
+edited; for the live state at any moment, run `./run_pep_tf.sh --list-containers`
+locally.
+
+### CI examples
+
+| Goal | `containers` input | Other inputs |
+|---|---|---|
+| Default behavior (use catalog `enabled: true`) | *(empty)* | any |
+| Run two specific targets across the full matrix | `rocky9-arm64, ubuntu2404-arm64` | `families=all`, `arches=all` |
+| Smoke against every catalog entry (incl. `enabled: false`) | `all` | as desired |
+| Single-platform run pinned to one container | `alma9-arm64` | `families=rpm`, `arches=arm64` |
+
+### Local CLI examples
+
+```bash
+# List the catalog (alias, canonical name, family, arch, enabled, description)
+./run_pep_tf.sh --list-containers
+
+# Use override locally
+./run_pep_tf.sh --pgver 17 --platforms all --arch arm64 --components server \
+  --containers rocky9-arm64,ubuntu2404-arm64
+
+# Set via env (CLI flag wins if both are set)
+PEP_CONTAINERS=rocky9-arm64 ./run_pep_tf.sh --pgver 17 --platforms rpm --components server
+```
+
+### Validation behavior
+
+| Situation | Outcome |
+|---|---|
+| `containers` empty | Use catalog `enabled: true` subset (current behavior, byte-equivalent logs). |
+| Override contains an alias or canonical name | Both accepted. |
+| Override is `all` (sole token) | Expand to the entire catalog, including `enabled: false`. |
+| Override mixes `all` with other tokens | **Fail-fast.** |
+| Unknown name / alias | **Fail-fast** with the valid names + aliases listed in the diagnostic. |
+| Container's family or arch matches none of the selected `families` / `arches` (global-zero) | **Fail-fast** in the CI plan job before any test target spawns; locally at script startup. |
+| Container valid catalog-wide but not in *this matrix target's* (family, arch) | Logged as out-of-scope; that target proceeds with its remaining matches (or surfaces as `NO CONTAINERS SELECTED` in the consolidated report if it has none). |
+| Container with `enabled: false` is explicitly requested | Allowed — override wins. The `enabled:` flag only gates the default-membership; an explicit override may still select it. |
+| `--target aws` combined with any non-empty override | **Fail-fast.** The override applies only to `--target docker`. |
+
+### Preference hierarchy
+
+CLI flag > env var > catalog default:
+
+| Layer | Source | When it wins |
+|---|---|---|
+| CLI flag (locally) / workflow input (in CI) | `--containers <csv>` / `inputs.containers` | non-empty value present |
+| `PEP_CONTAINERS` env var (locally only) | shell environment | when the layer above is empty; in CI the workflow explicitly blanks `PEP_CONTAINERS` so no inherited env can leak |
+| Catalog default | `enabled: true` entries in `containers_list.json` | when both above are empty |
 
 ## Optional: Docker Hub authentication
 

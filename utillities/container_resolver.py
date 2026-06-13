@@ -1,0 +1,456 @@
+"""Container target resolver for the PEP Regression framework.
+
+Owns:
+- Loading and validating configuration/containers_list.json
+- Resolving runtime overrides (--containers, PEP_CONTAINERS) against the catalog
+- Per-(family, arch) target filtering
+- The --list-containers display
+
+User-facing docs: see the "Selecting container targets at runtime" section
+in docs/CI.md.
+"""
+from __future__ import annotations
+
+import json
+import sys
+from dataclasses import dataclass
+from pathlib import Path
+
+
+class ResolverError(Exception):
+    """Catalog or override validation failure. Callers exit non-zero."""
+
+
+_BLOCK_TO_FAMILY = {"rhel": "rpm", "deb": "deb"}
+_CANONICAL_ARCH_SUFFIXES = {"-arm": "arm64", "-amd": "amd64"}
+_ALIAS_ARCH_SUFFIXES = {"-arm64": "arm64", "-amd64": "amd64"}
+
+
+@dataclass(frozen=True)
+class CatalogEntry:
+    name: str           # canonical, e.g. 'auto-rocky9-arm'
+    alias: str          # user-facing, e.g. 'rocky9-arm64'
+    description: str
+    enabled: bool
+    family: str         # 'rpm' or 'deb' (user-facing)
+    arch: str           # 'arm64' or 'amd64'
+
+
+@dataclass(frozen=True)
+class Catalog:
+    entries: tuple
+    lookup_index: dict   # lower(alias_or_name) -> canonical name
+
+
+def load_catalog(path) -> Catalog:
+    """Load and validate the catalog. Raises ResolverError on failure."""
+    path = Path(path)
+    try:
+        data = json.loads(path.read_text())
+    except FileNotFoundError as e:
+        raise ResolverError(f"catalog not found: {path}") from e
+    except json.JSONDecodeError as e:
+        raise ResolverError(f"{path}: parse error: {e}") from e
+
+    entries = []
+    for block_name in ("rhel", "deb"):
+        if block_name not in data:
+            raise ResolverError(
+                f"{path}: required '{block_name}' block is missing"
+            )
+        block = data[block_name]
+        if not isinstance(block, list):
+            raise ResolverError(
+                f"{path}: '{block_name}' block must be a list (got {type(block).__name__})"
+            )
+        family = _BLOCK_TO_FAMILY[block_name]
+        for idx, raw in enumerate(block):
+            entries.append(_build_entry(raw, family, block_name, idx, path))
+
+    _validate_uniqueness(entries)
+    lookup_index = {}
+    for e in entries:
+        lookup_index[e.name.lower()] = e.name
+        lookup_index[e.alias.lower()] = e.name
+    return Catalog(entries=tuple(entries), lookup_index=lookup_index)
+
+
+def _build_entry(raw, family, block_name, idx, path):
+    if not isinstance(raw, dict):
+        raise ResolverError(
+            f"{path}: entry at {block_name}[{idx}] is not an object"
+        )
+
+    # name: must be present and a string. Type-check BEFORE .strip() to avoid
+    # raw AttributeError on numeric/list/dict values.
+    if "name" not in raw:
+        raise ResolverError(
+            f"{path}: {block_name}[{idx}]: name missing"
+        )
+    raw_name = raw["name"]
+    if not isinstance(raw_name, str):
+        raise ResolverError(
+            f"{path}: {block_name}[{idx}]: name must be a string "
+            f"(got {type(raw_name).__name__})"
+        )
+    name = raw_name.strip()
+
+    # description: must be present and a string
+    if "description" not in raw:
+        raise ResolverError(
+            f"{path}: {block_name}[{idx}] ({name or 'unnamed'}): description missing"
+        )
+    description = raw["description"]
+    if not isinstance(description, str):
+        raise ResolverError(
+            f"{path}: {block_name}[{idx}] ({name or 'unnamed'}): description must be a string"
+        )
+
+    # enabled: must be present and a real JSON bool. JSON's true/false parse to
+    # Python bool; anything else (string, number, null, missing) is rejected.
+    # Note: bool is a subclass of int in Python, but isinstance(x, bool) is
+    # True only for actual bools, so this rejects integers like 0/1 correctly.
+    if "enabled" not in raw:
+        raise ResolverError(
+            f"{path}: {block_name}[{idx}] ({name or 'unnamed'}): enabled missing"
+        )
+    enabled = raw["enabled"]
+    if not isinstance(enabled, bool):
+        raise ResolverError(
+            f"{path}: {block_name}[{idx}] ({name or 'unnamed'}): "
+            f"enabled must be a JSON bool (got {type(enabled).__name__})"
+        )
+
+    # alias: must be present and a string. Type-check BEFORE .strip().
+    if "alias" not in raw:
+        raise ResolverError(f"{path}: {name}: alias missing")
+    raw_alias = raw["alias"]
+    if not isinstance(raw_alias, str):
+        raise ResolverError(
+            f"{path}: {name}: alias must be a string "
+            f"(got {type(raw_alias).__name__})"
+        )
+    alias = raw_alias.strip()
+
+    if not name:
+        raise ResolverError(f"{path}: entry at {block_name}[{idx}] has empty name")
+    arch = _derive_arch_from_name(name)
+    if arch is None:
+        raise ResolverError(
+            f"{path}: name {name!r} must end with -arm or -amd "
+            f"(arch suffix is load-bearing)"
+        )
+    if not alias:
+        raise ResolverError(f"{path}: {name}: alias missing")
+    alias_arch = _derive_arch_from_alias(alias)
+    if alias_arch is None:
+        raise ResolverError(
+            f"{path}: alias {alias!r} must end with -arm64 or -amd64"
+        )
+    if alias_arch != arch:
+        raise ResolverError(
+            f"{path}: entry {name}: alias {alias!r} arch ({alias_arch}) "
+            f"disagrees with name's arch ({arch})"
+        )
+    return CatalogEntry(name=name, alias=alias, description=description,
+                        enabled=enabled, family=family, arch=arch)
+
+
+def _derive_arch_from_name(name):
+    for suf, val in _CANONICAL_ARCH_SUFFIXES.items():
+        if name.endswith(suf):
+            return val
+    return None
+
+
+def _derive_arch_from_alias(alias):
+    for suf, val in _ALIAS_ARCH_SUFFIXES.items():
+        if alias.endswith(suf):
+            return val
+    return None
+
+
+def _validate_uniqueness(entries):
+    # Canonical name uniqueness (case-insensitive, matching the lookup namespace).
+    seen_name = {}
+    for e in entries:
+        key = e.name.lower()
+        if key in seen_name:
+            raise ResolverError(
+                f"duplicate name {e.name!r} (also seen as {seen_name[key]!r})"
+            )
+        seen_name[key] = e.name
+
+    # Alias uniqueness (case-insensitive).
+    seen_alias = {}
+    names = {e.name for e in entries}
+    for e in entries:
+        key = e.alias.lower()
+        if key in seen_alias:
+            raise ResolverError(
+                f"alias {e.alias!r} used by both {seen_alias[key]} and {e.name}"
+            )
+        seen_alias[key] = e.name
+        # Defense-in-depth: with the current suffix rules (names end in
+        # -arm/-amd, aliases end in -arm64/-amd64) this branch is unreachable
+        # for catalogs that pass per-entry suffix validation. Kept anyway in
+        # case the suffix policy is ever relaxed in a future release.
+        if e.alias in names and e.alias != e.name:
+            raise ResolverError(
+                f"alias {e.alias!r} collides with name of another entry"
+            )
+
+
+def _parse_override(raw):
+    """Split-and-trim a raw override string. Returns list[str] of >=1 token,
+    or None if raw is None/whitespace. Raises ResolverError if raw is non-empty
+    but parses to zero entries (e.g. ',' or ', ,')."""
+    if raw is None:
+        return None
+    stripped = raw.strip()
+    if not stripped:
+        return None
+    tokens = [t.strip() for t in stripped.split(",")]
+    tokens = [t for t in tokens if t]
+    if not tokens:
+        raise ResolverError(
+            f"override value {raw!r} has no valid entries"
+        )
+    return tokens
+
+
+def _resolve_override_tokens(catalog, raw_override, env_override):
+    """Apply the preference hierarchy and resolve tokens to canonical names.
+
+    Returns: (canonical_names: list[str], source: 'cli'|'env'|'default').
+    Default-path returns ([], 'default'); callers materialize the enabled
+    subset themselves.
+    """
+    tokens = _parse_override(raw_override)
+    source = "cli" if tokens is not None else None
+    if tokens is None:
+        tokens = _parse_override(env_override)
+        if tokens is not None:
+            source = "env"
+    if tokens is None:
+        return [], "default"
+
+    # 'all' handling
+    if any(t.lower() == "all" for t in tokens):
+        if len(tokens) > 1:
+            raise ResolverError(
+                f"'all' must be the only token in --containers; "
+                f"mix not supported (got: {', '.join(tokens)})"
+            )
+        return [e.name for e in catalog.entries], source
+
+    canonical = []
+    seen = set()
+    for tok in tokens:
+        canon = catalog.lookup_index.get(tok.lower())
+        if canon is None:
+            valid_aliases = sorted({e.alias for e in catalog.entries})
+            valid_names = sorted({e.name for e in catalog.entries})
+            raise ResolverError(
+                f"Unknown container {tok!r}. "
+                f"Valid aliases: {valid_aliases}; valid names: {valid_names}"
+            )
+        if canon in seen:
+            sys.stderr.write(
+                f"[container-override] dedup'd {tok!r} (same as {canon!r})\n"
+            )
+            continue
+        seen.add(canon)
+        canonical.append(canon)
+    return canonical, source
+
+
+def validate_global(catalog, raw_override, env_override, scope_families, scope_arches):
+    """Run-level validation. Returns (resolved_canonical_names, source_label).
+
+    Source label: 'cli', 'env', or 'default'.
+
+    On the override path, fails fast if no requested container's
+    (family, arch) is in the (scope_families, scope_arches) cross-product.
+
+    On the default path, returns the catalog's enabled:true subset and does
+    NOT perform the global-zero check (preserves pre-v2.2 behavior).
+    """
+    resolved, source = _resolve_override_tokens(catalog, raw_override, env_override)
+
+    if source == "default":
+        resolved = [e.name for e in catalog.entries if e.enabled]
+        return resolved, source
+
+    by_name = {e.name: e for e in catalog.entries}
+    in_scope_anywhere = any(
+        by_name[c].family in scope_families and by_name[c].arch in scope_arches
+        for c in resolved
+    )
+    if not in_scope_anywhere:
+        raise ResolverError(
+            f"All {len(resolved)} requested containers are out of scope for the "
+            f"selected --platforms / --arch.\n"
+            f"Requested: {resolved}.\n"
+            f"Scope: families={sorted(scope_families)}, "
+            f"arches={sorted(scope_arches)}.\n"
+            f"Either expand the scope, or pick containers that match it."
+        )
+    return resolved, source
+
+
+def resolve_for_target(catalog, raw_override, env_override, target_family, target_arch):
+    """Per-(family, arch) filter on top of the resolved override.
+
+    target_arch may be None ('no arch filter' — accepts both arches of the
+    target_family). This matches pre-v2.2 local behavior when --arch is omitted.
+
+    Returns: (effective, per_target_out_of_scope, source) where source is
+    'cli', 'env', or 'default'. The source label lets the CLI dispatcher
+    decide whether to emit override-related log lines (suppressed on default
+    path so logs stay byte-identical to pre-v2.2 for non-override runs).
+
+    Re-parses the override defensively in case this function is called
+    without validate_global (e.g. by a future code path). Catalog errors
+    surface here too.
+    """
+    resolved, source = _resolve_override_tokens(catalog, raw_override, env_override)
+    if source == "default":
+        resolved = [e.name for e in catalog.entries if e.enabled]
+
+    by_name = {e.name: e for e in catalog.entries}
+    effective = []
+    per_target_out_of_scope = []
+    for c in resolved:
+        entry = by_name[c]
+        family_matches = (entry.family == target_family)
+        arch_matches = (target_arch is None) or (entry.arch == target_arch)
+        if family_matches and arch_matches:
+            effective.append(c)
+        else:
+            per_target_out_of_scope.append(c)
+    return effective, per_target_out_of_scope, source
+
+
+def list_containers(catalog):
+    """Return a printable text table for --list-containers."""
+    header = (
+        f"{'ALIAS':<20} {'CANONICAL NAME':<23} {'FAMILY':<7} "
+        f"{'ARCH':<7} {'ENABLED':<8} DESCRIPTION"
+    )
+    lines = [header]
+    for e in catalog.entries:
+        enabled_str = "true" if e.enabled else "false"
+        lines.append(
+            f"{e.alias:<20} {e.name:<23} {e.family:<7} "
+            f"{e.arch:<7} {enabled_str:<8} {e.description}"
+        )
+    return "\n".join(lines)
+
+
+import argparse
+import os
+
+
+def _csv_to_set(value):
+    return {tok.strip() for tok in value.split(",") if tok.strip()}
+
+
+def main(argv=None):
+    parser = argparse.ArgumentParser(
+        prog="container_resolver",
+        description="Catalog & runtime override resolver for the PEP Regression framework.",
+    )
+    parser.add_argument(
+        "--catalog", default="configuration/containers_list.json",
+        help="Path to containers_list.json (default: %(default)s)",
+    )
+    sub = parser.add_subparsers(dest="command", required=True)
+
+    p_vg = sub.add_parser("validate-global",
+        help="Validate override against the user's full scope (CI plan job / local startup).")
+    p_vg.add_argument("--containers", default="",
+        help="--containers override value (may be empty).")
+    p_vg.add_argument("--scope-families", required=True,
+        help="CSV of user-facing family names (rpm, deb).")
+    p_vg.add_argument("--scope-arches", required=True,
+        help="CSV of user-facing arch names (arm64, amd64).")
+
+    p_rft = sub.add_parser("resolve-for-target",
+        help="Resolve effective containers for one (family, arch) call.")
+    p_rft.add_argument("--containers", default="")
+    p_rft.add_argument("--target-family", required=True)
+    p_rft.add_argument("--target-arch", default="",
+        help="Empty string = no arch filter.")
+
+    sub.add_parser("list-containers",
+        help="Print the catalog as a human-readable table.")
+
+    args = parser.parse_args(argv)
+
+    try:
+        catalog = load_catalog(args.catalog)
+    except ResolverError as e:
+        sys.stderr.write(f"[container-override] ERROR: {e}\n")
+        return 2
+
+    env_override = os.environ.get("PEP_CONTAINERS")
+
+    if args.command == "validate-global":
+        try:
+            resolved, source = validate_global(
+                catalog, args.containers or None, env_override,
+                _csv_to_set(args.scope_families), _csv_to_set(args.scope_arches),
+            )
+        except ResolverError as e:
+            sys.stderr.write(f"[container-override] ERROR: {e}\n")
+            return 2
+        # On the default path emit NO override-related stderr lines, so logs
+        # are byte-identical to pre-v2.2 for runs that don't use the feature.
+        # Only chatter when the user actually supplied an override.
+        if source != "default":
+            sys.stderr.write(f"[container-override] source={source}\n")
+            sys.stderr.write(
+                f"[container-override] requested: {', '.join(resolved)}\n"
+            )
+        print(",".join(resolved))
+        return 0
+
+    if args.command == "resolve-for-target":
+        target_arch = args.target_arch or None
+        try:
+            effective, oos, source = resolve_for_target(
+                catalog, args.containers or None, env_override,
+                args.target_family, target_arch,
+            )
+        except ResolverError as e:
+            sys.stderr.write(f"[container-override] ERROR: {e}\n")
+            return 2
+        # Suppress [container-override] log noise on the default path so
+        # non-override runs see the same logs as pre-v2.2. The [container-
+        # resolution] line is emitted by the shell caller and is unchanged.
+        if source != "default":
+            target_label = f"{args.target_family}/{target_arch or 'any-arch'}"
+            by_name = {e.name: e for e in catalog.entries}
+            for c in oos:
+                entry = by_name[c]
+                sys.stderr.write(
+                    f"[container-override] out-of-scope for this target: "
+                    f"{c} ({entry.family}/{entry.arch}; current target {target_label})\n"
+                )
+            sys.stderr.write(
+                f"[container-override] effective for target {target_label}: "
+                f"{', '.join(effective) if effective else '(none)'}\n"
+            )
+        print(",".join(effective))
+        return 0
+
+    if args.command == "list-containers":
+        print(list_containers(catalog))
+        return 0
+
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

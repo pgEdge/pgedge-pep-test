@@ -25,6 +25,9 @@ on:
         type: choice
         options: [preview, full]
         default: preview
+      containers:
+        description: "Custom container override (csv). Empty = use containers_list.json defaults. 'all' (sole token) = entire catalog. Example: 'rocky9-arm64, ubuntu2404-arm64'. See docs/CI.md for the alias list."
+        default: ''
 
   # Scheduled trigger intentionally disabled for v1.
   # Will be enabled once the workflow is fully validated.
@@ -55,6 +58,9 @@ jobs:
       matrix:     ${{ steps.build.outputs.matrix }}
       components: ${{ steps.build.outputs.components }}
     steps:
+      - name: '[plan-job] Checkout (needed for container_resolver + catalog)'
+        uses: actions/checkout@v6
+
       - name: '[plan-job] Build matrix'
         id: build
         shell: bash
@@ -124,11 +130,40 @@ jobs:
           sys.stderr.write(
               f"[plan-job] inputs pg={pgs} fam={families} arch={arches} components={components}\n"
           )
-          sys.stderr.write(f"[plan-job] {len(slices)} slice(s): {json.dumps(payload)}\n")
+          sys.stderr.write(f"[plan-job] {len(slices)} matrix target(s): {json.dumps(payload)}\n")
           sys.stderr.write(f"[plan-job] components normalized: {components_normalized}\n")
           print(f"matrix={json.dumps(payload)}")
           print(f"components={components_normalized}")
           PY
+
+      - name: '[plan-job] Validate container override (global-zero gate)'
+        shell: bash
+        env:
+          IN_FAM:        ${{ inputs.families }}
+          IN_ARCH:       ${{ inputs.arches }}
+          IN_CONTAINERS: ${{ inputs.containers }}
+          # Explicitly blank PEP_CONTAINERS so a repo-level Variable / inherited
+          # env value cannot leak into an empty workflow input. In CI the
+          # `containers` workflow input is the single authoritative source.
+          PEP_CONTAINERS: ''
+        run: |
+          # Build the user-facing scope strings for validate-global.
+          # Inputs may be 'all', single value, or csv. The resolver expects csv;
+          # 'all' is expanded here for clarity.
+          # Trim leading/trailing whitespace first — the matrix parser already
+          # tolerates it, but this step's 'all'/-z checks would otherwise miss
+          # values like ' all ' and pass them through verbatim to the resolver.
+          _fam="${IN_FAM:-all}"
+          _fam="$(echo "$_fam" | xargs)"
+          [[ "$_fam" == "all" || -z "$_fam" ]] && _fam="rpm,deb"
+          _arch="${IN_ARCH:-all}"
+          _arch="$(echo "$_arch" | xargs)"
+          [[ "$_arch" == "all" || -z "$_arch" ]] && _arch="arm64,amd64"
+
+          python3 utillities/container_resolver.py validate-global \
+            --containers "$IN_CONTAINERS" \
+            --scope-families "$_fam" \
+            --scope-arches   "$_arch"
 
   test:
     needs: plan
@@ -139,9 +174,9 @@ jobs:
       fail-fast: false
       matrix: ${{ fromJson(needs.plan.outputs.matrix) }}
     steps:
-      - name: '[slice] Identity'
+      - name: '[target] Identity'
         run: |
-          echo "[slice] pg=${{ matrix.pg }} family=${{ matrix.family }} arch=${{ matrix.arch }} runner=${{ matrix.runner }}"
+          echo "[target] pg=${{ matrix.pg }} family=${{ matrix.family }} arch=${{ matrix.arch }} runner=${{ matrix.runner }}"
 
       - name: '[checkout] Source'
         uses: actions/checkout@v6
@@ -159,8 +194,8 @@ jobs:
 
       # Conditional Docker Hub auth.
       # Two gates, both must pass:
-      #   1. The slice is in full mode (no point logging in if no images will
-      #      be pulled).
+      #   1. The matrix target is in full mode (no point logging in if no
+      #      images will be pulled).
       #   2. Both DOCKERHUB_USERNAME and DOCKERHUB_TOKEN secrets are set.
       # We test secret presence by mapping them to env vars in a small bash
       # step (well-supported pattern) rather than referencing `secrets.X` in
@@ -196,9 +231,11 @@ jobs:
         run: |
           set -o pipefail
           ./run_pep_tf.sh --help
-          ./run_pep_tf.sh --help | grep -- '--arch'    > /dev/null
-          ./run_pep_tf.sh --help | grep -- '--dry-run' > /dev/null
-          echo "[framework-help] OK (--arch and --dry-run advertised)"
+          ./run_pep_tf.sh --help | grep -- '--arch'             > /dev/null
+          ./run_pep_tf.sh --help | grep -- '--dry-run'          > /dev/null
+          ./run_pep_tf.sh --help | grep -- '--containers'       > /dev/null
+          ./run_pep_tf.sh --help | grep -- '--list-containers'  > /dev/null
+          echo "[framework-help] OK (--arch, --dry-run, --containers, --list-containers advertised)"
 
       - name: '[framework-command] Preview (--help + --dry-run)'
         if: ${{ inputs.execution_mode != 'full' }}
@@ -206,15 +243,37 @@ jobs:
         env:
           IN_COMPONENTS: ${{ needs.plan.outputs.components }}
           IN_REPO:       ${{ inputs.repo       || 'release' }}
+          CONTAINERS_OVERRIDE_INPUT: ${{ inputs.containers }}
+          # Block any inherited env from leaking when the workflow input is empty.
+          # In CI the `containers` workflow input is the single source of truth.
+          PEP_CONTAINERS: ''
+          # Signal to run_pep_tf.sh that the plan job already ran validate-global
+          # with the user's full --platforms/--arch scope. Per-target invocations
+          # arrive here with a narrowed scope; re-running validate-global would
+          # falsely global-zero whenever the override has any entry outside this
+          # single cell (the per-target filter handles that case cleanly).
+          PEP_GLOBAL_VALIDATED: 'true'
         run: |
           set -o pipefail
           mkdir -p test-logs
-          CMD="./run_pep_tf.sh --pgver ${{ matrix.pg }} --platforms ${{ matrix.family }} --arch ${{ matrix.arch }} --components $IN_COMPONENTS --repo $IN_REPO --dry-run"
+          # Build the framework invocation as an array so each token (including
+          # the possibly-empty --containers value) is preserved exactly.
+          CMD=(
+            ./run_pep_tf.sh
+            --pgver "${{ matrix.pg }}"
+            --platforms "${{ matrix.family }}"
+            --arch "${{ matrix.arch }}"
+            --components "$IN_COMPONENTS"
+            --repo "$IN_REPO"
+            --containers "$CONTAINERS_OVERRIDE_INPUT"
+            --dry-run
+          )
           # Capture the constructed CLI to a file so the exact invocation is in
           # the artifact, not only in the GH Actions step log.
-          echo "$CMD" | tee test-logs/framework-command.txt
-          echo "[framework-command] $CMD"
-          $CMD 2>&1 | tee test-logs/dry-run-output.txt
+          printf '%q ' "${CMD[@]}" | tee test-logs/framework-command.txt
+          echo                       | tee -a test-logs/framework-command.txt
+          echo "[framework-command] ${CMD[*]}"
+          "${CMD[@]}" 2>&1 | tee test-logs/dry-run-output.txt
 
       - name: '[framework-command] Full (real framework execution)'
         if: ${{ inputs.execution_mode == 'full' }}
@@ -222,15 +281,36 @@ jobs:
         env:
           IN_COMPONENTS: ${{ needs.plan.outputs.components }}
           IN_REPO:       ${{ inputs.repo       || 'release' }}
+          CONTAINERS_OVERRIDE_INPUT: ${{ inputs.containers }}
+          # Block any inherited env from leaking when the workflow input is empty.
+          # In CI the `containers` workflow input is the single source of truth.
+          PEP_CONTAINERS: ''
+          # Signal to run_pep_tf.sh that the plan job already ran validate-global
+          # with the user's full --platforms/--arch scope. Per-target invocations
+          # arrive here with a narrowed scope; re-running validate-global would
+          # falsely global-zero whenever the override has any entry outside this
+          # single cell (the per-target filter handles that case cleanly).
+          PEP_GLOBAL_VALIDATED: 'true'
         run: |
           set -o pipefail
           mkdir -p test-logs
-          CMD="./run_pep_tf.sh --pgver ${{ matrix.pg }} --platforms ${{ matrix.family }} --arch ${{ matrix.arch }} --components $IN_COMPONENTS --repo $IN_REPO"
+          # Build the framework invocation as an array so each token (including
+          # the possibly-empty --containers value) is preserved exactly.
+          CMD=(
+            ./run_pep_tf.sh
+            --pgver "${{ matrix.pg }}"
+            --platforms "${{ matrix.family }}"
+            --arch "${{ matrix.arch }}"
+            --components "$IN_COMPONENTS"
+            --repo "$IN_REPO"
+            --containers "$CONTAINERS_OVERRIDE_INPUT"
+          )
           # Capture the constructed CLI to a file so the exact invocation is in
           # the artifact, not only in the GH Actions step log.
-          echo "$CMD" | tee test-logs/framework-command.txt
-          echo "[framework-command] $CMD"
-          $CMD
+          printf '%q ' "${CMD[@]}" | tee test-logs/framework-command.txt
+          echo                       | tee -a test-logs/framework-command.txt
+          echo "[framework-command] ${CMD[*]}"
+          "${CMD[@]}"
 
       - name: '[summary] Write workflow summary artifact'
         if: always()
@@ -243,6 +323,10 @@ jobs:
           IN_EXEC_MODE:  ${{ inputs.execution_mode || 'preview' }}
           IN_COMPONENTS: ${{ needs.plan.outputs.components }}
           IN_REPO:       ${{ inputs.repo           || 'release' }}
+          CONTAINERS_OVERRIDE_INPUT: ${{ inputs.containers }}
+          # Block any inherited env from leaking when the workflow input is empty.
+          # In CI the `containers` workflow input is the single source of truth.
+          PEP_CONTAINERS: ''
         run: |
           mkdir -p test-logs
           {
@@ -265,6 +349,7 @@ jobs:
             echo "[workflow-summary] arch=$MATRIX_ARCH"
             echo "[workflow-summary] repo=$IN_REPO"
             echo "[workflow-summary] components=$IN_COMPONENTS"
+            echo "[workflow-summary] containers=${{ inputs.containers }}"
             echo "[workflow-summary] python=$(python3 --version 2>&1)"
             echo "[workflow-summary] docker=$(docker --version 2>&1 || echo 'not available')"
             echo "[workflow-summary] ------------------------------------------------------------"
@@ -277,7 +362,7 @@ jobs:
             echo "[workflow-summary] ------------------------------------------------------------"
             echo "[workflow-summary] dry-run output:"
             if [[ -f test-logs/dry-run-output.txt ]]; then
-              grep -E '\[container-resolution\]|\[image-resolution\]|\[dry-run\]|\[arch-filter\]' test-logs/dry-run-output.txt || echo "  (no tagged lines captured)"
+              grep -E '\[container-resolution\]|\[container-override\]|\[image-resolution\]|\[dry-run\]|\[arch-filter\]' test-logs/dry-run-output.txt || echo "  (no tagged lines captured)"
             else
               echo "  (test-logs/dry-run-output.txt not present — likely full-mode run)"
             fi
@@ -312,8 +397,8 @@ jobs:
     permissions:
       contents: read
 
-  # Aggregates every per-slice artifact into a single consolidated archive so
-  # a tester can download all-slice results in one click. Per-slice artifacts
+  # Aggregates every per-target artifact into a single consolidated archive
+  # so a tester can download all results in one click. Per-target artifacts
   # are still available individually for targeted triage. Runs after the full
   # test matrix and tolerates partial failure (if: always()).
   aggregate:
@@ -326,7 +411,7 @@ jobs:
       - name: '[aggregate] Checkout (for the report generator script)'
         uses: actions/checkout@v6
 
-      - name: '[aggregate] Download all per-slice artifacts'
+      - name: '[aggregate] Download all per-target artifacts'
         uses: actions/download-artifact@v7
         with:
           path: aggregated/
@@ -335,38 +420,116 @@ jobs:
           # pull artifacts from a prior attempt of the same run.
           pattern: test-logs-r${{ github.run_number }}-a${{ github.run_attempt }}-*
 
+      - name: '[aggregate] Normalize layout (handle single-target flattening)'
+        shell: bash
+        run: |
+          # actions/download-artifact@v7 with `pattern:` flattens the
+          # contents to the root of `path:` when only ONE artifact matches
+          # (i.e. single-target matrices like --pgver 17 --platforms rpm
+          # --arch arm64). Multi-target matches each get their own
+          # test-logs-r{N}-a{M}-pg{P}-{family}-{arch}/ subdir.
+          #
+          # The consolidated report generator expects per-target subdirs
+          # uniformly, so recreate the missing subdir from workflow-
+          # summary.txt metadata when needed.
+          if ! ls aggregated/test-logs-*/ >/dev/null 2>&1; then
+            summary=$(find aggregated -maxdepth 2 -type f -name workflow-summary.txt | head -1)
+            if [[ -n "$summary" ]]; then
+              pg=$(grep '^\[workflow-summary\] pg='     "$summary" | head -1 | sed 's/.*=//')
+              family=$(grep '^\[workflow-summary\] family=' "$summary" | head -1 | sed 's/.*=//')
+              arch=$(grep '^\[workflow-summary\] arch='   "$summary" | head -1 | sed 's/.*=//')
+              if [[ -n "$pg" && -n "$family" && -n "$arch" ]]; then
+                subdir="aggregated/test-logs-r${{ github.run_number }}-a${{ github.run_attempt }}-pg${pg}-${family}-${arch}"
+                mkdir -p "$subdir"
+                shopt -s dotglob
+                for item in aggregated/*; do
+                  base=$(basename "$item")
+                  [[ "$base" == "test-logs-"* ]] && continue
+                  mv "$item" "$subdir/"
+                done
+                shopt -u dotglob
+                echo "[aggregate] normalized single-target flat layout into $subdir"
+              else
+                echo "[aggregate] WARN: could not parse pg/family/arch from workflow-summary.txt; layout not normalized"
+              fi
+            else
+              echo "[aggregate] no workflow-summary.txt found; layout normalization skipped (likely preview-mode or zero-target run)"
+            fi
+          else
+            echo "[aggregate] multi-target subdirs already present; no normalization needed"
+          fi
+
       - name: '[aggregate] List what we got'
         shell: bash
         run: |
-          echo "[aggregate] per-slice directories under aggregated/:"
+          echo "[aggregate] per-target directories under aggregated/:"
           find aggregated -mindepth 1 -maxdepth 1 -type d | sort | sed 's/^/  /'
           echo "[aggregate] workflow-summary.txt files found:"
           find aggregated -maxdepth 3 -type f -name workflow-summary.txt | wc -l
 
-      - name: '[aggregate] Build cross-slice consolidated report'
+      - name: '[aggregate] Build cross-target consolidated report'
         if: always()
         shell: bash
         run: |
-          if ls aggregated/test-logs-*/ >/dev/null 2>&1 && \
-             find aggregated -name 'report-*.xml' -not -path '*/consolidated-*/*' | grep -q .; then
-            python3 utillities/ci_consolidated_report.py \
-              --input-dir aggregated \
-              --output aggregated/consolidated-report.html
-          else
-            # Preview-mode (or no-XML) runs: write a small placeholder so the
-            # artifact always contains the file, and the step never fails.
-            mkdir -p aggregated
+          mkdir -p aggregated
+
+          # Always invoke the generator. It tolerates an empty input dir
+          # (writes a zero-row report). Decide afterwards whether the
+          # generated output looks empty enough that the friendly
+          # placeholder is more useful for triage.
+          #
+          # The previous structure was an `if ls test-logs-*/ && find ... |
+          # grep -q .; then GEN else PLACEHOLDER` gate, which (run #50)
+          # fell through to the placeholder branch even when XMLs were
+          # present in the artifact — root cause not pinned down without
+          # the runner-side log. The simpler unconditional-invocation
+          # structure here removes that whole class of failures.
+          set +e
+          gen_out=$(python3 utillities/ci_consolidated_report.py \
+                      --input-dir aggregated \
+                      --output aggregated/consolidated-report.html 2>&1)
+          gen_rc=$?
+          set -e
+          echo "$gen_out"
+
+          # Decide whether to overwrite with the placeholder.
+          write_placeholder=false
+          if [[ $gen_rc -ne 0 ]]; then
+            echo "[aggregate] generator exited $gen_rc; falling back to placeholder"
+            write_placeholder=true
+          elif grep -qE 'rows=0( |$)' <<<"$gen_out"; then
+            echo "[aggregate] generator produced a zero-row report (no XMLs to summarize); writing placeholder"
+            write_placeholder=true
+          elif [[ ! -s aggregated/consolidated-report.html ]]; then
+            echo "[aggregate] generator did not write a non-empty output file; writing placeholder"
+            write_placeholder=true
+          fi
+
+          if [[ "$write_placeholder" == "true" ]]; then
             cat > aggregated/consolidated-report.html <<'HTML'
           <!DOCTYPE html><html><head><meta charset="utf-8"/>
-          <title>Cross-Slice Consolidated Report</title></head><body>
-          <h1>Cross-Slice Consolidated Report</h1>
-          <p>No test report XMLs were produced by this run. This is expected for
-          preview-mode runs (execution_mode=preview), which run --help + --dry-run
-          only and do not execute pytest. Trigger with execution_mode=full to
-          produce test results.</p>
+          <title>PEP Regression Consolidated Report</title></head><body>
+          <h1>PEP Regression Consolidated Report</h1>
+          <p>No test report XMLs were found in the aggregated per-target artifacts.
+          Common reasons:</p>
+          <ul>
+            <li>The run was in <code>execution_mode=preview</code> (no pytest, no
+                XMLs are produced).</li>
+            <li>The run was in <code>execution_mode=full</code> but the test
+                targets failed before pytest produced any reports (e.g. Docker
+                pull failure, prerequisite install error).</li>
+            <li>All matrix targets resolved to zero containers (each cell would
+                surface as <em>NO CONTAINERS SELECTED</em> in the real report;
+                check workflow-summary.txt per target).</li>
+          </ul>
+          <p>If you triggered <code>execution_mode=full</code> and expected a real
+          report here, inspect the per-target <code>test-logs-r&lt;N&gt;-a&lt;M&gt;-&hellip;</code>
+          subdirectories in this archive — the framework's own per-component HTML/XML
+          reports may still be present.</p>
           </body></html>
           HTML
-            echo "[aggregate] no report XMLs found — wrote preview placeholder"
+          else
+            echo "[aggregate] real consolidated report generated; not overwriting"
           fi
 
       - name: '[aggregate] Upload consolidated archive'

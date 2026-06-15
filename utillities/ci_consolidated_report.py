@@ -323,29 +323,167 @@ _NO_DATA_STATUSES = ("NO REPORTS", "NO TESTCASES", "NO CONTAINERS SELECTED")
 _ISSUE_STATUSES = ("NO REPORTS", "PARSE ERROR", "NO TESTCASES", "NO CONTAINERS SELECTED")
 
 
-def render_html(rows: list, ctx: dict) -> str:
-    total_tests = sum(r["tests"] for r in rows)
-    total_passed = sum(r["passed"] for r in rows)
-    total_failed = sum(r["failed"] for r in rows)
-    total_skipped = sum(r["skipped"] for r in rows)
-    total_time = sum(r["time"] for r in rows)
-    # Report-data problems are counted separately so a run with missing/broken
-    # reports but no test failures does not look all-green in the summary.
-    report_issues = sum(1 for r in rows if r["status"] in _ISSUE_STATUSES)
+# Component slug helpers.
+#
+# Component names go into HTML element IDs (anchors for the heatmap → section
+# jump). The slug must be a valid HTML id and must remain unique across the
+# components present in one report — even if two raw names normalize to the
+# same string ("foo bar" and "foo-bar" both → "foo-bar"). The unattributed
+# bucket (component == '-') gets a fixed, reserved slug.
+_SLUG_RE = re.compile(r"[^a-z0-9_-]+")
+UNATTRIBUTED_COMPONENT = "-"
+UNATTRIBUTED_SLUG = "unattributed"
 
-    # Sort: attention rows (failures, missing/broken reports) first, then by
-    # pg/family/arch/component/container.
+
+def _component_slug(name: str) -> str:
+    """Normalize a single component name to an HTML-id-safe slug.
+
+    Does NOT guarantee uniqueness — use _assign_unique_slugs for that.
+    """
+    if name == UNATTRIBUTED_COMPONENT:
+        return UNATTRIBUTED_SLUG
+    s = _SLUG_RE.sub("-", name.lower()).strip("-")
+    return s or "unnamed"
+
+
+def _assign_unique_slugs(names) -> dict:
+    """Map distinct component names (in iteration order) to unique slugs.
+
+    First claimant wins the base slug; collisions get -2, -3, ... suffixes.
+    Deterministic given a deterministic input order.
+    """
+    used = set()
+    out = {}
+    for name in names:
+        base = _component_slug(name)
+        slug = base
+        n = 2
+        while slug in used:
+            slug = f"{base}-{n}"
+            n += 1
+        used.add(slug)
+        out[name] = slug
+    return out
+
+
+def aggregate_heatmap(rows: list):
+    """Aggregate flat rows into the heatmap grid.
+
+    Returns (components, targets, cells, component_totals).
+
+    components       : list[str] in display order. Attention-first by fail-rate,
+                       then clean alpha. Unattributed rows (component == '-')
+                       are NOT included — they belong to the trailing
+                       unattributed section, not the heatmap.
+    targets          : list of (pg, family, arch) tuples, sorted lexicographically.
+                       Tuple keys are kept tuple internally; rendering converts.
+    cells            : dict { (component, (pg, family, arch)) -> {
+                           'tests': int, 'failed': int,
+                           'has_issue': bool, 'present': True
+                       } }
+                       A pair absent from this dict means no row exists for
+                       that combination (rendered as an 'empty' cell).
+    component_totals : dict { component -> {
+                           'tests': int, 'failed': int, 'has_issue': bool,
+                           'has_attention': bool, 'fail_rate': float
+                       } }
+    """
+    cells = {}
+    components_seen = []
+    components_set = set()
+    targets_set = set()
+
+    for r in rows:
+        comp = r["component"]
+        if comp == UNATTRIBUTED_COMPONENT:
+            continue
+        target = (r["pg"], r["family"], r["arch"])
+        targets_set.add(target)
+        if comp not in components_set:
+            components_set.add(comp)
+            components_seen.append(comp)
+        key = (comp, target)
+        cell = cells.get(key)
+        if cell is None:
+            cell = {"tests": 0, "failed": 0, "has_issue": False, "present": True}
+            cells[key] = cell
+        cell["tests"] += r["tests"]
+        cell["failed"] += r["failed"]
+        if r["status"] in _ISSUE_STATUSES:
+            cell["has_issue"] = True
+
+    component_totals = {}
+    for c in components_seen:
+        tests = 0
+        failed = 0
+        has_issue = False
+        for tg in targets_set:
+            cell = cells.get((c, tg))
+            if cell is None:
+                continue
+            tests += cell["tests"]
+            failed += cell["failed"]
+            if cell["has_issue"]:
+                has_issue = True
+        rate = (failed / tests) if tests > 0 else 0.0
+        component_totals[c] = {
+            "tests": tests,
+            "failed": failed,
+            "has_issue": has_issue,
+            "has_attention": (failed > 0) or has_issue,
+            "fail_rate": rate,
+        }
+
+    def comp_key(c):
+        ct = component_totals[c]
+        return (
+            0 if ct["has_attention"] else 1,
+            -ct["fail_rate"],
+            c,
+        )
+
+    components = sorted(components_seen, key=comp_key)
+    targets = sorted(targets_set)
+    return components, targets, cells, component_totals
+
+
+def _compute_totals(rows: list) -> dict:
+    """Aggregate the run-level numbers shown in the summary cards."""
+    return {
+        "total_tests": sum(r["tests"] for r in rows),
+        "total_passed": sum(r["passed"] for r in rows),
+        "total_failed": sum(r["failed"] for r in rows),
+        "total_skipped": sum(r["skipped"] for r in rows),
+        "total_time": sum(r["time"] for r in rows),
+        # Report-data problems are counted separately so a run with missing/
+        # broken reports but no test failures does not look all-green.
+        "report_issues": sum(1 for r in rows if r["status"] in _ISSUE_STATUSES),
+    }
+
+
+def _sort_rows(rows: list) -> list:
+    """Attention rows (failures, missing/broken reports) first, then by
+    pg/family/arch/component/container."""
     def sort_key(r):
         return (0 if r["status"] in _ATTENTION_STATUSES else 1,
                 r["pg"], r["family"], r["arch"], r["component"], r["container"])
-    rows = sorted(rows, key=sort_key)
+    return sorted(rows, key=sort_key)
 
-    css = """
+
+def _sel(ctx: dict, key: str, fallback: str = "—") -> str:
+    v = ctx.get(key)
+    return _esc(v) if v else fallback
+
+
+def _render_css() -> str:
+    return """
       body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif; margin: 20px; background:#f5f5f5; }
       .header { background: linear-gradient(135deg,#667eea,#764ba2); color:#fff; padding:24px; border-radius:8px; }
       .header h1 { margin:0 0 8px 0; }
       .context { font-size:13px; opacity:.95; line-height:1.6; }
       .banner { background:#fff8e1; border:1px solid #f0d98c; color:#7a5b00; padding:12px 16px; border-radius:8px; margin:16px 0; font-size:14px; }
+      .banner.banner-issue { background:#fde68a; border-color:#d97706; color:#7c2d12; }
+      .banner a { color:inherit; text-decoration:underline; }
       .summary { display:grid; grid-template-columns:repeat(auto-fit,minmax(160px,1fr)); gap:12px; margin:16px 0; }
       .card { background:#fff; padding:16px; border-radius:8px; box-shadow:0 2px 4px rgba(0,0,0,.1); }
       .card h3 { margin:0 0 6px 0; font-size:12px; color:#666; text-transform:uppercase; }
@@ -353,9 +491,13 @@ def render_html(rows: list, ctx: dict) -> str:
       .card.total .value{color:#667eea;} .card.passed .value{color:#10b981;}
       .card.failed .value{color:#ef4444;} .card.skipped .value{color:#f59e0b;}
       .card.issues .value{color:#b45309;}
-      .controls { margin:12px 0; font-size:14px; }
+      .controls { margin:12px 0; font-size:14px; display:flex; gap:12px; align-items:center; flex-wrap:wrap; }
+      .controls button { padding:6px 10px; border:1px solid #d9dee7; border-radius:6px; background:#fff; cursor:pointer; font-size:13px; }
+      .controls button:hover { background:#f8f9fa; }
       table { width:100%; border-collapse:collapse; background:#fff; border-radius:8px; overflow:hidden; box-shadow:0 2px 4px rgba(0,0,0,.1); }
       th { background:#f8f9fa; padding:10px; text-align:left; border-bottom:2px solid #dee2e6; font-size:13px; }
+      th button { background:transparent; border:0; font:inherit; font-weight:600; color:#344054; cursor:pointer; padding:0; }
+      th button:hover { color:#667eea; }
       td { padding:10px; border-bottom:1px solid #dee2e6; font-size:13px; }
       tr:hover { background:#f8f9fa; }
       .badge { padding:3px 10px; border-radius:12px; font-size:11px; font-weight:600; text-transform:uppercase; }
@@ -364,93 +506,467 @@ def render_html(rows: list, ctx: dict) -> str:
       .mono { font-family:monospace; }
       a.report-link { color:#667eea; text-decoration:none; } a.report-link:hover{text-decoration:underline;}
       .footer { margin-top:20px; text-align:center; color:#666; font-size:12px; }
+      /* Heatmap */
+      .heat-wrap { overflow:auto; border:1px solid #d9dee7; border-radius:8px; background:#fff; margin:16px 0; }
+      .heat { display:grid; grid-template-columns: 220px repeat(var(--cols), minmax(92px, 1fr)); gap:1px; background:#d9dee7; min-width:980px; }
+      .heat .h { background:#fff; padding:9px 10px; font-size:13px; min-height:42px; }
+      .heat .head { font-weight:700; background:#eef2f7; text-align:center; }
+      .heat .head span { display:block; font-weight:500; color:#667085; font-size:12px; }
+      .heat .sticky-left { position:sticky; left:0; z-index:2; }
+      .heat .comp { text-align:left; cursor:pointer; color:#2447a8; border:0; background:#fff; font:inherit; font-weight:700; }
+      .heat .comp:hover { background:#f1f5ff; text-decoration:underline; }
+      .heat .cell { text-align:center; font-variant-numeric:tabular-nums; }
+      .heat .ok { background:#dff7e8; }
+      .heat .warn { background:#fff2cc; }
+      .heat .bad { background:#ffd8d5; }
+      .heat .severe { background:#fda29b; font-weight:800; }
+      .heat .issue { background:#fde68a; color:#7c2d12; }
+      .heat .empty { background:#f8fafc; color:#98a2b3; }
+      .heat .issue-marker { box-shadow: inset 0 0 0 2px #d97706; }
+      .heat .total { font-weight:700; background:#f8fafc; text-align:center; }
+      .heat .failtotal { color:#b42318; }
+      /* Component sections */
+      details.component { background:#fff; border:1px solid #d9dee7; border-radius:8px; margin:10px 0; overflow:hidden; box-shadow:0 2px 4px rgba(0,0,0,.05); }
+      details.component summary { cursor:pointer; padding:13px 15px; display:flex; gap:14px; align-items:center; flex-wrap:wrap; list-style:none; }
+      details.component summary::-webkit-details-marker { display:none; }
+      details.component summary::before { content:'\\25B6'; color:#667085; margin-right:8px; font-size:11px; }
+      details.component[open] summary::before { content:'\\25BC'; }
+      details.component summary .chip { border:1px solid #d9dee7; border-radius:999px; padding:2px 8px; color:#475467; font-size:12px; }
+      details.component summary .chip.fail { background:#fee4e2; color:#b42318; border-color:#fecdca; }
+      details.component summary .chip.issue { background:#fde68a; color:#7c2d12; border-color:#d97706; }
+      details.component[open] summary { background:#f8fafc; border-bottom:1px solid #d9dee7; }
+      details.component .table-wrap { overflow:auto; }
+      details.component table { box-shadow:none; border-radius:0; }
+      /* Failures-only toggle: CSS-driven, does NOT mutate <details>.open state */
+      body.failures-only details.component tbody tr[data-fail="0"] { display:none; }
+      body.failures-only details.component:not([data-has-attention]) { display:none; }
     """
 
-    def _sel(key, fallback="—"):
-        v = ctx.get(key)
-        return _esc(v) if v else fallback
 
-    head = f"""<!DOCTYPE html><html><head><meta charset="utf-8"/>
-<title>PEP Regression Consolidated Report</title><style>{css}</style></head><body>
-<div class="header">
+def _render_header(ctx: dict) -> str:
+    return f"""<div class="header">
   <h1>PEP Regression Consolidated Report</h1>
   <div class="context">
     Run #{_esc(ctx.get('run_number'))} (attempt {_esc(ctx.get('run_attempt'))}) &middot;
     run_id {_esc(ctx.get('run_id'))} &middot;
     event {_esc(ctx.get('event_name'))} &middot;
     by {_esc(ctx.get('actor'))} &middot;
-    branch {_sel('ref')} &middot; sha {_sel('sha')} &middot;
+    branch {_sel(ctx, 'ref')} &middot; sha {_sel(ctx, 'sha')} &middot;
     {_esc(ctx.get('slice_count'))} matrix target(s)
   </div>
   <div class="context" style="margin-top:8px">
     <strong>Effective selection:</strong>
-    PG {_sel('pg_versions')} &middot; families {_sel('families')} &middot;
-    arches {_sel('arches')} &middot; components {_sel('components')} &middot;
-    repo {_sel('repo')} &middot; mode {_sel('execution_mode')}
+    PG {_sel(ctx, 'pg_versions')} &middot; families {_sel(ctx, 'families')} &middot;
+    arches {_sel(ctx, 'arches')} &middot; components {_sel(ctx, 'components')} &middot;
+    repo {_sel(ctx, 'repo')} &middot; mode {_sel(ctx, 'execution_mode')}
   </div>
-</div>
-<div class="banner">
+</div>"""
+
+
+def _render_banner() -> str:
+    return """<div class="banner">
   <strong>Note:</strong> A matrix target (runner) showing green in GitHub Actions
   reflects workflow completion, not whether every component test passed. Per-row
   PASS/FAILED/SKIPPED counts below are the source of truth for test outcomes.
-</div>
-<div class="summary">
-  <div class="card total"><h3>Total Tests</h3><div class="value">{total_tests}</div></div>
-  <div class="card passed"><h3>Passed</h3><div class="value">{total_passed}</div></div>
-  <div class="card failed"><h3>Failed</h3><div class="value">{total_failed}</div></div>
-  <div class="card skipped"><h3>Skipped</h3><div class="value">{total_skipped}</div></div>
-  <div class="card issues"><h3>Report Issues</h3><div class="value">{report_issues}</div></div>
-</div>
-<div class="controls">
-  <label><input type="checkbox" id="failuresOnly" onclick="toggleFailures()"> Show attention rows only (failures, missing &amp; broken reports)</label>
-</div>
-<table id="results"><thead><tr>
-  <th>PG</th><th>Family</th><th>Arch</th><th>Component</th><th>Container</th>
-  <th>Status</th><th>Tests</th><th>Passed</th><th>Failed</th><th>Skipped</th>
-  <th>Time (s)</th><th>Report</th>
-</tr></thead><tbody>
-"""
+</div>"""
 
-    body_rows = []
+
+def _render_summary_cards(totals: dict) -> str:
+    return f"""<div class="summary">
+  <div class="card total"><h3>Total Tests</h3><div class="value">{totals['total_tests']}</div></div>
+  <div class="card passed"><h3>Passed</h3><div class="value">{totals['total_passed']}</div></div>
+  <div class="card failed"><h3>Failed</h3><div class="value">{totals['total_failed']}</div></div>
+  <div class="card skipped"><h3>Skipped</h3><div class="value">{totals['total_skipped']}</div></div>
+  <div class="card issues"><h3>Report Issues</h3><div class="value">{totals['report_issues']}</div></div>
+</div>"""
+
+
+def _band(tests: int, failed: int, has_issue: bool, present: bool) -> str:
+    """Return the CSS class for the rate band of a heatmap cell.
+
+    Bands (failure rate = failed/tests):
+      no row             -> 'empty'
+      tests==0 + issue   -> 'issue'   (NO CONTAINERS / NO REPORTS / etc.)
+      tests==0 (no data) -> 'empty'
+      failed == 0        -> 'ok'
+      0 < rate <= 5%     -> 'warn'
+      5% < rate <= 15%   -> 'bad'
+      rate > 15%         -> 'severe'
+
+    Refinement 4: if a cell has BOTH real tests AND an issue, this returns the
+    rate band only — the renderer is responsible for overlaying an 'issue-marker'
+    class so the report problem stays visible behind the band color.
+    """
+    if not present:
+        return "empty"
+    if tests == 0:
+        return "issue" if has_issue else "empty"
+    if failed == 0:
+        return "ok"
+    rate = failed / tests
+    if rate <= 0.05:
+        return "warn"
+    if rate <= 0.15:
+        return "bad"
+    return "severe"
+
+
+def target_containers(rows: list) -> dict:
+    """Map each heatmap target (pg, family, arch) to the sorted list of
+    distinct containers that roll up into it. A single column aggregates many
+    containers (e.g. a deb/arm64 target spans debian + ubuntu images), so this
+    drives the header tooltip that tells the reader exactly which containers a
+    column covers. Unattributed rows (component == '-') are excluded — they are
+    not part of the heatmap."""
+    out = {}
     for r in rows:
+        if r["component"] == UNATTRIBUTED_COMPONENT:
+            continue
+        target = (r["pg"], r["family"], r["arch"])
+        out.setdefault(target, set()).add(r["container"])
+    return {k: sorted(v) for k, v in out.items()}
+
+
+def _render_heatmap(components: list, targets: list,
+                    cells: dict, component_totals: dict,
+                    slugs: dict, tgt_containers: dict = None) -> str:
+    if not components or not targets:
+        return ""
+    tgt_containers = tgt_containers or {}
+    # +2 columns for the two right-edge totals (Failed total, Tests total).
+    n_cols = len(targets) + 2
+    parts = ['<div class="heat-wrap">',
+             f'<div class="heat" style="--cols:{n_cols}">']
+    # Header row
+    parts.append('<div class="h head sticky-left">Component</div>')
+    for (pg, family, arch) in targets:
+        conts = tgt_containers.get((pg, family, arch), [])
+        if conts:
+            n = len(conts)
+            plural = "s" if n != 1 else ""
+            head_tip = (
+                f"PG{pg} {family} {arch} — {n} container{plural}: "
+                + ", ".join(conts)
+            )
+        else:
+            head_tip = f"PG{pg} {family} {arch}"
+        parts.append(
+            f'<div class="h head" title="{_esc(head_tip)}">'
+            f'PG{_esc(pg)}<span>{_esc(family)} {_esc(arch)}</span></div>'
+        )
+    parts.append('<div class="h head">Failed<span>total</span></div>')
+    parts.append('<div class="h head">Tests<span>total</span></div>')
+    # Component rows
+    for c in components:
+        slug = slugs[c]
+        # Component label is a button that opens + scrolls to the section.
+        # Both the on-screen text and the onclick arg are individually escaped.
+        parts.append(
+            f'<button class="h comp sticky-left" '
+            f'onclick="openComponent({_esc(slug)!r})">{_esc(c)}</button>'
+        )
+        for tg in targets:
+            cell = cells.get((c, tg))
+            present = cell is not None
+            tests = cell["tests"] if present else 0
+            failed = cell["failed"] if present else 0
+            has_issue = cell["has_issue"] if present else False
+            band = _band(tests, failed, has_issue, present)
+            classes = ["h", "cell", band]
+            issue_overlay = (tests > 0 and has_issue)
+            if issue_overlay:
+                classes.append("issue-marker")
+            (pg, family, arch) = tg
+            tooltip_bits = [f"{c} PG{pg} {family} {arch}:",
+                            f"{failed} failed of {tests}"]
+            if has_issue:
+                tooltip_bits.append("(report issue present)")
+            tooltip = " ".join(tooltip_bits)
+            if present:
+                content = f"{failed}/{tests}"
+                if issue_overlay:
+                    content = "&#9888; " + content
+            else:
+                content = "&mdash;"
+            parts.append(
+                f'<div class="{" ".join(classes)}" title="{_esc(tooltip)}">'
+                f'{content}</div>'
+            )
+        ct = component_totals[c]
+        parts.append(f'<div class="h total failtotal">{ct["failed"]}</div>')
+        parts.append(f'<div class="h total">{ct["tests"]}</div>')
+    parts.append('</div></div>')
+    return "\n".join(parts)
+
+
+def _render_unattributed_banner(rows: list, slug: str = UNATTRIBUTED_SLUG) -> str:
+    """Banner above the heatmap when any rows have component == '-' (NO REPORTS
+    rows that can't be aggregated under a real component).
+
+    The slug for the bucket section must be passed in from the run-wide slug map
+    so the banner link resolves to the actual section anchor even when a real
+    component normalizes to the reserved "unattributed" slug and the bucket gets
+    bumped to "unattributed-2" by _assign_unique_slugs.
+    """
+    n = sum(1 for r in rows if r["component"] == UNATTRIBUTED_COMPONENT)
+    if n == 0:
+        return ""
+    plural = "s" if n != 1 else ""
+    return (
+        f'<div class="banner banner-issue">'
+        f'<strong>&#9888;</strong> {n} matrix target{plural} produced no '
+        f'reports &mdash; see the '
+        f'<a href="#comp-{_esc(slug)}">unattributed section</a> '
+        f'below for details.</div>'
+    )
+
+
+def _render_controls() -> str:
+    return """<div class="controls">
+  <label><input type="checkbox" id="failuresOnly" onclick="toggleFailures()"> Show attention rows only (failures, missing &amp; broken reports)</label>
+  <button type="button" onclick="openFailing()">Open failing components</button>
+  <button type="button" onclick="expandAll()">Expand all</button>
+  <button type="button" onclick="collapseAll()">Collapse all</button>
+</div>"""
+
+
+def _render_component_section(name: str, slug: str, rows_for_comp: list) -> str:
+    """Render one <details> block for a component (or the unattributed bucket).
+
+    All visible text is escaped via _esc(). Per-row data-* attributes also go
+    through _esc() so a hostile component / container value can't break the
+    surrounding HTML.
+    """
+    row_count = len(rows_for_comp)
+    tests = sum(r["tests"] for r in rows_for_comp)
+    failed = sum(r["failed"] for r in rows_for_comp)
+    skipped = sum(r["skipped"] for r in rows_for_comp)
+    has_issue = any(r["status"] in _ISSUE_STATUSES for r in rows_for_comp)
+    has_attention = any(r["status"] in _ATTENTION_STATUSES for r in rows_for_comp)
+
+    # Sort within the section: attention rows first, then pg/family/arch/container.
+    section_rows = sorted(
+        rows_for_comp,
+        key=lambda r: (
+            0 if r["status"] in _ATTENTION_STATUSES else 1,
+            r["pg"], r["family"], r["arch"], r["container"],
+        ),
+    )
+
+    chips = [
+        f'<span class="chip">{row_count} rows</span>',
+        f'<span class="chip">{tests} tests</span>',
+    ]
+    if failed > 0:
+        chips.append(f'<span class="chip fail">{failed} failed</span>')
+    if skipped > 0:
+        chips.append(f'<span class="chip">{skipped} skipped</span>')
+    if tests > 0:
+        pct = (failed / tests) * 100.0
+        chips.append(f'<span class="chip">{pct:.1f}% fail</span>')
+    if has_issue and failed == 0:
+        chips.append('<span class="chip issue">&#9888; report issue</span>')
+
+    open_attr = " open" if has_attention else ""
+    attention_attr = ' data-has-attention="1"' if has_attention else ""
+    # Unattributed bucket displays a friendly label instead of the bare '-' marker.
+    display_name = "(unattributed)" if name == UNATTRIBUTED_COMPONENT else name
+
+    parts = [
+        f'<details class="component" id="comp-{_esc(slug)}"{open_attr}{attention_attr}>',
+        '<summary>',
+        f'<strong>{_esc(display_name)}</strong>',
+    ]
+    parts.extend(chips)
+    parts.append('</summary>')
+    parts.append('<div class="table-wrap"><table>')
+    parts.append(
+        '<thead><tr>'
+        '<th><button onclick="sortGroup(this,\'pg\')">PG</button></th>'
+        '<th><button onclick="sortGroup(this,\'family\')">Family</button></th>'
+        '<th><button onclick="sortGroup(this,\'arch\')">Arch</button></th>'
+        '<th><button onclick="sortGroup(this,\'container\')">Container</button></th>'
+        '<th><button onclick="sortGroup(this,\'status\')">Status</button></th>'
+        '<th>Tests</th><th>Passed</th><th>Failed</th><th>Skipped</th>'
+        '<th>Time (s)</th><th>Report</th>'
+        '</tr></thead><tbody>'
+    )
+    for r in section_rows:
         is_fail = "1" if r["status"] in _ATTENTION_STATUSES else "0"
         if r["report_href"]:
-            link = f'<a class="report-link" href="{_esc(r["report_href"])}">View &rarr;</a>'
+            link = (f'<a class="report-link" href="{_esc(r["report_href"])}">'
+                    f'View &rarr;</a>')
         else:
             link = "&mdash;"
-        # No-data statuses (no reports / no testcases / no containers) show a
-        # dash in the numeric columns instead of a misleading 0.
         if r["status"] in _NO_DATA_STATUSES:
             tcell = pcell = fcell = scell = timecell = "&mdash;"
         else:
             tcell, pcell = str(r["tests"]), str(r["passed"])
             fcell, scell = str(r["failed"]), str(r["skipped"])
             timecell = f"{r['time']:.2f}"
-        body_rows.append(f"""<tr data-fail="{is_fail}">
-  <td>{_esc(r['pg'])}</td><td>{_esc(r['family'])}</td><td>{_esc(r['arch'])}</td>
-  <td>{_esc(r['component'])}</td><td class="mono">{_esc(r['container'])}</td>
-  <td><span class="badge {_esc(r['status_class'])}">{_esc(r['status'])}</span></td>
-  <td class="mono">{tcell}</td><td class="mono">{pcell}</td>
-  <td class="mono">{fcell}</td><td class="mono">{scell}</td>
-  <td class="mono">{timecell}</td><td>{link}</td>
-</tr>""")
+        parts.append(
+            f'<tr data-fail="{is_fail}" '
+            f'data-pg="{_esc(r["pg"])}" '
+            f'data-family="{_esc(r["family"])}" '
+            f'data-arch="{_esc(r["arch"])}" '
+            f'data-container="{_esc(r["container"])}" '
+            f'data-status="{_esc(r["status"])}">'
+            f'<td>{_esc(r["pg"])}</td>'
+            f'<td>{_esc(r["family"])}</td>'
+            f'<td>{_esc(r["arch"])}</td>'
+            f'<td class="mono">{_esc(r["container"])}</td>'
+            f'<td><span class="badge {_esc(r["status_class"])}">'
+            f'{_esc(r["status"])}</span></td>'
+            f'<td class="mono">{tcell}</td>'
+            f'<td class="mono">{pcell}</td>'
+            f'<td class="mono">{fcell}</td>'
+            f'<td class="mono">{scell}</td>'
+            f'<td class="mono">{timecell}</td>'
+            f'<td>{link}</td>'
+            f'</tr>'
+        )
+    parts.append('</tbody></table></div>')
+    parts.append('</details>')
+    return "\n".join(parts)
 
-    tail = f"""</tbody></table>
-<div class="footer">
+
+def _render_component_sections(rows: list, components: list, slugs: dict) -> str:
+    """Render all per-component sections in the given component order, plus
+    a trailing unattributed section if any rows have component == '-'.
+
+    The slugs dict should already have a unique slug for UNATTRIBUTED_COMPONENT
+    if the caller wants a real component named "unattributed" not to collide
+    with the bucket. _assign_unique_slugs handles the collision when called
+    with both entries.
+    """
+    by_comp = {}
+    unattributed_rows = []
+    for r in rows:
+        if r["component"] == UNATTRIBUTED_COMPONENT:
+            unattributed_rows.append(r)
+        else:
+            by_comp.setdefault(r["component"], []).append(r)
+
+    parts = []
+    for c in components:
+        parts.append(_render_component_section(c, slugs[c], by_comp.get(c, [])))
+    if unattributed_rows:
+        un_slug = slugs.get(UNATTRIBUTED_COMPONENT, UNATTRIBUTED_SLUG)
+        parts.append(_render_component_section(
+            UNATTRIBUTED_COMPONENT, un_slug, unattributed_rows
+        ))
+    return "\n".join(parts)
+
+
+def _render_footer(rows: list, total_time: float) -> str:
+    return f"""<div class="footer">
   {len(rows)} row(s) &middot; total execution time {total_time:.2f}s across all matrix targets.
-</div>
-<script>
-function toggleFailures() {{
-  var on = document.getElementById('failuresOnly').checked;
-  var trs = document.querySelectorAll('#results tbody tr');
-  for (var i=0;i<trs.length;i++) {{
-    trs[i].style.display = (on && trs[i].getAttribute('data-fail') !== '1') ? 'none' : '';
-  }}
-}}
-</script>
-</body></html>"""
+</div>"""
 
-    return head + "\n".join(body_rows) + tail
+
+def _render_scripts() -> str:
+    # ONE <script> block. Preserves the test invariant
+    # `out.count("<script") == 1`. Adding a second block would break it.
+    #
+    # toggleFailures uses a body class (CSS-driven hiding) instead of
+    # mutating details.open — refinement 3 of v2.3. The user's open/closed
+    # state survives flipping the toggle.
+    return """<script>
+const STATUS_RANK = {
+  'FAILED':0,'PARSE ERROR':1,'NO REPORTS':2,'NO TESTCASES':3,
+  'NO CONTAINERS SELECTED':4,'SKIPPED':5,'PASSED':6
+};
+
+function toggleFailures() {
+  const on = document.getElementById('failuresOnly').checked;
+  document.body.classList.toggle('failures-only', on);
+}
+
+function sortGroup(btn, key) {
+  const table = btn.closest('table');
+  const tbody = table.querySelector('tbody');
+  const rows = Array.from(tbody.querySelectorAll('tr'));
+  const dir = btn.dataset.dir === 'asc' ? 'desc' : 'asc';
+  btn.dataset.dir = dir;
+  table.querySelectorAll('thead button').forEach(b => {
+    if (b !== btn) {
+      b.dataset.dir = '';
+      b.textContent = b.textContent.replace(/[\\u25B2\\u25BC]\\s*$/, '');
+    }
+  });
+  btn.textContent = btn.textContent.replace(/[\\u25B2\\u25BC]\\s*$/, '') +
+                    (dir === 'asc' ? ' \\u25B2' : ' \\u25BC');
+  const get = key === 'status'
+    ? r => (r.dataset.status in STATUS_RANK ? STATUS_RANK[r.dataset.status] : 99)
+    : r => r.dataset[key] || '';
+  rows.sort((a, b) => {
+    const va = get(a), vb = get(b);
+    if (typeof va === 'number' && typeof vb === 'number') {
+      return dir === 'asc' ? va - vb : vb - va;
+    }
+    return dir === 'asc'
+      ? String(va).localeCompare(String(vb))
+      : String(vb).localeCompare(String(va));
+  });
+  rows.forEach(r => tbody.appendChild(r));
+}
+
+function openComponent(slug) {
+  const d = document.getElementById('comp-' + slug);
+  if (!d) return;
+  d.open = true;
+  d.scrollIntoView({behavior:'smooth', block:'start'});
+}
+
+function expandAll() {
+  document.querySelectorAll('details.component').forEach(d => d.open = true);
+}
+
+function collapseAll() {
+  document.querySelectorAll('details.component').forEach(d => d.open = false);
+}
+
+function openFailing() {
+  document.querySelectorAll('details.component').forEach(d => {
+    d.open = d.hasAttribute('data-has-attention');
+  });
+}
+</script>"""
+
+
+def render_html(rows: list, ctx: dict) -> str:
+    rows = _sort_rows(rows)
+    totals = _compute_totals(rows)
+    components, targets, cells, ctotals = aggregate_heatmap(rows)
+    tgt_containers = target_containers(rows)
+    has_unattributed = any(
+        r["component"] == UNATTRIBUTED_COMPONENT for r in rows
+    )
+    # Slug assignment is run-wide so a real component named "unattributed"
+    # cannot collide with the bucket's reserved slug.
+    slug_input = list(components)
+    if has_unattributed:
+        slug_input.append(UNATTRIBUTED_COMPONENT)
+    slugs = _assign_unique_slugs(slug_input)
+
+    return (
+        '<!DOCTYPE html><html><head><meta charset="utf-8"/>'
+        '<title>PEP Regression Consolidated Report</title>'
+        f'<style>{_render_css()}</style></head><body>\n'
+        + _render_header(ctx) + "\n"
+        + _render_banner() + "\n"
+        + _render_summary_cards(totals) + "\n"
+        + _render_unattributed_banner(
+            rows, slugs.get(UNATTRIBUTED_COMPONENT, UNATTRIBUTED_SLUG)
+        ) + "\n"
+        + _render_heatmap(components, targets, cells, ctotals, slugs,
+                          tgt_containers) + "\n"
+        + _render_controls() + "\n"
+        + _render_component_sections(rows, components, slugs) + "\n"
+        + _render_footer(rows, totals["total_time"]) + "\n"
+        + _render_scripts()
+        + "\n</body></html>"
+    )
 
 
 def _run_context(aggregated_dir: Path, rows: list) -> dict:

@@ -1,4 +1,5 @@
 import importlib.util
+import re
 from pathlib import Path
 
 # Import the module under test by path (it lives next to this test file).
@@ -346,6 +347,617 @@ def test_render_effective_selection_header(tmp_path):
     for token in ["16, 17, 18", "deb, rpm", "amd64, arm64", "server",
                   "release", "full", "abc1234"]:
         assert token in out
+
+
+# ---- v2.3: component slug helpers ------------------------------------------
+
+
+def test_component_slug_basic():
+    assert ccr._component_slug("ace") == "ace"
+    assert ccr._component_slug("pg_stat_monitor") == "pg_stat_monitor"
+    assert ccr._component_slug("failover-spock") == "failover-spock"
+
+
+def test_component_slug_normalizes_special_chars():
+    # Spaces, dots, mixed case, punctuation all collapse to '-'; trailing
+    # dashes are trimmed.
+    assert ccr._component_slug("My Cool Comp!") == "my-cool-comp"
+    assert ccr._component_slug("foo.bar") == "foo-bar"
+    assert ccr._component_slug("FOO/BAR") == "foo-bar"
+    assert ccr._component_slug("  weird   ") == "weird"
+
+
+def test_component_slug_unattributed_is_reserved():
+    # The '-' component marker (NO REPORTS rows) gets the reserved slug
+    # so the trailing unattributed section has a stable anchor.
+    assert ccr._component_slug(ccr.UNATTRIBUTED_COMPONENT) == ccr.UNATTRIBUTED_SLUG
+    assert ccr.UNATTRIBUTED_SLUG == "unattributed"
+
+
+def test_component_slug_empty_falls_back_to_unnamed():
+    assert ccr._component_slug("!!!") == "unnamed"
+    assert ccr._component_slug("") == "unnamed"
+
+
+def test_assign_unique_slugs_first_claimant_wins():
+    # Iteration order is preserved; the first name to normalize to a given
+    # slug keeps the base; later collisions get '-2', '-3'.
+    m = ccr._assign_unique_slugs(["foo", "Foo", "foo-bar", "foo.bar", "FOO!"])
+    assert m == {
+        "foo": "foo",
+        "Foo": "foo-2",
+        "foo-bar": "foo-bar",
+        "foo.bar": "foo-bar-2",
+        "FOO!": "foo-3",
+    }
+
+
+def test_assign_unique_slugs_handles_unattributed():
+    m = ccr._assign_unique_slugs(["server", "-", "ace"])
+    assert m["-"] == "unattributed"
+    # The marker does not collide with a real component named 'unattributed'.
+    m2 = ccr._assign_unique_slugs(["unattributed", "-"])
+    assert m2["unattributed"] == "unattributed"
+    assert m2["-"] == "unattributed-2"
+
+
+# ---- v2.3: heatmap aggregation ---------------------------------------------
+
+
+def _mkrow(pg, family, arch, component, container, status,
+           tests=0, passed=0, failed=0, skipped=0):
+    return {
+        "pg": pg, "family": family, "arch": arch, "runner_label": "r",
+        "component": component, "container": container,
+        "tests": tests, "passed": passed, "failed": failed, "skipped": skipped,
+        "time": 1.0, "status": status,
+        "status_class": status.lower().replace(" ", ""),
+        "report_href": "",
+    }
+
+
+def test_aggregate_heatmap_uses_tuple_target_keys():
+    rows = [_mkrow("17", "rpm", "arm64", "ace", "c1", "PASSED", tests=10, passed=10)]
+    components, targets, cells, totals = ccr.aggregate_heatmap(rows)
+    # Internal target keys are tuples, NEVER strings — confirms refinement #1.
+    assert targets == [("17", "rpm", "arm64")]
+    assert ("ace", ("17", "rpm", "arm64")) in cells
+
+
+def test_aggregate_heatmap_sums_per_component_target():
+    # Two containers under one (component, target) -> one cell, summed.
+    rows = [
+        _mkrow("17", "rpm", "arm64", "ace", "auto-alma9-arm", "PASSED",
+               tests=10, passed=10),
+        _mkrow("17", "rpm", "arm64", "ace", "auto-oel9-arm", "FAILED",
+               tests=10, passed=9, failed=1),
+    ]
+    _, _, cells, totals = ccr.aggregate_heatmap(rows)
+    cell = cells[("ace", ("17", "rpm", "arm64"))]
+    assert cell["tests"] == 20
+    assert cell["failed"] == 1
+    assert cell["has_issue"] is False
+    assert totals["ace"]["tests"] == 20
+    assert totals["ace"]["failed"] == 1
+    assert totals["ace"]["has_attention"] is True
+
+
+def test_aggregate_heatmap_marks_issue_cells():
+    rows = [
+        _mkrow("17", "rpm", "amd64", "server", "auto-alma9-amd",
+               "NO CONTAINERS SELECTED"),
+        _mkrow("17", "deb", "arm64", "server", "auto-debian12-arm", "PASSED",
+               tests=50, passed=50),
+    ]
+    _, _, cells, totals = ccr.aggregate_heatmap(rows)
+    # The NO CONTAINERS SELECTED row has zero counts but is_issue must propagate.
+    issue_cell = cells[("server", ("17", "rpm", "amd64"))]
+    assert issue_cell["tests"] == 0
+    assert issue_cell["has_issue"] is True
+    ok_cell = cells[("server", ("17", "deb", "arm64"))]
+    assert ok_cell["has_issue"] is False
+    # Component-level has_issue reflects ANY issue cell.
+    assert totals["server"]["has_issue"] is True
+    assert totals["server"]["has_attention"] is True
+
+
+def test_aggregate_heatmap_missing_cell_absent():
+    # One component runs only on rpm; deb targets exist for other components.
+    # The (rpm-only-component, deb-target) cell must NOT be in `cells`.
+    rows = [
+        _mkrow("17", "rpm", "arm64", "snowflake", "auto-alma9-arm", "PASSED",
+               tests=25, passed=25),
+        _mkrow("17", "deb", "arm64", "server", "auto-debian12-arm", "PASSED",
+               tests=50, passed=50),
+    ]
+    components, targets, cells, _ = ccr.aggregate_heatmap(rows)
+    # Both (rpm, arm64) and (deb, arm64) appear as columns ...
+    assert ("17", "rpm", "arm64") in targets
+    assert ("17", "deb", "arm64") in targets
+    # ... but snowflake has no row under (deb, arm64) -> cell is absent.
+    assert ("snowflake", ("17", "deb", "arm64")) not in cells
+
+
+def test_aggregate_heatmap_excludes_unattributed():
+    # A NO REPORTS row (component == '-') must NOT show up as a heatmap row.
+    rows = [
+        _mkrow("17", "rpm", "amd64", "-", "-", "NO REPORTS"),
+        _mkrow("17", "deb", "arm64", "server", "c1", "PASSED",
+               tests=1, passed=1),
+    ]
+    components, _, _, _ = ccr.aggregate_heatmap(rows)
+    assert "-" not in components
+    assert components == ["server"]
+
+
+def test_aggregate_heatmap_component_order_attention_first():
+    rows = [
+        _mkrow("17", "rpm", "arm64", "clean_b", "c1", "PASSED",
+               tests=10, passed=10),
+        _mkrow("17", "rpm", "arm64", "clean_a", "c1", "PASSED",
+               tests=10, passed=10),
+        _mkrow("17", "rpm", "arm64", "fail_low", "c1", "FAILED",
+               tests=100, passed=99, failed=1),    # 1%
+        _mkrow("17", "rpm", "arm64", "fail_high", "c1", "FAILED",
+               tests=10, passed=8, failed=2),     # 20%
+    ]
+    components, _, _, _ = ccr.aggregate_heatmap(rows)
+    # Failing components come first, ordered by fail_rate descending.
+    # Clean components come last, alpha.
+    assert components == ["fail_high", "fail_low", "clean_a", "clean_b"]
+
+
+def test_aggregate_heatmap_targets_sorted_lexicographically():
+    rows = [
+        _mkrow("17", "rpm", "arm64", "server", "c1", "PASSED", tests=1, passed=1),
+        _mkrow("16", "deb", "amd64", "server", "c1", "PASSED", tests=1, passed=1),
+        _mkrow("17", "deb", "arm64", "server", "c1", "PASSED", tests=1, passed=1),
+        _mkrow("16", "rpm", "amd64", "server", "c1", "PASSED", tests=1, passed=1),
+    ]
+    _, targets, _, _ = ccr.aggregate_heatmap(rows)
+    assert targets == [
+        ("16", "deb", "amd64"),
+        ("16", "rpm", "amd64"),
+        ("17", "deb", "arm64"),
+        ("17", "rpm", "arm64"),
+    ]
+
+
+# ---- v2.3: band classification + heatmap renderer --------------------------
+
+
+def test_band_no_row_present():
+    assert ccr._band(0, 0, False, present=False) == "empty"
+    assert ccr._band(0, 0, True, present=False) == "empty"
+
+
+def test_band_zero_tests_with_issue_is_issue():
+    # NO CONTAINERS SELECTED / NO REPORTS surface as 'issue' even with no tests.
+    assert ccr._band(0, 0, True, present=True) == "issue"
+
+
+def test_band_zero_tests_without_issue_is_empty():
+    assert ccr._band(0, 0, False, present=True) == "empty"
+
+
+def test_band_thresholds():
+    # ok / warn (0–5%) / bad (5–15%) / severe (>15%)
+    assert ccr._band(100, 0, False, True) == "ok"
+    assert ccr._band(100, 1, False, True) == "warn"        # 1%
+    assert ccr._band(100, 5, False, True) == "warn"        # boundary, ≤5%
+    assert ccr._band(100, 6, False, True) == "bad"         # 6%
+    assert ccr._band(100, 15, False, True) == "bad"        # boundary, ≤15%
+    assert ccr._band(100, 16, False, True) == "severe"     # 16%
+    assert ccr._band(10, 5, False, True) == "severe"       # 50%
+
+
+def test_band_real_tests_with_issue_keeps_rate_band():
+    # Refinement 4 contract: when there are real tests AND an issue, the
+    # band still reflects the rate. The renderer adds an extra issue-marker
+    # class on top — not _band()'s job.
+    assert ccr._band(100, 0, True, True) == "ok"
+    assert ccr._band(100, 2, True, True) == "warn"
+
+
+def test_render_heatmap_present_and_label_buttons():
+    rows = [
+        _mkrow("17", "rpm", "arm64", "ace", "auto-alma9-arm", "FAILED",
+               tests=10, passed=8, failed=2),
+        _mkrow("17", "rpm", "arm64", "server", "auto-alma9-arm", "PASSED",
+               tests=100, passed=100),
+    ]
+    components, targets, cells, totals = ccr.aggregate_heatmap(rows)
+    slugs = ccr._assign_unique_slugs(components)
+    out = ccr._render_heatmap(components, targets, cells, totals, slugs)
+    assert '<div class="heat"' in out
+    # CSS grid column count = N targets + 2 totals cols.
+    assert 'style="--cols:3"' in out          # 1 target + 2 totals
+    # Each component label is a button calling openComponent('<slug>').
+    assert "openComponent('ace')" in out
+    assert "openComponent('server')" in out
+    # Cell content is failed/total.
+    assert ">2/10<" in out
+    assert ">0/100<" in out
+
+
+def test_render_heatmap_issue_marker_overlay():
+    # Refinement 4: a cell with tests > 0 AND has_issue must show both the
+    # rate band AND the issue-marker class + glyph.
+    rows = [
+        _mkrow("17", "rpm", "amd64", "server", "auto-alma9-amd", "PASSED",
+               tests=10, passed=10),
+        _mkrow("17", "rpm", "amd64", "server", ccr.NO_CONTAINERS_LABEL,
+               "NO CONTAINERS SELECTED"),
+    ]
+    components, targets, cells, totals = ccr.aggregate_heatmap(rows)
+    slugs = ccr._assign_unique_slugs(components)
+    out = ccr._render_heatmap(components, targets, cells, totals, slugs)
+    # The combined cell has 10 tests, 0 failed, has_issue=True.
+    # Band -> 'ok'. Plus an explicit issue-marker class. Plus the &#9888; glyph.
+    assert "issue-marker" in out
+    assert "ok issue-marker" in out
+    assert "&#9888;" in out
+
+
+def test_render_heatmap_empty_cell_for_missing_combination():
+    # snowflake only runs on rpm. The deb column exists (server runs there)
+    # but snowflake's deb cell must render as 'empty' with a dash.
+    rows = [
+        _mkrow("17", "rpm", "arm64", "snowflake", "c1", "PASSED",
+               tests=25, passed=25),
+        _mkrow("17", "deb", "arm64", "server", "c1", "PASSED",
+               tests=50, passed=50),
+    ]
+    components, targets, cells, totals = ccr.aggregate_heatmap(rows)
+    slugs = ccr._assign_unique_slugs(components)
+    out = ccr._render_heatmap(components, targets, cells, totals, slugs)
+    assert "h cell empty" in out
+    assert "&mdash;" in out
+
+
+def test_render_heatmap_row_totals_match_aggregation():
+    rows = [
+        _mkrow("17", "rpm", "arm64", "ace", "c1", "FAILED",
+               tests=30, passed=28, failed=2),
+        _mkrow("17", "deb", "arm64", "ace", "c2", "FAILED",
+               tests=20, passed=18, failed=2),
+    ]
+    components, targets, cells, totals = ccr.aggregate_heatmap(rows)
+    slugs = ccr._assign_unique_slugs(components)
+    out = ccr._render_heatmap(components, targets, cells, totals, slugs)
+    # Right-edge totals must match component_totals.
+    assert ">4</div>" in out    # failed total
+    assert ">50</div>" in out   # tests total
+
+
+def test_render_unattributed_banner_when_no_reports_present():
+    rows = [
+        _mkrow("17", "rpm", "amd64", "-", "-", "NO REPORTS"),
+        _mkrow("17", "deb", "arm64", "server", "c1", "PASSED",
+               tests=1, passed=1),
+    ]
+    out = ccr._render_unattributed_banner(rows)
+    assert "1 matrix target" in out
+    assert "no reports" in out.lower()
+    assert "comp-unattributed" in out
+
+
+def test_render_unattributed_banner_absent_when_clean():
+    rows = [
+        _mkrow("17", "deb", "arm64", "server", "c1", "PASSED",
+               tests=1, passed=1),
+    ]
+    out = ccr._render_unattributed_banner(rows)
+    assert out == ""
+
+
+def test_render_unattributed_banner_uses_collision_resolved_slug():
+    """When a real component normalizes to "unattributed", the NO REPORTS
+    bucket gets bumped to a -N suffix by _assign_unique_slugs. The banner
+    must link to the bucket's actual section, not the real component's."""
+    rows = [
+        _mkrow("17", "rpm", "arm64", "unattributed", "c1", "PASSED",
+               tests=1, passed=1),
+        _mkrow("17", "rpm", "amd64", ccr.UNATTRIBUTED_COMPONENT,
+               "-", "NO REPORTS"),
+    ]
+    # Drive through render_html end-to-end so the slug map is the same one
+    # the section renderer uses — guarantees the banner and the bucket
+    # section stay in sync regardless of internal ordering.
+    ctx = {"run_number": "1", "run_attempt": "1", "run_id": "x",
+           "event_name": "workflow_dispatch", "actor": "hayee-bhatti",
+           "slice_count": 2}
+    out = ccr.render_html(rows, ctx)
+
+    # The real "unattributed" component and the bucket must resolve to
+    # different anchors — one will be "comp-unattributed" and the other
+    # "comp-unattributed-2"; both must be present, distinct.
+    assert 'id="comp-unattributed"' in out
+    assert 'id="comp-unattributed-2"' in out
+
+    # The banner href must point to whichever anchor the bucket section
+    # actually carries — extract it from the rendered output and confirm
+    # the matching section anchor exists.
+    banner_match = re.search(
+        r'banner banner-issue[^<]*<strong>[^<]*</strong>[^<]*'
+        r'<a href="#(comp-unattributed(?:-\d+)?)">',
+        out,
+    )
+    assert banner_match, "unattributed banner not found / wrong shape"
+    target_anchor = banner_match.group(1)
+    assert f'id="{target_anchor}"' in out, (
+        f"banner links to #{target_anchor} but no section has that id"
+    )
+
+    # And the section the banner points at must be the bucket (display name
+    # "(unattributed)"), not the real component named "unattributed".
+    # Find the <details> block carrying that id and verify its summary.
+    section_match = re.search(
+        r'<details[^>]*id="' + re.escape(target_anchor) + r'"[^>]*>'
+        r'(.*?)</details>',
+        out,
+        re.DOTALL,
+    )
+    assert section_match, "could not isolate the bucket section"
+    assert "(unattributed)" in section_match.group(1), (
+        "banner points at the real component, not the NO REPORTS bucket"
+    )
+
+
+def test_render_heatmap_empty_returns_empty_string():
+    # No rows -> no heatmap.
+    out = ccr._render_heatmap([], [], {}, {}, {})
+    assert out == ""
+
+
+def test_render_heatmap_escapes_component_names():
+    rows = [_mkrow("17", "rpm", "arm64", "<bad>name", "c1", "PASSED",
+                   tests=1, passed=1)]
+    components, targets, cells, totals = ccr.aggregate_heatmap(rows)
+    slugs = ccr._assign_unique_slugs(components)
+    out = ccr._render_heatmap(components, targets, cells, totals, slugs)
+    # Visible label is escaped; injection neutralized.
+    assert "<bad>name" not in out
+    assert "&lt;bad&gt;name" in out
+
+
+def test_target_containers_groups_and_sorts():
+    rows = [
+        _mkrow("16", "deb", "arm64", "ace", "auto-ubuntu2404-arm", "PASSED",
+               tests=1, passed=1),
+        _mkrow("16", "deb", "arm64", "server", "auto-debian12-arm", "PASSED",
+               tests=1, passed=1),
+        _mkrow("16", "deb", "arm64", "ace", "auto-debian12-arm", "PASSED",
+               tests=1, passed=1),
+        _mkrow("16", "rpm", "amd64", "ace", "auto-alma9-amd", "PASSED",
+               tests=1, passed=1),
+        # Unattributed rows must not pollute the target->container map.
+        _mkrow("16", "deb", "arm64", ccr.UNATTRIBUTED_COMPONENT, "-",
+               "NO REPORTS"),
+    ]
+    m = ccr.target_containers(rows)
+    # deb/arm64 aggregates two distinct containers, deduped + sorted.
+    assert m[("16", "deb", "arm64")] == [
+        "auto-debian12-arm", "auto-ubuntu2404-arm"
+    ]
+    assert m[("16", "rpm", "amd64")] == ["auto-alma9-amd"]
+    # The unattributed "-" container is never recorded as a target.
+    assert all(c != "-" for conts in m.values() for c in conts)
+
+
+def test_render_heatmap_header_tooltip_lists_containers():
+    rows = [
+        _mkrow("16", "deb", "arm64", "ace", "auto-ubuntu2404-arm", "PASSED",
+               tests=1, passed=1),
+        _mkrow("16", "deb", "arm64", "ace", "auto-debian12-arm", "PASSED",
+               tests=1, passed=1),
+    ]
+    components, targets, cells, totals = ccr.aggregate_heatmap(rows)
+    slugs = ccr._assign_unique_slugs(components)
+    tc = ccr.target_containers(rows)
+    out = ccr._render_heatmap(components, targets, cells, totals, slugs, tc)
+    # Column header carries a title listing both containers + the count.
+    assert 'title="PG16 deb arm64 — 2 containers: ' \
+           'auto-debian12-arm, auto-ubuntu2404-arm"' in out
+
+
+def test_render_heatmap_header_tooltip_singular_container():
+    rows = [
+        _mkrow("16", "deb", "amd64", "ace", "auto-debian13-amd", "PASSED",
+               tests=1, passed=1),
+    ]
+    components, targets, cells, totals = ccr.aggregate_heatmap(rows)
+    slugs = ccr._assign_unique_slugs(components)
+    tc = ccr.target_containers(rows)
+    out = ccr._render_heatmap(components, targets, cells, totals, slugs, tc)
+    # "1 container" (singular, no trailing 's').
+    assert "1 container:" in out
+    assert "1 containers:" not in out
+
+
+def test_render_heatmap_header_tooltip_escaped():
+    rows = [
+        _mkrow("16", "deb", "amd64", "ace", "<evil>cont", "PASSED",
+               tests=1, passed=1),
+    ]
+    components, targets, cells, totals = ccr.aggregate_heatmap(rows)
+    slugs = ccr._assign_unique_slugs(components)
+    tc = ccr.target_containers(rows)
+    out = ccr._render_heatmap(components, targets, cells, totals, slugs, tc)
+    assert "<evil>cont" not in out
+    assert "&lt;evil&gt;cont" in out
+
+
+# ---- v2.3: component section renderer --------------------------------------
+
+
+def test_render_component_section_open_when_failing():
+    rows = [
+        _mkrow("17", "rpm", "arm64", "ace", "c1", "FAILED",
+               tests=10, passed=9, failed=1),
+    ]
+    out = ccr._render_component_section("ace", "ace", rows)
+    assert '<details class="component" id="comp-ace" open' in out
+    assert 'data-has-attention="1"' in out
+    # Chip set: 1 rows, 10 tests, 1 failed, 10.0% fail (skipped 0 suppressed)
+    assert ">1 rows<" in out
+    assert ">10 tests<" in out
+    assert ">1 failed<" in out
+    assert ">10.0% fail<" in out
+
+
+def test_render_component_section_closed_when_clean():
+    rows = [
+        _mkrow("17", "deb", "arm64", "ace", "c1", "PASSED",
+               tests=10, passed=10),
+    ]
+    out = ccr._render_component_section("ace", "ace", rows)
+    # Closed: no ' open' attribute, no data-has-attention.
+    assert '<details class="component" id="comp-ace"' in out
+    assert 'open data-has-attention' not in out
+    assert 'data-has-attention="1"' not in out
+    # "failed" chip is suppressed when 0; "fail %" still shown.
+    assert ">0 failed<" not in out
+    assert ">0.0% fail<" in out
+
+
+def test_render_component_section_issue_chip_when_no_failures_but_issue():
+    rows = [
+        _mkrow("17", "rpm", "amd64", "server", ccr.NO_CONTAINERS_LABEL,
+               "NO CONTAINERS SELECTED"),
+    ]
+    out = ccr._render_component_section("server", "server", rows)
+    # No real failures (tests/failed both 0) but a report issue is present.
+    assert "report issue" in out
+    assert 'data-has-attention="1"' in out
+
+
+def test_render_component_section_row_data_attributes():
+    rows = [
+        _mkrow("17", "rpm", "arm64", "ace", "auto-alma9-arm", "FAILED",
+               tests=10, passed=9, failed=1),
+    ]
+    out = ccr._render_component_section("ace", "ace", rows)
+    # Every row carries the data-* attributes that the sortGroup JS keys on.
+    assert 'data-pg="17"' in out
+    assert 'data-family="rpm"' in out
+    assert 'data-arch="arm64"' in out
+    assert 'data-container="auto-alma9-arm"' in out
+    assert 'data-status="FAILED"' in out
+    assert 'data-fail="1"' in out
+
+
+def test_render_component_section_sort_buttons_present():
+    rows = [_mkrow("17", "rpm", "arm64", "ace", "c1", "PASSED",
+                   tests=1, passed=1)]
+    out = ccr._render_component_section("ace", "ace", rows)
+    # Five sortable columns; the remaining columns are unsortable plain th.
+    for key in ("'pg'", "'family'", "'arch'", "'container'", "'status'"):
+        assert f"sortGroup(this,{key})" in out
+    # 'tests' / 'passed' etc. are NOT sortable.
+    assert "sortGroup(this,'tests')" not in out
+
+
+def test_render_component_section_escapes_dynamic_text():
+    rows = [_mkrow("17", "rpm", "arm64", "<bad>", "auto&co", "PASSED",
+                   tests=1, passed=1)]
+    out = ccr._render_component_section("<bad>", "bad", rows)
+    # Refinement 6: every visible dynamic text + data-* attr must be escaped.
+    assert "<bad>" not in out.replace("&lt;bad&gt;", "")
+    assert "&lt;bad&gt;" in out
+    assert "auto&amp;co" in out
+    # Also escaped inside data-container="..."
+    assert 'data-container="auto&amp;co"' in out
+
+
+def test_render_component_section_attention_rows_first():
+    rows = [
+        _mkrow("17", "rpm", "arm64", "ace", "auto-rocky9-arm", "PASSED",
+               tests=10, passed=10),
+        _mkrow("17", "rpm", "arm64", "ace", "auto-alma9-arm", "FAILED",
+               tests=10, passed=9, failed=1),
+    ]
+    out = ccr._render_component_section("ace", "ace", rows)
+    failed_pos = out.index("auto-alma9-arm")
+    passed_pos = out.index("auto-rocky9-arm")
+    assert failed_pos < passed_pos
+
+
+def test_render_component_section_unattributed_label():
+    rows = [_mkrow("17", "rpm", "amd64", "-", "-", "NO REPORTS")]
+    out = ccr._render_component_section(ccr.UNATTRIBUTED_COMPONENT,
+                                        ccr.UNATTRIBUTED_SLUG, rows)
+    # Display label is the friendly "(unattributed)" not bare "-".
+    assert "(unattributed)" in out
+    assert 'id="comp-unattributed"' in out
+    assert 'data-has-attention="1"' in out  # NO REPORTS is an attention row
+
+
+def test_render_component_sections_orchestrates_with_unattributed():
+    rows = [
+        _mkrow("17", "rpm", "arm64", "ace", "c1", "PASSED",
+               tests=1, passed=1),
+        _mkrow("17", "rpm", "amd64", "-", "-", "NO REPORTS"),
+    ]
+    components, _, _, _ = ccr.aggregate_heatmap(rows)
+    slugs = ccr._assign_unique_slugs(components)
+    out = ccr._render_component_sections(rows, components, slugs)
+    # Real component first, unattributed last.
+    ace_pos = out.index('id="comp-ace"')
+    un_pos = out.index('id="comp-unattributed"')
+    assert ace_pos < un_pos
+
+
+def test_render_component_sections_no_unattributed_when_clean():
+    rows = [
+        _mkrow("17", "rpm", "arm64", "ace", "c1", "PASSED",
+               tests=1, passed=1),
+    ]
+    components, _, _, _ = ccr.aggregate_heatmap(rows)
+    slugs = ccr._assign_unique_slugs(components)
+    out = ccr._render_component_sections(rows, components, slugs)
+    assert "comp-unattributed" not in out
+
+
+# ---- v2.3: single-script-block JS contract ---------------------------------
+
+
+def test_scripts_single_block_invariant():
+    # The existing tests assert out.count("<script") == 1. _render_scripts()
+    # must keep all JS in ONE block so that constraint survives.
+    js = ccr._render_scripts()
+    assert js.count("<script") == 1
+    assert js.endswith("</script>")
+
+
+def test_scripts_contain_all_expected_functions():
+    js = ccr._render_scripts()
+    for name in ("toggleFailures", "sortGroup", "openComponent",
+                 "expandAll", "collapseAll", "openFailing", "STATUS_RANK"):
+        assert name in js
+
+
+def test_scripts_status_rank_order_attention_first():
+    js = ccr._render_scripts()
+    # FAILED must rank ahead of PASSED for the in-section status sort to put
+    # attention rows on top (alphabetical would do the wrong thing).
+    failed_pos = js.index("'FAILED':0")
+    passed_pos = js.index("'PASSED':6")
+    assert failed_pos < passed_pos
+
+
+def test_scripts_toggle_uses_body_class_not_details_mutation():
+    js = ccr._render_scripts()
+    # Refinement 3: toggleFailures must use document.body.classList, NOT
+    # mutate d.open on details elements. This protects the user's open/closed
+    # state from being clobbered by the toggle.
+    assert "document.body.classList.toggle('failures-only'" in js
+    # Belt-and-suspenders: toggleFailures must not touch details state.
+    fn_start = js.index("function toggleFailures")
+    fn_end = js.index("function ", fn_start + 1)
+    toggle_body = js[fn_start:fn_end]
+    assert "details" not in toggle_body
+    assert ".open" not in toggle_body
 
 
 def test_run_context_aggregates_effective_selection(tmp_path):

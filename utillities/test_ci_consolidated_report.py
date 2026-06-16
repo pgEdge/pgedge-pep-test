@@ -288,6 +288,49 @@ def test_parse_junit_xml_is_reduction_of_record_parser(tmp_path):
     assert counts == reduced
 
 
+def test_detail_filename_includes_all_five_dimensions():
+    f = ccr._detail_filename(
+        component="postgis", pg="16", family="deb", arch="arm64",
+        container="auto-debian12-arm",
+    )
+    assert f == "detail-postgis-pg16-deb-arm64-auto-debian12-arm.html"
+
+
+def test_detail_filename_slugs_unsafe_characters():
+    # Component name with whitespace and a slash; the slug normaliser must
+    # lowercase and reduce unsafe chars to '-'.
+    f = ccr._detail_filename(
+        component="My Comp/v2", pg="17", family="rpm", arch="amd64",
+        container="auto-rocky9-amd",
+    )
+    assert f == "detail-my-comp-v2-pg17-rpm-amd64-auto-rocky9-amd.html"
+
+
+def test_assign_unique_detail_filenames_resolves_slug_collisions():
+    # Distinct row keys whose components nonetheless slug to the same base
+    # filename. In practice this only happens when distinct component names
+    # normalise identically (e.g. "Foo Bar"/"foo-bar"/"foo bar" all -> "foo-bar").
+    # Real row keys are unique by construction — build_rows asserts that
+    # invariant (Task 4) — so true row-tuple duplicates are not the concern
+    # here; slug aliasing is.
+    keys = [
+        ("Foo Bar", "16", "deb", "arm64", "auto-debian12-arm"),
+        ("foo-bar", "16", "deb", "arm64", "auto-debian12-arm"),
+        ("foo bar", "16", "deb", "arm64", "auto-debian12-arm"),
+        ("postgis", "16", "deb", "arm64", "auto-debian13-arm"),
+    ]
+    names = ccr._assign_unique_detail_filenames(keys)
+    # Parallel list, NOT a dict — duplicate-shaped keys are preserved in
+    # row order rather than collapsed by dict-key semantics.
+    assert isinstance(names, list)
+    assert len(names) == 4
+    assert len(set(names)) == 4
+    assert names[0].endswith("-foo-bar-pg16-deb-arm64-auto-debian12-arm.html")
+    assert names[1].endswith("-foo-bar-pg16-deb-arm64-auto-debian12-arm-2.html")
+    assert names[2].endswith("-foo-bar-pg16-deb-arm64-auto-debian12-arm-3.html")
+    assert names[3].endswith("-postgis-pg16-deb-arm64-auto-debian13-arm.html")
+
+
 def test_build_rows_notset_becomes_no_containers_row(tmp_path):
     agg = tmp_path / "aggregated"
     sd = agg / "test-logs-r33-a1-pg17-rpm-amd64"

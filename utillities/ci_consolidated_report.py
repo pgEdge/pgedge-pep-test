@@ -422,6 +422,61 @@ def _assign_unique_slugs(names) -> dict:
     return out
 
 
+# Per-container detail-page filename helpers.
+#
+# Each real container row in the consolidated report gets its own static
+# HTML detail page under <output_dir>/details/. The filename embeds all
+# five row-key dimensions so collisions can only arise from slug aliasing
+# between distinct row keys (e.g. two components whose names normalise to
+# the same slug), not from true row-key duplicates -- build_rows asserts
+# that invariant.
+
+def _detail_filename(component: str, pg: str, family: str,
+                     arch: str, container: str) -> str:
+    """Deterministic filename for a single container's detail page.
+
+    All five dimensions are baked in. Component / container / pg / family /
+    arch each pass through _component_slug so the result is filesystem-safe
+    even if a future container or component name contains whitespace,
+    slashes, or other unsafe characters.
+    """
+    return (
+        f"detail-{_component_slug(component)}"
+        f"-pg{_component_slug(pg)}"
+        f"-{_component_slug(family)}"
+        f"-{_component_slug(arch)}"
+        f"-{_component_slug(container)}.html"
+    )
+
+
+def _assign_unique_detail_filenames(keys) -> list:
+    """Deterministic collision-safe parallel list of filenames for row keys.
+
+    Takes an iterable of (component, pg, family, arch, container) tuples in
+    row order. Returns a list of filenames of the same length and order.
+    First claimant of a base filename wins; subsequent slug-identical keys
+    get -2, -3, ... inserted before the .html suffix.
+
+    Returns a list (not a dict keyed by tuple) so duplicate-shaped keys are
+    preserved in row order rather than collapsed by dict-key semantics. In
+    practice real row keys are unique -- build_rows asserts that invariant
+    -- so this suffix discipline only defends against slug aliasing
+    between distinct components, not against true row-key duplicates.
+    """
+    used = set()
+    out = []
+    for k in keys:
+        base = _detail_filename(*k)
+        name = base
+        n = 2
+        while name in used:
+            name = base[:-5] + f"-{n}.html"   # insert before ".html"
+            n += 1
+        used.add(name)
+        out.append(name)
+    return out
+
+
 def aggregate_heatmap(rows: list):
     """Aggregate flat rows into the heatmap grid.
 

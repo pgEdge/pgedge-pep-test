@@ -1352,7 +1352,40 @@ def main(argv=None) -> int:
 
     out = Path(args.output)
     out.parent.mkdir(parents=True, exist_ok=True)
-    out.write_text(render_html(rows, ctx))
+
+    # ------- Per-container detail pages (Task 5) -------
+    # Write one HTML per real container row into <out_dir>/details/. Before
+    # writing, remove ONLY files matching `detail-*.html` from a prior
+    # regeneration so stale pages don't leak into the new artifact; anything
+    # else in details/ (notes, ad-hoc files) is left untouched.
+    details_dir = out.parent / "details"
+    consolidated_filename = out.name
+    if details_dir.is_dir():
+        for stale in details_dir.glob("detail-*.html"):
+            stale.unlink()
+    for r in rows:
+        href = r.get("detail_href", "")
+        if href:
+            details_dir.mkdir(parents=True, exist_ok=True)
+            target_path = details_dir / Path(href).name
+            # Back-link to the framework's combined report, relative to details/.
+            back = ("../" + r["report_href"]) if r.get("report_href") \
+                else f"../{consolidated_filename}"
+            target_path.write_text(
+                render_container_detail_page(
+                    component=r["component"], pg=r["pg"], family=r["family"],
+                    arch=r["arch"], container=r["container"],
+                    records=r.get("_records") or [],
+                    back_link_href=back,
+                    consolidated_filename=consolidated_filename,
+                ),
+                encoding="utf-8",
+            )
+        # _records is internal scaffolding -- drop from EVERY row (including
+        # skip-set rows that never wrote a page) before render_html sees them.
+        r.pop("_records", None)
+
+    out.write_text(render_html(rows, ctx), encoding="utf-8")
 
     fails = sum(r["failed"] for r in rows)
     print(f"[ci-report] targets={len(slice_dirs)} rows={len(rows)} "

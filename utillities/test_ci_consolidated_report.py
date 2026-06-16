@@ -539,6 +539,158 @@ def test_build_rows_leaves_detail_href_empty_for_non_container_buckets(tmp_path)
     assert nc and all(r["detail_href"] == "" for r in nc)
 
 
+def test_main_writes_per_container_detail_files(tmp_path):
+    # Realistic fixture mirroring the r55 layout: one XML covering 3
+    # containers must yield 3 distinct, container-scoped detail pages.
+    sd = tmp_path / "test-logs-r1-a1-pg16-deb-arm64"
+    _write_summary(sd, pg="16", family="deb", arch="arm64",
+                   **{"runner.label": "ubuntu-24.04-arm"})
+    (sd / "postgis" / "16").mkdir(parents=True)
+    (sd / "postgis" / "16" / "report-deb-postgis-16.xml").write_text(
+        '<?xml version="1.0"?>'
+        '<testsuite tests="3" failures="1" skipped="0">'
+        '  <testcase name="test_ok[auto-debian12-arm-deb]" time="0.1"/>'
+        '  <testcase name="test_ok[auto-debian13-arm-deb]" time="0.2"/>'
+        '  <testcase name="test_bad[auto-ubuntu2404-arm-deb]" time="0.3">'
+        '    <failure message="SBOM verification failed">tb body</failure>'
+        '  </testcase>'
+        '</testsuite>',
+        encoding="utf-8",
+    )
+    (sd / "postgis" / "16" / "report-deb-postgis-16.html").write_text(
+        "<html/>", encoding="utf-8")
+    out = tmp_path / "consolidated-report.html"
+
+    rc = ccr.main(["--input-dir", str(tmp_path), "--output", str(out)])
+    assert rc == 0
+
+    details_dir = tmp_path / "details"
+    assert details_dir.is_dir()
+    files = sorted(p.name for p in details_dir.glob("*.html"))
+    assert files == [
+        "detail-postgis-pg16-deb-arm64-auto-debian12-arm.html",
+        "detail-postgis-pg16-deb-arm64-auto-debian13-arm.html",
+        "detail-postgis-pg16-deb-arm64-auto-ubuntu2404-arm.html",
+    ]
+    # The ubuntu page must contain only its own testcase.
+    ubuntu_path = details_dir / "detail-postgis-pg16-deb-arm64-auto-ubuntu2404-arm.html"
+    ubuntu = ubuntu_path.read_text(encoding="utf-8")
+    assert "auto-ubuntu2404-arm" in ubuntu
+    assert "auto-debian12-arm" not in ubuntu
+    assert "auto-debian13-arm" not in ubuntu
+    # Back-link to the framework's combined report resolves from details/.
+    expected_back = "../test-logs-r1-a1-pg16-deb-arm64/postgis/16/report-deb-postgis-16.html"
+    assert f'href="{expected_back}"' in ubuntu
+    assert (details_dir / expected_back).resolve().is_file()
+
+
+def test_main_writes_detail_pages_with_utf8_encoding(tmp_path):
+    # Non-ASCII characters in the failure body must survive round-trip.
+    sd = tmp_path / "test-logs-r1-a1-pg16-deb-arm64"
+    _write_summary(sd, pg="16", family="deb", arch="arm64",
+                   **{"runner.label": "ubuntu-24.04-arm"})
+    (sd / "comp" / "16").mkdir(parents=True)
+    (sd / "comp" / "16" / "report-deb-comp-16.xml").write_text(
+        '<?xml version="1.0"?>'
+        '<testsuite tests="1" failures="1" skipped="0">'
+        '  <testcase name="test_x[auto-debian12-arm-deb]" time="0.1">'
+        '    <failure message="boom é café 中文">'
+        'traceback é 中文</failure>'
+        '  </testcase>'
+        '</testsuite>',
+        encoding="utf-8",
+    )
+    (sd / "comp" / "16" / "report-deb-comp-16.html").write_text(
+        "<html/>", encoding="utf-8")
+    out = tmp_path / "consolidated-report.html"
+    rc = ccr.main(["--input-dir", str(tmp_path), "--output", str(out)])
+    assert rc == 0
+    detail = (tmp_path / "details" /
+              "detail-comp-pg16-deb-arm64-auto-debian12-arm.html").read_text(encoding="utf-8")
+    assert "café" in detail
+    assert "中文" in detail
+
+
+def test_main_uses_actual_output_filename_in_footer_back_link(tmp_path):
+    # The footer link must reflect the actual output filename, not a hardcode.
+    sd = tmp_path / "test-logs-r1-a1-pg16-deb-arm64"
+    _write_summary(sd, pg="16", family="deb", arch="arm64",
+                   **{"runner.label": "ubuntu-24.04-arm"})
+    (sd / "c" / "16").mkdir(parents=True)
+    (sd / "c" / "16" / "report-deb-c-16.xml").write_text(
+        '<?xml version="1.0"?>'
+        '<testsuite tests="1" failures="0" skipped="0">'
+        '  <testcase name="t[auto-debian12-arm-deb]" time="0.1"/>'
+        '</testsuite>',
+        encoding="utf-8",
+    )
+    out = tmp_path / "consolidated-report-v24.html"   # non-default filename
+    rc = ccr.main(["--input-dir", str(tmp_path), "--output", str(out)])
+    assert rc == 0
+    detail = (tmp_path / "details" /
+              "detail-c-pg16-deb-arm64-auto-debian12-arm.html").read_text(encoding="utf-8")
+    assert 'href="../consolidated-report-v24.html"' in detail
+    assert 'href="../consolidated-report.html"' not in detail
+
+
+def test_main_removes_stale_detail_files_only(tmp_path):
+    # Seed a stale detail file from a hypothetical prior run, plus unrelated
+    # files the cleanup must NOT touch.
+    details = tmp_path / "details"
+    details.mkdir()
+    stale = details / "detail-stale-pg16-deb-arm64-auto-foo.html"
+    stale.write_text("stale", encoding="utf-8")
+    keep_txt = details / "NOTES.txt"
+    keep_txt.write_text("keep me", encoding="utf-8")
+    keep_html = details / "index.html"   # not detail-*.html
+    keep_html.write_text("keep also", encoding="utf-8")
+    # Empty input -> no new detail files, but the stale one must go.
+    (tmp_path / "test-logs-r1-a1-pg16-deb-arm64").mkdir(parents=True)
+    out = tmp_path / "consolidated-report.html"
+    rc = ccr.main(["--input-dir", str(tmp_path), "--output", str(out)])
+    assert rc == 0
+    assert not stale.exists()
+    assert keep_txt.exists() and keep_txt.read_text(encoding="utf-8") == "keep me"
+    assert keep_html.exists() and keep_html.read_text(encoding="utf-8") == "keep also"
+
+
+def test_main_skips_detail_for_no_reports_rows(tmp_path):
+    (tmp_path / "test-logs-r1-a1-pg16-deb-arm64").mkdir(parents=True)
+    out = tmp_path / "consolidated-report.html"
+    rc = ccr.main(["--input-dir", str(tmp_path), "--output", str(out)])
+    assert rc == 0
+    # No detail files written (the only row is NO REPORTS).
+    assert not (tmp_path / "details").exists() or \
+           not any((tmp_path / "details").glob("detail-*.html"))
+
+
+def test_main_drops_records_scaffolding_before_render(tmp_path):
+    # _records must NEVER reach render_html(). Verify post-main rows are
+    # clean of internal scaffolding keys.
+    sd = tmp_path / "test-logs-r1-a1-pg16-deb-arm64"
+    _write_summary(sd, pg="16", family="deb", arch="arm64",
+                   **{"runner.label": "ubuntu-24.04-arm"})
+    (sd / "c" / "16").mkdir(parents=True)
+    (sd / "c" / "16" / "report-deb-c-16.xml").write_text(
+        '<?xml version="1.0"?>'
+        '<testsuite tests="1" failures="0" skipped="0">'
+        '  <testcase name="t[auto-debian12-arm-deb]" time="0.1"/>'
+        '</testsuite>',
+        encoding="utf-8",
+    )
+    # Also seed a NO REPORTS slice to confirm _records is dropped even on
+    # rows that never carried it -- belt-and-braces.
+    (tmp_path / "test-logs-r1-a1-pg17-rpm-arm64").mkdir(parents=True)
+
+    out = tmp_path / "consolidated-report.html"
+    rc = ccr.main(["--input-dir", str(tmp_path), "--output", str(out)])
+    assert rc == 0
+    # The rendered HTML must not leak the literal '_records' key (would
+    # appear if a row dict was ever serialised to the page).
+    page = out.read_text(encoding="utf-8")
+    assert "_records" not in page
+
+
 def test_not_container_scoped_real_tests_count(tmp_path):
     # A genuine non-container test (no bracket) actually ran -> counts normally.
     xml = tmp_path / "report-deb-server-17.xml"

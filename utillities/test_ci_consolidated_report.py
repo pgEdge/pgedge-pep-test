@@ -824,8 +824,37 @@ def _mkrow(pg, family, arch, component, container, status,
         "tests": tests, "passed": passed, "failed": failed, "skipped": skipped,
         "time": 1.0, "status": status,
         "status_class": status.lower().replace(" ", ""),
-        "report_href": "",
+        "report_href": "", "detail_href": "",
     }
+
+
+def test_component_section_report_column_links_to_detail_href():
+    # The Report column's primary link must point at the per-container
+    # detail page, not the framework's combined pytest-html. report_href
+    # is preserved on the row but is no longer the Report-column target.
+    row = _mkrow("16", "deb", "arm64", "postgis", "auto-debian12-arm",
+                 "FAILED", tests=15, passed=14, failed=1)
+    row["detail_href"] = "details/detail-postgis-pg16-deb-arm64-auto-debian12-arm.html"
+    row["report_href"] = "test-logs-r1-a1-pg16-deb-arm64/postgis/16/report-deb-postgis-16.html"
+    ctx = {"run_number": "1", "run_attempt": "1", "run_id": "x",
+           "event_name": "workflow_dispatch", "actor": "tester", "slice_count": 1}
+    out = ccr.render_html([row], ctx)
+    # The primary report-link link in the row table points at detail_href.
+    m = re.search(r'<a class="report-link" href="([^"]+)"', out)
+    assert m, "no report-link found in rendered HTML"
+    assert m.group(1) == row["detail_href"]
+    # The combined report_href is NOT what the Report column links to.
+    assert f'class="report-link" href="{row["report_href"]}"' not in out
+
+
+def test_component_section_renders_dash_when_detail_href_empty():
+    # A skip-set row (no detail_href) should render an em-dash, not a link.
+    row = _mkrow("16", "deb", "arm64", "comp", "-", "NO REPORTS")
+    ctx = {"run_number": "1", "run_attempt": "1", "run_id": "x",
+           "event_name": "workflow_dispatch", "actor": "tester", "slice_count": 1}
+    out = ccr.render_html([row], ctx)
+    # No report-link anchor anywhere in the rendered row.
+    assert 'class="report-link"' not in out
 
 
 def test_aggregate_heatmap_uses_tuple_target_keys():

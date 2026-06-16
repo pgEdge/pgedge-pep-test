@@ -993,8 +993,11 @@ def _render_component_section(name: str, slug: str, rows_for_comp: list) -> str:
     )
     for r in section_rows:
         is_fail = "1" if r["status"] in _ATTENTION_STATUSES else "0"
-        if r["report_href"]:
-            link = (f'<a class="report-link" href="{_esc(r["report_href"])}">'
+        # The Report column points at the per-container detail page generated
+        # by main (Task 5). report_href stays on the row only as the source
+        # for the detail page's back-link to the framework's combined report.
+        if r.get("detail_href"):
+            link = (f'<a class="report-link" href="{_esc(r["detail_href"])}">'
                     f'View &rarr;</a>')
         else:
             link = "&mdash;"

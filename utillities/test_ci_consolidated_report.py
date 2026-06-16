@@ -421,6 +421,124 @@ def test_build_rows_notset_becomes_no_containers_row(tmp_path):
     assert (r["tests"], r["passed"], r["failed"], r["skipped"]) == (0, 0, 0, 0)
 
 
+def _mkrow_for_assert(pg, family, arch, component, container, status,
+                      tests=0, passed=0, failed=0, skipped=0):
+    # Inline copy so this block of tests doesn't depend on test ordering /
+    # _mkrow being defined later in the file.
+    return {
+        "pg": pg, "family": family, "arch": arch, "runner_label": "r",
+        "component": component, "container": container,
+        "tests": tests, "passed": passed, "failed": failed, "skipped": skipped,
+        "time": 1.0, "status": status,
+        "status_class": status.lower().replace(" ", ""),
+        "report_href": "",
+    }
+
+
+def test_assert_unique_real_row_keys_raises_on_true_duplicate():
+    # Two synthetic real-container rows with identical
+    # (pg, family, arch, component, container) tuples -- must raise loudly.
+    rows = [
+        _mkrow_for_assert("16", "deb", "arm64", "postgis", "auto-debian12-arm",
+                          "PASSED", tests=15, passed=15),
+        _mkrow_for_assert("16", "deb", "arm64", "postgis", "auto-debian12-arm",
+                          "PASSED", tests=15, passed=15),
+    ]
+    import pytest
+    with pytest.raises(AssertionError) as excinfo:
+        ccr._assert_unique_real_row_keys(rows)
+    msg = str(excinfo.value)
+    assert "duplicate" in msg.lower()
+    # The error must name the offending key so the failure is debuggable.
+    assert "postgis" in msg and "auto-debian12-arm" in msg
+
+
+def test_assert_unique_real_row_keys_allows_slug_collisions_with_distinct_raw_keys():
+    # Two rows whose raw component NAMES would slug-collide ("Foo Bar" and
+    # "foo-bar" both normalise to "foo-bar"), but whose raw row-key tuples
+    # differ. Assertion runs on raw tuples, so this must NOT raise -- slug
+    # collisions are the filename helper's job, not the invariant's.
+    rows = [
+        _mkrow_for_assert("16", "deb", "arm64", "Foo Bar", "auto-debian12-arm",
+                          "PASSED", tests=1, passed=1),
+        _mkrow_for_assert("16", "deb", "arm64", "foo-bar", "auto-debian12-arm",
+                          "PASSED", tests=1, passed=1),
+    ]
+    ccr._assert_unique_real_row_keys(rows)   # no exception
+
+
+def test_assert_unique_real_row_keys_ignores_skip_set_rows():
+    # NO REPORTS rows from the same slice (component "-", container "-").
+    # They never claim a filename, so duplicate-shaped ones must not trip
+    # the invariant. Same for non-container buckets and zero-tests rows.
+    rows = [
+        _mkrow_for_assert("16", "deb", "arm64", "-", "-", "NO REPORTS"),
+        _mkrow_for_assert("16", "deb", "arm64", "-", "-", "NO REPORTS"),
+        _mkrow_for_assert("16", "deb", "arm64", "c", ccr.NO_CONTAINERS_LABEL,
+                          "NO CONTAINERS SELECTED"),
+        _mkrow_for_assert("16", "deb", "arm64", "c", ccr.NO_CONTAINERS_LABEL,
+                          "NO CONTAINERS SELECTED"),
+        _mkrow_for_assert("16", "deb", "arm64", "c", ccr.NOT_CONTAINER_SCOPED_LABEL,
+                          "PASSED", tests=1, passed=1),
+        _mkrow_for_assert("16", "deb", "arm64", "c", ccr.NOT_CONTAINER_SCOPED_LABEL,
+                          "PASSED", tests=1, passed=1),
+    ]
+    ccr._assert_unique_real_row_keys(rows)   # no exception
+
+
+def test_build_rows_assigns_detail_href_for_real_container_rows(tmp_path):
+    agg = tmp_path / "aggregated"
+    sd = agg / "test-logs-r99-a1-pg16-deb-arm64"
+    _write_summary(sd, pg="16", family="deb", arch="arm64",
+                   **{"runner.label": "ubuntu-24.04-arm"})
+    (sd / "postgis" / "16").mkdir(parents=True)
+    (sd / "postgis" / "16" / "report-deb-postgis-16.xml").write_text(
+        '<?xml version="1.0"?>'
+        '<testsuite tests="2" failures="0" skipped="0">'
+        '  <testcase name="t1[auto-debian12-arm-deb]" time="0.1"/>'
+        '  <testcase name="t2[auto-debian13-arm-deb]" time="0.2"/>'
+        '</testsuite>'
+    )
+    rows = ccr.build_rows(agg)
+    real = [r for r in rows if r["container"].startswith("auto-")]
+    assert len(real) == 2
+    for r in real:
+        assert r["detail_href"].startswith("details/detail-postgis-")
+        assert r["detail_href"].endswith(".html")
+    # Distinct per container.
+    assert len({r["detail_href"] for r in real}) == 2
+
+
+def test_build_rows_leaves_detail_href_empty_for_no_reports(tmp_path):
+    agg = tmp_path / "aggregated"
+    sd = agg / "test-logs-r99-a1-pg16-deb-arm64"
+    sd.mkdir(parents=True)
+    rows = ccr.build_rows(agg)
+    assert len(rows) == 1
+    assert rows[0]["status"] == "NO REPORTS"
+    assert rows[0]["detail_href"] == ""
+
+
+def test_build_rows_leaves_detail_href_empty_for_non_container_buckets(tmp_path):
+    # NOTSET -> NO_CONTAINERS_LABEL bucket must not claim a detail_href.
+    agg = tmp_path / "aggregated"
+    sd = agg / "test-logs-r99-a1-pg16-deb-arm64"
+    _write_summary(sd, pg="16", family="deb", arch="arm64",
+                   **{"runner.label": "ubuntu-24.04-arm"})
+    (sd / "comp" / "16").mkdir(parents=True)
+    (sd / "comp" / "16" / "report-deb-comp-16.xml").write_text(
+        '<?xml version="1.0"?>'
+        '<testsuite tests="1" failures="0" skipped="1">'
+        '  <testcase name="t1[bloom-NOTSET]" time="0.1">'
+        '    <skipped message="no container"/>'
+        '  </testcase>'
+        '</testsuite>'
+    )
+    rows = ccr.build_rows(agg)
+    nc = [r for r in rows if r["container"] == ccr.NO_CONTAINERS_LABEL]
+    assert nc and all(r["detail_href"] == "" for r in nc)
+
+
 def test_not_container_scoped_real_tests_count(tmp_path):
     # A genuine non-container test (no bracket) actually ran -> counts normally.
     xml = tmp_path / "report-deb-server-17.xml"

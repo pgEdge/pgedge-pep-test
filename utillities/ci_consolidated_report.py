@@ -279,10 +279,78 @@ def _status_for(stats: dict) -> tuple:
     return "PASSED", "passed"
 
 
+def _real_row_key(row: dict) -> tuple:
+    """The 5-tuple identity of a real container row.
+
+    Tuple order matches the positional signature of ``_detail_filename`` and
+    ``_assign_unique_detail_filenames(*k)``: ``(component, pg, family, arch,
+    container)``. Returned as a stable tuple so the row-key set can be
+    compared with ``in`` without ad-hoc string concat.
+    """
+    return (row["component"], row["pg"], row["family"],
+            row["arch"], row["container"])
+
+
+def _is_real_container_row(row: dict) -> bool:
+    """Predicate matching the rows that will claim a detail page filename.
+
+    Real container rows are:
+      * NOT the unattributed component bucket,
+      * NOT in the (none in scope) or (not container-scoped) buckets,
+      * have at least one observed test (tests > 0).
+
+    Anything else (NO REPORTS / PARSE ERROR / NO TESTCASES /
+    NO CONTAINERS SELECTED) does not get a detail page.
+    """
+    if row.get("component") == UNATTRIBUTED_COMPONENT:
+        return False
+    if row.get("container") in (NO_CONTAINERS_LABEL, NOT_CONTAINER_SCOPED_LABEL):
+        return False
+    if row.get("tests", 0) <= 0:
+        return False
+    return True
+
+
+def _assert_unique_real_row_keys(rows: list) -> None:
+    """Assert raw (component, pg, family, arch, container) keys of every
+    real-container row are unique. Skip-set rows are ignored.
+
+    The tuple order matches ``_real_row_key`` / ``_detail_filename``'s
+    positional signature; uniqueness itself is order-insensitive, but the
+    docstring tracks the code so future readers are not misled.
+
+    Fails loudly with an error message that names the duplicate key so a
+    triager can find the offending slice quickly. Runs on raw row tuples,
+    NOT on generated filenames, so a true duplicate cannot be silently
+    masked by the -2/-3 suffix discipline that resolves slug aliasing.
+    """
+    seen = set()
+    for r in rows:
+        if not _is_real_container_row(r):
+            continue
+        key = _real_row_key(r)
+        assert key not in seen, (
+            f"duplicate real row key {key!r} in build_rows output; "
+            "row-key uniqueness is required so per-container detail pages "
+            "can be addressed unambiguously"
+        )
+        seen.add(key)
+
+
 def build_rows(aggregated_dir: Path) -> list:
     """Walk every per-slice directory under aggregated_dir and produce one row
     per (slice, component, container). Slices with metadata but no report XMLs
     yield a single 'NO REPORTS' row so they are visible, not silently omitted.
+
+    Real container rows additionally carry:
+      * ``detail_href`` -- the relative path to the per-container detail
+        page that ``main`` writes under ``<output>/details/``. Skip-set rows
+        (NO REPORTS / PARSE ERROR / NO TESTCASES / NO CONTAINERS SELECTED /
+        non-container buckets / unattributed) get ``detail_href = ""``.
+      * ``_records`` -- the in-memory ``TestcaseRecord`` list for the row's
+        container, used by main to render the detail page. The leading
+        underscore signals scaffolding; main pops it from every row before
+        ``render_html`` runs.
     """
     rows = []
     slice_dirs = sorted(
@@ -300,14 +368,14 @@ def build_rows(aggregated_dir: Path) -> list:
                 "component": "-", "container": "-",
                 "tests": 0, "passed": 0, "failed": 0, "skipped": 0, "time": 0.0,
                 "status": "NO REPORTS", "status_class": "noreports",
-                "report_href": "",
+                "report_href": "", "detail_href": "",
             })
             continue
 
         for xml in xmls:
             component = derive_component_from_path(xml, sd)
             try:
-                groups = parse_junit_xml(xml)
+                records = _parse_junit_testcases(xml)
             except Exception as e:  # malformed XML must not abort the whole report
                 rows.append({
                     "pg": meta["pg"], "family": meta["family"], "arch": meta["arch"],
@@ -315,10 +383,11 @@ def build_rows(aggregated_dir: Path) -> list:
                     "component": component, "container": "-",
                     "tests": 0, "passed": 0, "failed": 0, "skipped": 0, "time": 0.0,
                     "status": "PARSE ERROR", "status_class": "failed",
-                    "report_href": "",
+                    "report_href": "", "detail_href": "",
                     "note": str(e),
                 })
                 continue
+            groups = _summarise_by_container(records)
             html_path = xml.with_suffix(".html")
             href = html_path.relative_to(aggregated_dir).as_posix() if html_path.is_file() else ""
             if not groups:
@@ -330,9 +399,14 @@ def build_rows(aggregated_dir: Path) -> list:
                     "component": component, "container": "-",
                     "tests": 0, "passed": 0, "failed": 0, "skipped": 0, "time": 0.0,
                     "status": "NO TESTCASES", "status_class": "noreports",
-                    "report_href": href,
+                    "report_href": href, "detail_href": "",
                 })
                 continue
+            # Group records by container ONCE so each row can carry only its
+            # own records (cheap; main's renderer also filters defensively).
+            records_by_container = {}
+            for rec in records:
+                records_by_container.setdefault(rec.container, []).append(rec)
             for container in sorted(groups.keys()):
                 stats = groups[container]
                 if container == NO_CONTAINERS_LABEL:
@@ -346,7 +420,7 @@ def build_rows(aggregated_dir: Path) -> list:
                         "component": component, "container": container,
                         "tests": 0, "passed": 0, "failed": 0, "skipped": 0, "time": 0.0,
                         "status": "NO CONTAINERS SELECTED", "status_class": "noreports",
-                        "report_href": href,
+                        "report_href": href, "detail_href": "",
                     })
                     continue
                 status, status_class = _status_for(stats)
@@ -358,8 +432,23 @@ def build_rows(aggregated_dir: Path) -> list:
                     "failed": stats["failed"], "skipped": stats["skipped"],
                     "time": stats["time"],
                     "status": status, "status_class": status_class,
-                    "report_href": href,
+                    "report_href": href, "detail_href": "",
+                    "_records": records_by_container.get(container, []),
                 })
+
+    # Enforce row-key uniqueness before assigning filenames -- a true
+    # duplicate would otherwise be silently masked by the -2/-3 suffix
+    # discipline of _assign_unique_detail_filenames.
+    _assert_unique_real_row_keys(rows)
+
+    # Filename pass: real container rows get a stable, collision-safe
+    # detail_href. Skip-set rows already have detail_href == "".
+    real_rows = [r for r in rows if _is_real_container_row(r)]
+    keys = [_real_row_key(r) for r in real_rows]
+    names = _assign_unique_detail_filenames(keys)
+    for r, name in zip(real_rows, names):
+        r["detail_href"] = f"details/{name}"
+
     return rows
 
 

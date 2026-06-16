@@ -23,6 +23,7 @@ import html
 import re
 import sys
 import xml.etree.ElementTree as ET
+from dataclasses import dataclass
 from pathlib import Path
 
 
@@ -155,64 +156,119 @@ NO_CONTAINERS_LABEL = "(none in scope)"
 NOT_CONTAINER_SCOPED_LABEL = "(not container-scoped)"
 
 
+@dataclass(frozen=True)
+class TestcaseRecord:
+    """One <testcase> from a JUnit XML, attributed to a container.
+
+    Shared in-memory model for both counts (via _summarise_by_container) and
+    per-container detail extraction (Task 3+). Holding both views to a single
+    parse pass guarantees counts and detail can never drift.
+    """
+    container: str
+    name: str
+    time: float
+    outcome: str         # "passed" | "failed" | "skipped"
+    detail_tag: str      # "failure" | "error" | "skipped" | "" (no detail child)
+    message: str
+    body: str
+
+
+def _resolve_container(tc_name: str) -> str:
+    """Container attribution for one <testcase> name, identical to the logic
+    that lived inline inside parse_junit_xml before the shared-model refactor.
+    """
+    m = _CONTAINER_RE.search(tc_name)
+    if m:
+        return _normalize_container(m.group(1))
+    m2 = re.search(r"\[([^\]]+)\]", tc_name)
+    if m2:
+        raw = m2.group(1)
+        # 'NOTSET' is pytest's empty-parameter-set sentinel. It appears
+        # either alone ('[NOTSET]') or as a '-'-delimited token in a
+        # doubly-parametrized id ('[bloom-NOTSET]' = extension set,
+        # container empty). Both mean the matrix target had no containers
+        # in scope -> report metadata, not a real test.
+        if "NOTSET" in raw.split("-"):
+            return NO_CONTAINERS_LABEL
+        candidate = _normalize_container(raw)
+        return candidate if _looks_like_container(candidate) else NOT_CONTAINER_SCOPED_LABEL
+    return NOT_CONTAINER_SCOPED_LABEL
+
+
+def _parse_junit_testcases(xml_path: Path) -> list:
+    """Single source of truth for both counts and per-container detail.
+
+    Iterates ALL <testcase> elements anywhere in the tree (single suite,
+    multiple <testsuite> under <testsuites>, etc.) and returns a flat list of
+    TestcaseRecord. Outcome precedence is identical to the prior count parser:
+    <failure> OR <error> -> failed; else <skipped> -> skipped; else passed.
+    """
+    records = []
+    tree = ET.parse(xml_path)
+    root = tree.getroot()
+    for tc in root.iter("testcase"):
+        name = tc.get("name", "")
+        tc_time = float(tc.get("time", 0) or 0)
+        container = _resolve_container(name)
+
+        failure = tc.find("failure")
+        error   = tc.find("error")
+        skipped = tc.find("skipped")
+        if failure is not None or error is not None:
+            outcome = "failed"
+            elem = failure if failure is not None else error
+            detail_tag = "failure" if failure is not None else "error"
+        elif skipped is not None:
+            outcome = "skipped"
+            elem = skipped
+            detail_tag = "skipped"
+        else:
+            outcome = "passed"
+            elem = None
+            detail_tag = ""
+
+        message = elem.get("message", "") if elem is not None else ""
+        body    = (elem.text or "") if elem is not None else ""
+
+        records.append(TestcaseRecord(
+            container=container, name=name, time=tc_time,
+            outcome=outcome, detail_tag=detail_tag,
+            message=message, body=body,
+        ))
+    return records
+
+
+def _summarise_by_container(records: list) -> dict:
+    """Reduce a list of TestcaseRecord into the {container: {tests, passed,
+    failed, skipped, time}} shape parse_junit_xml has always returned.
+    """
+    groups = {}
+    for r in records:
+        g = groups.setdefault(
+            r.container,
+            {"tests": 0, "passed": 0, "failed": 0, "skipped": 0, "time": 0.0},
+        )
+        g["tests"] += 1
+        g["time"]  += r.time
+        g[r.outcome] += 1
+    return groups
+
+
 def parse_junit_xml(xml_path: Path) -> dict:
     """Parse one JUnit XML, grouping every test case by base container.
 
-    Iterates ALL <testcase> elements anywhere in the tree (single suite,
-    multiple <testsuite> under <testsuites>, etc.) so counts cannot be
-    silently undercounted.
+    Public shape unchanged: returns {container: {tests, passed, failed,
+    skipped, time}}. Now implemented as a thin reducer over
+    _parse_junit_testcases so per-testcase detail (Task 3+) and counts come
+    from the same in-memory pass and cannot drift.
 
     Container resolution, in order:
       * Primary  : canonical pytest param form '[<container>-<rhel|deb>'.
       * Fallback : a bracketed param that, after normalization, still looks
                    like a container (starts with auto-/my-).
-      * Otherwise: 'unattributed' (counted, never dropped).
+      * Otherwise: NOT_CONTAINER_SCOPED_LABEL (counted, never dropped).
     """
-    groups = {}
-
-    def bucket(name):
-        return groups.setdefault(
-            name, {"tests": 0, "passed": 0, "failed": 0, "skipped": 0, "time": 0.0}
-        )
-
-    tree = ET.parse(xml_path)
-    root = tree.getroot()
-
-    for tc in root.iter("testcase"):
-        name = tc.get("name", "")
-        tc_time = float(tc.get("time", 0) or 0)
-
-        m = _CONTAINER_RE.search(name)
-        if m:
-            container = _normalize_container(m.group(1))
-        else:
-            m2 = re.search(r"\[([^\]]+)\]", name)
-            if m2:
-                raw = m2.group(1)
-                # 'NOTSET' is pytest's empty-parameter-set sentinel. It appears
-                # either alone ('[NOTSET]') or as a '-'-delimited token in a
-                # doubly-parametrized id ('[bloom-NOTSET]' = extension set,
-                # container empty). Both mean the matrix target had no containers
-                # in scope -> report metadata, not a real test.
-                if "NOTSET" in raw.split("-"):
-                    container = NO_CONTAINERS_LABEL
-                else:
-                    candidate = _normalize_container(raw)
-                    container = candidate if _looks_like_container(candidate) else NOT_CONTAINER_SCOPED_LABEL
-            else:
-                container = NOT_CONTAINER_SCOPED_LABEL
-
-        g = bucket(container)
-        g["tests"] += 1
-        g["time"] += tc_time
-        if tc.find("failure") is not None or tc.find("error") is not None:
-            g["failed"] += 1
-        elif tc.find("skipped") is not None:
-            g["skipped"] += 1
-        else:
-            g["passed"] += 1
-
-    return groups
+    return _summarise_by_container(_parse_junit_testcases(xml_path))
 
 
 def _status_for(stats: dict) -> tuple:

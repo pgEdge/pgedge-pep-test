@@ -264,6 +264,30 @@ def test_parse_junit_notset_bucket(tmp_path):
     assert groups[ccr.NO_CONTAINERS_LABEL]["tests"] == 3
 
 
+def test_parse_junit_xml_is_reduction_of_record_parser(tmp_path):
+    # Guards the shared-model invariant: counts and per-testcase detail must
+    # both derive from one in-memory pass over the XML. If parse_junit_xml is
+    # ever re-implemented as an independent walk, this test breaks.
+    xml = tmp_path / "report.xml"
+    xml.write_text(
+        '<?xml version="1.0"?>'
+        '<testsuite tests="4" failures="1" skipped="1">'
+        '  <testcase name="test_a[auto-alma9-arm-rhel]" time="0.5"/>'
+        '  <testcase name="test_b[auto-alma9-arm-rhel]" time="0.7">'
+        '    <failure message="boom">tb here</failure>'
+        '  </testcase>'
+        '  <testcase name="test_c[auto-oel10-arm-rhel]" time="0.2"/>'
+        '  <testcase name="test_d[auto-oel10-arm-rhel]" time="0.1">'
+        '    <skipped message="why"/>'
+        '  </testcase>'
+        '</testsuite>'
+    )
+    counts = ccr.parse_junit_xml(xml)
+    records = ccr._parse_junit_testcases(xml)
+    reduced = ccr._summarise_by_container(records)
+    assert counts == reduced
+
+
 def test_build_rows_notset_becomes_no_containers_row(tmp_path):
     agg = tmp_path / "aggregated"
     sd = agg / "test-logs-r33-a1-pg17-rpm-amd64"

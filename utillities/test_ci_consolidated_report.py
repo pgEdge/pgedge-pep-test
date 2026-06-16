@@ -331,6 +331,81 @@ def test_assign_unique_detail_filenames_resolves_slug_collisions():
     assert names[3].endswith("-postgis-pg16-deb-arm64-auto-debian13-arm.html")
 
 
+def test_render_container_detail_page_defensively_filters_records():
+    # Pass a MIXED-container record list. The renderer must scope itself
+    # to the requested container without relying on the caller's filter.
+    recs = [
+        ccr.TestcaseRecord("auto-debian12-arm", "test_a[auto-debian12-arm-deb]",
+                           0.5, "passed", "", "", ""),
+        ccr.TestcaseRecord("auto-debian13-arm", "test_a[auto-debian13-arm-deb]",
+                           0.6, "failed", "failure", "boom", "tb body"),
+    ]
+    page = ccr.render_container_detail_page(
+        component="postgis", pg="16", family="deb", arch="arm64",
+        container="auto-debian12-arm",
+        records=recs,
+        back_link_href="../test-logs-x/postgis/16/report.html",
+        consolidated_filename="consolidated-report.html",
+    )
+    assert "auto-debian12-arm" in page
+    # The unrequested container's testcase params must not appear anywhere.
+    assert "test_a[auto-debian13-arm-deb]" not in page
+    assert "auto-debian13-arm" not in page
+    assert "Full pytest-html report" in page
+    assert 'href="../test-logs-x/postgis/16/report.html"' in page
+
+
+def test_render_container_detail_page_footer_uses_passed_filename():
+    page = ccr.render_container_detail_page(
+        component="c", pg="16", family="deb", arch="arm64",
+        container="auto-x", records=[],
+        back_link_href="../x.html",
+        consolidated_filename="consolidated-report-v24.html",
+    )
+    # Footer link must reflect the actual output filename, not a hardcode.
+    assert 'href="../consolidated-report-v24.html"' in page
+    assert 'href="../consolidated-report.html"' not in page
+
+
+def test_render_container_detail_page_escapes_and_collapses_traceback():
+    recs = [
+        ccr.TestcaseRecord("auto-alma9-arm", "test_<script>[auto-alma9-arm-rhel]",
+                           1.0, "failed", "failure",
+                           "msg with </details>", "tb with <script>alert(1)</script>"),
+    ]
+    page = ccr.render_container_detail_page(
+        component="server", pg="17", family="rpm", arch="arm64",
+        container="auto-alma9-arm",
+        records=recs,
+        back_link_href="../x/y.html",
+        consolidated_filename="consolidated-report.html",
+    )
+    # raw tags not present as active markup
+    assert "<script>alert(1)</script>" not in page
+    assert "&lt;script&gt;alert(1)&lt;/script&gt;" in page
+    assert "&lt;/details&gt;" in page
+    # traceback wrapped in collapsed <details>
+    assert "<details" in page
+    assert "Show traceback" in page or "show traceback" in page.lower()
+
+
+def test_render_container_detail_page_orders_failed_then_skipped_then_passed():
+    recs = [
+        ccr.TestcaseRecord("c", "test_p1[c-deb]", 0.1, "passed", "", "", ""),
+        ccr.TestcaseRecord("c", "test_f1[c-deb]", 0.2, "failed", "failure", "m", "b"),
+        ccr.TestcaseRecord("c", "test_s1[c-deb]", 0.3, "skipped", "skipped", "why", ""),
+    ]
+    page = ccr.render_container_detail_page(
+        component="comp", pg="16", family="deb", arch="amd64",
+        container="c", records=recs, back_link_href="../x.html",
+        consolidated_filename="consolidated-report.html",
+    )
+    i_fail = page.find("test_f1")
+    i_skip = page.find("test_s1")
+    i_pass = page.find("test_p1")
+    assert -1 < i_fail < i_skip < i_pass
+
+
 def test_build_rows_notset_becomes_no_containers_row(tmp_path):
     agg = tmp_path / "aggregated"
     sd = agg / "test-logs-r33-a1-pg17-rpm-amd64"

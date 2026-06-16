@@ -969,6 +969,128 @@ def _render_component_sections(rows: list, components: list, slugs: dict) -> str
     return "\n".join(parts)
 
 
+# ---------------------------------------------------------------------------
+# Per-container detail page rendering.
+#
+# One self-contained HTML page per real container row, written under
+# <output_dir>/details/. Each page lists ONLY that container's testcases
+# (renderer defensively filters), with failure/error/skipped tracebacks
+# tucked into collapsed <details> elements so the page stays small until
+# the user opens them.
+# ---------------------------------------------------------------------------
+
+_DETAIL_STYLE = """<style>
+  body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif; margin: 20px; background:#f5f5f5; color:#1e293b; }
+  .hd { background: linear-gradient(135deg,#667eea,#764ba2); color:#fff; padding:20px 24px; border-radius:8px; }
+  .hd h1 { margin:0 0 6px 0; font-size:22px; }
+  .hd .meta { font-size:13px; opacity:.95; }
+  .hd .meta .fail { color:#fecaca; font-weight:600; }
+  .hd a.back { display:inline-block; margin-top:10px; color:#fff; text-decoration:underline; font-size:13px; }
+  .cases { margin:16px 0; display:flex; flex-direction:column; gap:8px; }
+  .tcase { background:#fff; border:1px solid #d9dee7; border-radius:8px; padding:12px 14px; box-shadow:0 1px 3px rgba(0,0,0,.06); }
+  .tcase.failed  { border-left:4px solid #ef4444; }
+  .tcase.skipped { border-left:4px solid #f59e0b; }
+  .tcase.passed  { border-left:4px solid #10b981; }
+  .tcase .hdr { display:flex; gap:10px; align-items:center; flex-wrap:wrap; }
+  .tcase .nm { font-family:monospace; font-size:13px; color:#1e293b; }
+  .tcase .time { margin-left:auto; font-family:monospace; color:#64748b; font-size:12px; }
+  .badge { padding:3px 10px; border-radius:12px; font-size:11px; font-weight:600; text-transform:uppercase; }
+  .badge.passed  { background:#d1fae5; color:#065f46; }
+  .badge.failed  { background:#fee2e2; color:#991b1b; }
+  .badge.skipped { background:#fef3c7; color:#92400e; }
+  .msg { margin-top:8px; font-family:monospace; font-size:12px; color:#7a2218; background:#fef2f2; border-radius:6px; padding:8px 10px; white-space:pre-wrap; }
+  details { margin-top:8px; }
+  details summary { cursor:pointer; font-size:12px; color:#475569; }
+  details pre { background:#0f172a; color:#e2e8f0; padding:10px 12px; border-radius:6px; overflow:auto; font-size:11.5px; line-height:1.45; max-height:500px; }
+  .footer { margin-top:18px; text-align:center; font-size:12px; color:#666; }
+  .footer a { color:#667eea; text-decoration:none; }
+  .footer a:hover { text-decoration:underline; }
+</style>"""
+
+
+def _detail_badge(outcome: str, detail_tag: str) -> str:
+    """Status badge for one testcase. detail_tag picks ERROR vs FAIL for
+    failed outcomes; passed/skipped are unambiguous."""
+    if outcome == "failed":
+        label = "ERROR" if detail_tag == "error" else "FAIL"
+        cls = "failed"
+    elif outcome == "skipped":
+        label, cls = "SKIP", "skipped"
+    else:
+        label, cls = "PASS", "passed"
+    return f'<span class="badge {cls}">{label}</span>'
+
+
+def render_container_detail_page(component: str, pg: str, family: str,
+                                 arch: str, container: str,
+                                 records: list,
+                                 back_link_href: str,
+                                 consolidated_filename: str) -> str:
+    """Render the per-container detail HTML.
+
+    Defensively filters `records` to the requested container -- callers may
+    pass a superset (or the full per-XML list) and only the matching
+    testcases will appear in the output.
+
+    `back_link_href` is the relative href to the framework's combined
+    pytest-html for this target (the row's `report_href`, prefixed `../`).
+    `consolidated_filename` is the filename of the consolidated report in
+    the parent directory (e.g. "consolidated-report.html"); the footer
+    back-link is rendered as `../<consolidated_filename>` so local
+    regenerations with a different output filename (e.g.
+    `consolidated-report-v24.html`) link correctly.
+    """
+    # Defensive filter -- DO NOT trust the caller to have pre-filtered.
+    scoped = [r for r in records if r.container == container]
+    n_total   = len(scoped)
+    n_passed  = sum(1 for r in scoped if r.outcome == "passed")
+    n_failed  = sum(1 for r in scoped if r.outcome == "failed")
+    n_skipped = sum(1 for r in scoped if r.outcome == "skipped")
+
+    # failed -> skipped -> passed, stable within each bucket
+    order = {"failed": 0, "skipped": 1, "passed": 2}
+    scoped_sorted = sorted(scoped, key=lambda r: order[r.outcome])
+
+    case_blocks = []
+    for r in scoped_sorted:
+        traceback_block = ""
+        if r.outcome != "passed":
+            if r.message:
+                traceback_block += f'<div class="msg">{_esc(r.message)}</div>'
+            if r.body.strip():
+                traceback_block += (
+                    '<details><summary>Show traceback</summary>'
+                    f'<pre>{_esc(r.body)}</pre></details>'
+                )
+        case_blocks.append(
+            f'<div class="tcase {_esc(r.outcome)}">'
+            '<div class="hdr">'
+            f'{_detail_badge(r.outcome, r.detail_tag)}'
+            f'<span class="nm">{_esc(r.name)}</span>'
+            f'<span class="time">{r.time:.2f}s</span>'
+            '</div>'
+            f'{traceback_block}'
+            '</div>'
+        )
+
+    title = f"{component} - {container} - PG{pg} {family} {arch}"
+    return (
+        '<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"/>'
+        f'<title>{_esc(title)}</title>{_DETAIL_STYLE}</head><body>'
+        '<div class="hd">'
+        f'<h1>{_esc(component)} &middot; {_esc(container)}</h1>'
+        f'<div class="meta">PG{_esc(pg)} &middot; {_esc(family)} &middot; {_esc(arch)} '
+        f'&middot; {n_total} tests &middot; '
+        f'<span class="fail">{n_failed} failed</span> &middot; '
+        f'{n_skipped} skipped &middot; {n_passed} passed</div>'
+        f'<a class="back" href="{_esc(back_link_href)}">Full pytest-html report &rarr;</a>'
+        '</div>'
+        '<div class="cases">' + "".join(case_blocks) + '</div>'
+        f'<div class="footer"><a href="../{_esc(consolidated_filename)}">&larr; consolidated report</a></div>'
+        '</body></html>'
+    )
+
+
 def _render_footer(rows: list, total_time: float) -> str:
     return f"""<div class="footer">
   {len(rows)} row(s) &middot; total execution time {total_time:.2f}s across all matrix targets.

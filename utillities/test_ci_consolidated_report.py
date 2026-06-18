@@ -331,6 +331,103 @@ def test_assign_unique_detail_filenames_resolves_slug_collisions():
     assert names[3].endswith("-postgis-pg16-deb-arm64-auto-debian13-arm.html")
 
 
+# ---------------------------------------------------------------------------
+# Container alias display tests.
+# ---------------------------------------------------------------------------
+
+def test_load_container_aliases_maps_real_names_to_aliases(tmp_path):
+    # Synthetic containers_list.json mirroring the real file's shape.
+    p = tmp_path / "containers_list.json"
+    p.write_text(
+        '{"rhel": [{"name": "auto-alma9-arm", "alias": "alma9-arm64", "enabled": true},'
+        '          {"name": "my-rocky9-amd", "alias": "rocky9-amd64", "enabled": true}],'
+        ' "deb":  [{"name": "auto-ubuntu2404-arm", "alias": "ubuntu2404-arm64", "enabled": true}]}',
+        encoding="utf-8",
+    )
+    m = ccr.load_container_aliases(p)
+    assert m == {
+        "auto-alma9-arm": "alma9-arm64",
+        "my-rocky9-amd": "rocky9-amd64",
+        "auto-ubuntu2404-arm": "ubuntu2404-arm64",
+    }
+
+
+def test_load_container_aliases_returns_empty_on_missing_file(tmp_path):
+    # Defensive: a missing catalog must not crash the report -- callers
+    # fall back to displaying the actual container name.
+    m = ccr.load_container_aliases(tmp_path / "does-not-exist.json")
+    assert m == {}
+
+
+def test_container_display_falls_back_to_actual_when_no_alias():
+    aliases = {"auto-alma9-arm": "alma9-arm64"}
+    assert ccr.container_display("auto-alma9-arm", aliases) == "alma9-arm64"
+    # Unknown container -> identity. Renderer never drops a row just because
+    # the alias catalog hasn't caught up to a new container name.
+    assert ccr.container_display("auto-newdistro-arm", aliases) == "auto-newdistro-arm"
+    # Empty alias map -> identity.
+    assert ccr.container_display("auto-alma9-arm", {}) == "auto-alma9-arm"
+
+
+def test_component_section_container_cell_shows_alias_with_title_tooltip():
+    row = _mkrow("16", "deb", "arm64", "postgis", "auto-debian12-arm",
+                 "FAILED", tests=15, passed=14, failed=1)
+    row["detail_href"] = "details/x.html"
+    row["report_href"] = "test-logs-r1/foo.html"
+    ctx = {"run_number": "1", "run_attempt": "1", "run_id": "x",
+           "event_name": "workflow_dispatch", "actor": "tester", "slice_count": 1}
+    aliases = {"auto-debian12-arm": "debian12-arm64"}
+    out = ccr.render_html([row], ctx, aliases=aliases)
+    # Container CELL shows the alias as visible text...
+    assert ">debian12-arm64<" in out
+    # ...and carries the actual name in a title= tooltip so the original
+    # value is one hover away.
+    assert 'title="auto-debian12-arm"' in out
+    # The sort/filter attribute MUST keep the actual name (stable identifier).
+    assert 'data-container="auto-debian12-arm"' in out
+
+
+def test_component_section_falls_back_to_actual_when_no_alias():
+    # No alias passed -> Container cell text shows the actual name. The
+    # title= tooltip is ALWAYS rendered (carrying the actual name), even
+    # when no alias was available -- this keeps the cell self-documenting
+    # for hover regardless of catalog state and simplifies the renderer.
+    row = _mkrow("16", "deb", "arm64", "postgis", "auto-debian12-arm",
+                 "FAILED", tests=15, passed=14, failed=1)
+    row["detail_href"] = "details/x.html"
+    ctx = {"run_number": "1", "run_attempt": "1", "run_id": "x",
+           "event_name": "workflow_dispatch", "actor": "tester", "slice_count": 1}
+    out = ccr.render_html([row], ctx)
+    assert ">auto-debian12-arm<" in out
+    # Tooltip is always present and always names the actual container.
+    assert 'title="auto-debian12-arm"' in out
+
+
+def test_render_container_detail_page_uses_alias_in_header_chip():
+    page = ccr.render_container_detail_page(
+        component="postgis", pg="16", family="deb", arch="arm64",
+        container="auto-debian12-arm",
+        records=[], back_link_href="../x.html",
+        consolidated_filename="consolidated-report.html",
+        container_alias="debian12-arm64",
+    )
+    # Heading shows alias; actual name available via title= on the chip.
+    assert "debian12-arm64" in page
+    assert "auto-debian12-arm" in page  # actual still present (tooltip)
+    # Page <title> is fine either way; what matters is the visible header.
+
+
+def test_render_container_detail_page_falls_back_when_alias_omitted():
+    page = ccr.render_container_detail_page(
+        component="postgis", pg="16", family="deb", arch="arm64",
+        container="auto-debian12-arm",
+        records=[], back_link_href="../x.html",
+        consolidated_filename="consolidated-report.html",
+        # container_alias omitted on purpose
+    )
+    assert "auto-debian12-arm" in page
+
+
 def test_render_container_detail_page_defensively_filters_records():
     # Pass a MIXED-container record list. The renderer must scope itself
     # to the requested container without relying on the caller's filter.
@@ -1187,6 +1284,8 @@ def test_target_containers_groups_and_sorts():
 
 
 def test_render_heatmap_header_tooltip_lists_containers():
+    # No aliases passed -> the tooltip falls back to the actual container
+    # names. (Existing behavior; covers the catalog-missing case.)
     rows = [
         _mkrow("16", "deb", "arm64", "ace", "auto-ubuntu2404-arm", "PASSED",
                tests=1, passed=1),
@@ -1200,6 +1299,33 @@ def test_render_heatmap_header_tooltip_lists_containers():
     # Column header carries a title listing both containers + the count.
     assert 'title="PG16 deb arm64 — 2 containers: ' \
            'auto-debian12-arm, auto-ubuntu2404-arm"' in out
+
+
+def test_render_heatmap_header_tooltip_uses_aliases_when_provided():
+    # When aliases are passed, the column-header tooltip lists short names
+    # (the alias display) instead of the noisy auto-/my- prefixed actual
+    # names. The actual names remain available through the per-row Container
+    # cell's title= tooltip elsewhere in the report.
+    rows = [
+        _mkrow("16", "deb", "arm64", "ace", "auto-ubuntu2404-arm", "PASSED",
+               tests=1, passed=1),
+        _mkrow("16", "deb", "arm64", "ace", "auto-debian12-arm", "PASSED",
+               tests=1, passed=1),
+    ]
+    components, targets, cells, totals = ccr.aggregate_heatmap(rows)
+    slugs = ccr._assign_unique_slugs(components)
+    tc = ccr.target_containers(rows)
+    aliases = {
+        "auto-ubuntu2404-arm": "ubuntu2404-arm64",
+        "auto-debian12-arm": "debian12-arm64",
+    }
+    out = ccr._render_heatmap(components, targets, cells, totals, slugs, tc,
+                              aliases=aliases)
+    assert 'title="PG16 deb arm64 — 2 containers: ' \
+           'debian12-arm64, ubuntu2404-arm64"' in out
+    # Raw names must NOT leak into the heatmap tooltip when aliases are present.
+    assert "auto-debian12-arm" not in out
+    assert "auto-ubuntu2404-arm" not in out
 
 
 def test_render_heatmap_header_tooltip_singular_container():

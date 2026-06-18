@@ -20,6 +20,7 @@ are excluded so results are not double-counted.
 
 import argparse
 import html
+import json
 import re
 import sys
 import xml.etree.ElementTree as ET
@@ -511,6 +512,49 @@ def _assign_unique_slugs(names) -> dict:
     return out
 
 
+# Container alias helpers.
+#
+# Containers live in containers_list.json with both a canonical NAME used
+# everywhere as an identifier (e.g. "auto-alma9-arm", "my-rocky9-amd") and
+# a short, human-friendly ALIAS used for display (e.g. "alma9-arm64",
+# "rocky9-amd64"). The renderer reads the catalog once and shows the alias
+# wherever the container appears as visible text; the actual name moves to
+# a `title=` tooltip and remains the value of stable identifiers like the
+# row's `container` field, the `data-container` sort attribute, and the
+# detail_href filename.
+
+def load_container_aliases(path: Path = None) -> dict:
+    """Map container NAME -> short display ALIAS from containers_list.json.
+
+    Returns an empty dict if the catalog isn't present (renderer then falls
+    back to displaying the actual name). Defaults to the repo's catalog at
+    ../configuration/containers_list.json relative to this script.
+    """
+    if path is None:
+        path = Path(__file__).resolve().parent.parent / "configuration" / "containers_list.json"
+    if not path.is_file():
+        return {}
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (ValueError, OSError):
+        return {}
+    out = {}
+    for family_key in ("rhel", "deb"):
+        for entry in data.get(family_key, []) or []:
+            name = entry.get("name")
+            alias = entry.get("alias")
+            if name and alias:
+                out[name] = alias
+    return out
+
+
+def container_display(name: str, aliases: dict) -> str:
+    """Short label for one container: alias if present, otherwise the
+    actual name (defensive -- a future container missing from the catalog
+    must not disappear from the report)."""
+    return aliases.get(name, name)
+
+
 # Per-container detail-page filename helpers.
 #
 # Each real container row in the consolidated report gets its own static
@@ -829,10 +873,12 @@ def target_containers(rows: list) -> dict:
 
 def _render_heatmap(components: list, targets: list,
                     cells: dict, component_totals: dict,
-                    slugs: dict, tgt_containers: dict = None) -> str:
+                    slugs: dict, tgt_containers: dict = None,
+                    aliases: dict = None) -> str:
     if not components or not targets:
         return ""
     tgt_containers = tgt_containers or {}
+    aliases = aliases or {}
     # +2 columns for the two right-edge totals (Failed total, Tests total).
     n_cols = len(targets) + 2
     parts = ['<div class="heat-wrap">',
@@ -842,11 +888,16 @@ def _render_heatmap(components: list, targets: list,
     for (pg, family, arch) in targets:
         conts = tgt_containers.get((pg, family, arch), [])
         if conts:
-            n = len(conts)
+            # Show short alias display names in the tooltip; sort the
+            # display labels so the order is stable regardless of catalog
+            # entry order. Falls back per-container to the actual name when
+            # an alias isn't known.
+            display_conts = sorted(container_display(c, aliases) for c in conts)
+            n = len(display_conts)
             plural = "s" if n != 1 else ""
             head_tip = (
                 f"PG{pg} {family} {arch} — {n} container{plural}: "
-                + ", ".join(conts)
+                + ", ".join(display_conts)
             )
         else:
             head_tip = f"PG{pg} {family} {arch}"
@@ -930,13 +981,20 @@ def _render_controls() -> str:
 </div>"""
 
 
-def _render_component_section(name: str, slug: str, rows_for_comp: list) -> str:
+def _render_component_section(name: str, slug: str, rows_for_comp: list,
+                              aliases: dict = None) -> str:
     """Render one <details> block for a component (or the unattributed bucket).
+
+    The Container column shows the container's short alias (from
+    containers_list.json) when known; the actual name is kept as a title=
+    tooltip on the cell. The row's data-container attribute stays the actual
+    name so JS sorting and filtering keep a stable identifier.
 
     All visible text is escaped via _esc(). Per-row data-* attributes also go
     through _esc() so a hostile component / container value can't break the
     surrounding HTML.
     """
+    aliases = aliases or {}
     row_count = len(rows_for_comp)
     tests = sum(r["tests"] for r in rows_for_comp)
     failed = sum(r["failed"] for r in rows_for_comp)
@@ -1017,7 +1075,8 @@ def _render_component_section(name: str, slug: str, rows_for_comp: list) -> str:
             f'<td>{_esc(r["pg"])}</td>'
             f'<td>{_esc(r["family"])}</td>'
             f'<td>{_esc(r["arch"])}</td>'
-            f'<td class="mono">{_esc(r["container"])}</td>'
+            f'<td class="mono" title="{_esc(r["container"])}">'
+            f'{_esc(container_display(r["container"], aliases))}</td>'
             f'<td><span class="badge {_esc(r["status_class"])}">'
             f'{_esc(r["status"])}</span></td>'
             f'<td class="mono">{tcell}</td>'
@@ -1033,7 +1092,8 @@ def _render_component_section(name: str, slug: str, rows_for_comp: list) -> str:
     return "\n".join(parts)
 
 
-def _render_component_sections(rows: list, components: list, slugs: dict) -> str:
+def _render_component_sections(rows: list, components: list, slugs: dict,
+                               aliases: dict = None) -> str:
     """Render all per-component sections in the given component order, plus
     a trailing unattributed section if any rows have component == '-'.
 
@@ -1041,6 +1101,9 @@ def _render_component_sections(rows: list, components: list, slugs: dict) -> str
     if the caller wants a real component named "unattributed" not to collide
     with the bucket. _assign_unique_slugs handles the collision when called
     with both entries.
+
+    `aliases` is forwarded to each section renderer so the Container column
+    shows the short alias from containers_list.json.
     """
     by_comp = {}
     unattributed_rows = []
@@ -1052,11 +1115,13 @@ def _render_component_sections(rows: list, components: list, slugs: dict) -> str
 
     parts = []
     for c in components:
-        parts.append(_render_component_section(c, slugs[c], by_comp.get(c, [])))
+        parts.append(_render_component_section(c, slugs[c], by_comp.get(c, []),
+                                               aliases=aliases))
     if unattributed_rows:
         un_slug = slugs.get(UNATTRIBUTED_COMPONENT, UNATTRIBUTED_SLUG)
         parts.append(_render_component_section(
-            UNATTRIBUTED_COMPONENT, un_slug, unattributed_rows
+            UNATTRIBUTED_COMPONENT, un_slug, unattributed_rows,
+            aliases=aliases,
         ))
     return "\n".join(parts)
 
@@ -1117,7 +1182,8 @@ def render_container_detail_page(component: str, pg: str, family: str,
                                  arch: str, container: str,
                                  records: list,
                                  back_link_href: str,
-                                 consolidated_filename: str) -> str:
+                                 consolidated_filename: str,
+                                 container_alias: str = None) -> str:
     """Render the per-container detail HTML.
 
     Defensively filters `records` to the requested container -- callers may
@@ -1131,6 +1197,11 @@ def render_container_detail_page(component: str, pg: str, family: str,
     back-link is rendered as `../<consolidated_filename>` so local
     regenerations with a different output filename (e.g.
     `consolidated-report-v24.html`) link correctly.
+
+    `container_alias` is the short display name from containers_list.json
+    (e.g. "alma9-arm64"). When provided, the heading shows the alias and
+    the actual container name moves to a tooltip on the chip. When
+    omitted, the heading falls back to the actual container name.
     """
     # Defensive filter -- DO NOT trust the caller to have pre-filtered.
     scoped = [r for r in records if r.container == container]
@@ -1165,12 +1236,19 @@ def render_container_detail_page(component: str, pg: str, family: str,
             '</div>'
         )
 
-    title = f"{component} - {container} - PG{pg} {family} {arch}"
+    display = container_alias or container
+    title = f"{component} - {display} - PG{pg} {family} {arch}"
+    # The visible heading uses the alias; the actual container name is in a
+    # tooltip on the chip so it's one hover away (and still appears verbatim
+    # in the page so triagers searching the file by raw name still find it).
+    heading_container = (
+        f'<span title="{_esc(container)}">{_esc(display)}</span>'
+    )
     return (
         '<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"/>'
         f'<title>{_esc(title)}</title>{_DETAIL_STYLE}</head><body>'
         '<div class="hd">'
-        f'<h1>{_esc(component)} &middot; {_esc(container)}</h1>'
+        f'<h1>{_esc(component)} &middot; {heading_container}</h1>'
         f'<div class="meta">PG{_esc(pg)} &middot; {_esc(family)} &middot; {_esc(arch)} '
         f'&middot; {n_total} tests &middot; '
         f'<span class="fail">{n_failed} failed</span> &middot; '
@@ -1259,7 +1337,16 @@ function openFailing() {
 </script>"""
 
 
-def render_html(rows: list, ctx: dict) -> str:
+def render_html(rows: list, ctx: dict, aliases: dict = None) -> str:
+    """Render the consolidated report.
+
+    `aliases` is the container-name -> display-alias map produced by
+    load_container_aliases(). Passed through to the Container column. If
+    omitted or empty, the column falls back to the actual container name
+    (the renderer never drops a row just because the catalog hasn't caught
+    up to a new container).
+    """
+    aliases = aliases or {}
     rows = _sort_rows(rows)
     totals = _compute_totals(rows)
     components, targets, cells, ctotals = aggregate_heatmap(rows)
@@ -1285,9 +1372,9 @@ def render_html(rows: list, ctx: dict) -> str:
             rows, slugs.get(UNATTRIBUTED_COMPONENT, UNATTRIBUTED_SLUG)
         ) + "\n"
         + _render_heatmap(components, targets, cells, ctotals, slugs,
-                          tgt_containers) + "\n"
+                          tgt_containers, aliases=aliases) + "\n"
         + _render_controls() + "\n"
-        + _render_component_sections(rows, components, slugs) + "\n"
+        + _render_component_sections(rows, components, slugs, aliases=aliases) + "\n"
         + _render_footer(rows, totals["total_time"]) + "\n"
         + _render_scripts()
         + "\n</body></html>"
@@ -1352,6 +1439,7 @@ def main(argv=None) -> int:
                   if d.is_dir() and d.name.startswith("test-logs-")]
     rows = build_rows(aggregated)
     ctx = _run_context(aggregated, rows)
+    aliases = load_container_aliases()  # {} if catalog missing -> falls back to actual names
 
     out = Path(args.output)
     out.parent.mkdir(parents=True, exist_ok=True)
@@ -1381,6 +1469,7 @@ def main(argv=None) -> int:
                     records=r.get("_records") or [],
                     back_link_href=back,
                     consolidated_filename=consolidated_filename,
+                    container_alias=aliases.get(r["container"]),
                 ),
                 encoding="utf-8",
             )
@@ -1388,7 +1477,7 @@ def main(argv=None) -> int:
         # skip-set rows that never wrote a page) before render_html sees them.
         r.pop("_records", None)
 
-    out.write_text(render_html(rows, ctx), encoding="utf-8")
+    out.write_text(render_html(rows, ctx, aliases=aliases), encoding="utf-8")
 
     fails = sum(r["failed"] for r in rows)
     print(f"[ci-report] targets={len(slice_dirs)} rows={len(rows)} "

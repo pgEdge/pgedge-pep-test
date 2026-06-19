@@ -89,7 +89,7 @@ ai_db_workbench_dependency_map = {
     ai_db_workbench_alerter_package: [ai_db_workbench_server_package],
     ai_db_workbench_client_package: [ai_db_workbench_server_package],
     ai_db_workbench_collector_package: [ai_db_workbench_server_package],
-    ai_db_workbench_server_package: ["pgedge-postgres-mcp-kb"],
+    ai_db_workbench_server_package: [],
 }
 
 

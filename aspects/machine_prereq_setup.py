@@ -76,6 +76,8 @@ def setup_debian(os_id="", major=""):
     run("DEBIAN_FRONTEND=noninteractive apt-get install -y gnupg2")
     run("DEBIAN_FRONTEND=noninteractive apt-get install -y lsb-release")
     run("DEBIAN_FRONTEND=noninteractive apt-get install -y file")
+    run("DEBIAN_FRONTEND=noninteractive apt-get install -y python3-psycopg2")
+
 
     # Install sq (Sequoia PGP CLI) — method varies by distro version
     if os_id == "ubuntu":
@@ -105,6 +107,7 @@ def setup_rhel9():
     run("sudo dnf install -y file")
     run("sudo dnf install -y sequoia-sq")
     run("sudo dnf install -y wget")
+    run("sudo dnf install -y python3-psycopg2")
 
 
 
@@ -116,6 +119,8 @@ def setup_rhel10():
     run("sudo dnf install -y file")
     run("sudo dnf install -y sequoia-sq")
     run("sudo dnf install -y wget")
+    run("sudo dnf install -y python3-psycopg2")
+
 
 
 
@@ -128,6 +133,8 @@ def setup_rocky9():
     run("sudo dnf install -y file")
     run("sudo dnf install -y sequoia-sq")
     run("sudo dnf install -y wget")
+    run("sudo dnf install -y python3-psycopg2")
+
 
 
 
@@ -140,6 +147,8 @@ def setup_rocky10():
     run("sudo dnf install -y file")
     run("sudo dnf install -y sequoia-sq")
     run("sudo dnf install -y wget")
+    run("sudo dnf install -y python3-psycopg2")
+
 
 
 
@@ -152,6 +161,8 @@ def setup_oracle9():
     run("sudo dnf install -y file")
     run("sudo dnf install -y sequoia-sq")
     run("sudo dnf install -y wget")
+    run("sudo dnf install -y python3-psycopg2")
+
 
 
 
@@ -164,6 +175,8 @@ def setup_oracle10():
     run("sudo dnf install -y file")
     run("sudo dnf install -y sequoia-sq")
     run("sudo dnf install -y wget")
+    run("sudo dnf install -y python3-psycopg2")
+
 
 
 
@@ -176,6 +189,8 @@ def setup_alma9():
     run("sudo dnf install -y file")
     run("sudo dnf install -y sequoia-sq")
     run("sudo dnf install -y wget")
+    run("sudo dnf install -y python3-psycopg2")
+
 
 
 
@@ -188,6 +203,8 @@ def setup_alma10():
     run("sudo dnf install -y file")
     run("sudo dnf install -y sequoia-sq")
     run("sudo dnf install -y wget")
+    run("sudo dnf install -y python3-psycopg2")
+
 
 
 def _container_run(container, cmd):

@@ -67,6 +67,15 @@ from pathlib import Path
 zodan_script = (Path(__file__).parent.parent / "config" / "spock" / zodan_py).resolve()
 zodan_sql_script = (Path(__file__).parent.parent / "config" / "spock" / zodan_sql).resolve()
 
+# Spock major version (e.g. "60" -> spock60-sbom.json, PGEDGE_SPOCK60_xx_VERSION).
+# spock60 is a separate major version from spock50; both coexist in the repo.
+spock_major = os.getenv("SPOCK_MAJOR", "60")
+
+# spock60 is NOT bundled in the pgedge-enterprise-all meta package, so when it is
+# selected we install a customized package set (spock + contrib + the integration
+# extensions) instead of enterprise-all. spock50 keeps the enterprise-all path.
+use_spock_customize = spock_major == "60"
+
 # SQL files to run on each node
 sql_files_to_run = ["sql/postgis35.sql", "sql/lolor.sql", "sql/server-extensions.sql"]
 
@@ -85,6 +94,36 @@ def get_container_config(container_type):
             "pguser": deb_pguser,
             "enterprise_package": deb_enterprise_package
         }
+
+
+def get_spock_customize_packages(container_type):
+    """Package set installed instead of enterprise-all when spock60 is selected.
+
+    Covers spock + contrib + the integration extensions (snowflake, lolor, postgis).
+    """
+    if container_type == "rhel":
+        return [
+            f"pgedge-spock{spock_major}_{pg_major_version}",
+            f"pgedge-postgresql{pg_major_version}-contrib",
+            f"pgedge-snowflake_{pg_major_version}",
+            f"pgedge-lolor_{pg_major_version}",
+            f"pgedge-postgis35_{pg_major_version}",
+        ]
+    else:  # deb (contrib is bundled in the pgedge-postgresql-<xx> server package)
+        return [
+            f"pgedge-postgresql-{pg_major_version}-spock{spock_major}",
+            f"pgedge-postgresql-{pg_major_version}",
+            f"pgedge-postgresql-{pg_major_version}-snowflake",
+            f"pgedge-postgresql-{pg_major_version}-lolor",
+            f"pgedge-postgresql-{pg_major_version}-postgis-3",
+        ]
+
+
+def get_spock_pkg_name(container_type):
+    """Name of the spock package itself, for version verification."""
+    if container_type == "rhel":
+        return f"pgedge-spock{spock_major}_{pg_major_version}"
+    return f"pgedge-postgresql-{pg_major_version}-spock{spock_major}"
 
 
 # ============================================================================
@@ -137,8 +176,11 @@ def test_configure_repository(container_name, container_type):
 
 
 @pytest.mark.parametrize("container_name,container_type", all_containers)
-def test_install_enterprise_all(container_name, container_type):
+def test_install_enterprise_postgres(container_name, container_type):
     """Step 3: Install pgedge-enterprise-all package"""
+    if use_spock_customize:
+        pytest.skip(f"SPOCK_MAJOR={spock_major} selected — installing via test_install_spock_customize instead")
+
     container_name = container_name.strip()
 
     if not container_name:
@@ -167,8 +209,51 @@ def test_install_enterprise_all(container_name, container_type):
 
 
 @pytest.mark.parametrize("container_name,container_type", all_containers)
+def test_install_spock_customize(container_name, container_type):
+    """Step 3 (spock60): Install a customized package set instead of enterprise-all.
+
+    spock60 is a separate major version that is not bundled in enterprise-all, so
+    install spock + contrib + the integration extensions explicitly.
+    """
+    if not use_spock_customize:
+        pytest.skip(f"SPOCK_MAJOR={spock_major} — enterprise-all path is used (test_install_enterprise_postgres)")
+
+    container_name = container_name.strip()
+
+    if not container_name:
+        pytest.skip("Invalid container")
+
+    try:
+        container = client.containers.get(container_name)
+    except docker.errors.NotFound:
+        pytest.skip(f"Container {container_name} not found or not running.")
+
+    assert container.status == "running"
+
+    packages = get_spock_customize_packages(container_type)
+    print(f"\n--- Installing customized spock{spock_major} package set on {container_name} ---")
+    print(f"   Packages: {', '.join(packages)}")
+
+    # Install the customized package set
+    success, platform, message = package_management.install_package(
+        container=container,
+        package_name=packages,
+        pg_major_version=pg_major_version,
+        install_pg_server=False
+    )
+
+    assert success, f"Failed to install spock{spock_major} package set: {message}"
+    print(f"Successfully installed spock{spock_major} package set on {platform}")
+
+
+@pytest.mark.parametrize("container_name,container_type", all_containers)
 def test_upgrade_enterprise_all(container_name, container_type):
     """Step 3.1: Upgrade pgedge-enterprise-all package if UPGRADE=true"""
+    if use_spock_customize:
+        # The enterprise meta depends on spock50, which Conflicts with spock60.
+        # Installing/upgrading it here would evict the spock60 package (and its
+        # SBOM) that test_install_spock_customize put in place.
+        pytest.skip(f"SPOCK_MAJOR={spock_major} selected — enterprise-all meta is not used")
     if os.getenv("UPGRADE", "false").lower() != "true":
         pytest.skip("Skipping upgrade test because UPGRADE=false in env")
 
@@ -212,6 +297,9 @@ def test_upgrade_enterprise_all(container_name, container_type):
 @pytest.mark.parametrize("container_name,container_type", all_containers)
 def test_verify_enterprise_version(container_name, container_type):
     """Step 4: Verify installed enterprise-all package version"""
+    if use_spock_customize:
+        pytest.skip(f"SPOCK_MAJOR={spock_major} selected — verified via test_verify_spock_pkg_version instead")
+
     container_name = container_name.strip()
 
     if not container_name:
@@ -236,6 +324,42 @@ def test_verify_enterprise_version(container_name, container_type):
 
     assert success, f"Version verification failed: {message}"
     print(f"Version verified: {enterprise_package} {installed_version} on {platform}")
+
+
+@pytest.mark.parametrize("container_name,container_type", all_containers)
+def test_verify_spock_pkg_version(container_name, container_type):
+    """Step 4 (spock60): Verify the installed spock package version."""
+    if not use_spock_customize:
+        pytest.skip(f"SPOCK_MAJOR={spock_major} — enterprise-all is verified (test_verify_enterprise_version)")
+
+    container_name = container_name.strip()
+
+    if not container_name:
+        pytest.skip("Invalid container")
+
+    try:
+        container = client.containers.get(container_name)
+    except docker.errors.NotFound:
+        pytest.skip(f"Container {container_name} not found or not running.")
+
+    assert container.status == "running"
+
+    spock_version_var = f"PGEDGE_SPOCK{spock_major}_{pg_major_version}_VERSION"
+    expected_version = os.getenv(spock_version_var, "")
+    if not expected_version:
+        pytest.skip(f"{spock_version_var} not set in env")
+
+    spock_package = get_spock_pkg_name(container_type)
+
+    # Verify spock package version
+    success, platform, installed_version, message = package_management.verify_package_version(
+        container=container,
+        package_name=spock_package,
+        expected_version=expected_version
+    )
+
+    assert success, f"Version verification failed: {message}"
+    print(f"Version verified: {spock_package} {installed_version} on {platform}")
 
 
 @pytest.mark.parametrize("container_name,container_type", all_containers)
@@ -267,9 +391,9 @@ def test_verify_sbom(container_name, container_type):
         # Verify SBOM signature
         exit_code, output = container.exec_run(
             f"sh -c 'cd {sbom_dir} && sq verify "
-            f"--signature-file spock50-sbom.json.asc "
+            f"--signature-file spock{spock_major}-sbom.json.asc "
             f"--signer-file pgedge-rsa.pub "
-            f"spock50-sbom.json'",
+            f"spock{spock_major}-sbom.json'",
             user="root",
         )
         output_str = output.decode().replace('\xa0', ' ')
@@ -292,8 +416,8 @@ def test_verify_sbom(container_name, container_type):
         exit_code, output = container.exec_run(
             f"sh -c 'cd {sbom_dir} && sq verify "
             f"{_sq_signer_flag} /etc/apt/keyrings/pgedge-rsa.gpg "
-            f"{_sq_sig_flag} spock50-sbom.json.asc "
-            f"spock50-sbom.json'",
+            f"{_sq_sig_flag} spock{spock_major}-sbom.json.asc "
+            f"spock{spock_major}-sbom.json'",
             user="root",
         )
         output_str = output.decode().replace('\xa0', ' ')
@@ -454,9 +578,10 @@ def test_verify_spock_extension_version(container_name, container_type):
     config = get_container_config(container_type)
     pguser = config["pguser"]
 
-    expected_version = os.getenv(f"PGEDGE_SPOCK50_{pg_major_version}_VERSION", "")
+    spock_version_var = f"PGEDGE_SPOCK{spock_major}_{pg_major_version}_VERSION"
+    expected_version = os.getenv(spock_version_var, "")
     if not expected_version:
-        pytest.skip(f"PGEDGE_SPOCK50_{pg_major_version}_VERSION not set in env")
+        pytest.skip(f"{spock_version_var} not set in env")
 
     print(f"\n--- Verifying Spock extension version on all nodes (expected: {expected_version}) ---")
 

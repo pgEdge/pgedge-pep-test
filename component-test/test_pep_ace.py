@@ -1,6 +1,7 @@
 import os
 import sys
 import subprocess
+import time
 from pathlib import Path
 from datetime import datetime
 
@@ -10,7 +11,7 @@ from dotenv import load_dotenv
 
 # Add the parent directory to sys.path to import from aspects
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
-from aspects import configure_repository, package_management, machine_cleanup, machine_prereq_setup, file_management, container_management
+from aspects import configure_repository, package_management, machine_cleanup, machine_prereq_setup, file_management, container_management, pg_server_management
 
 load_dotenv()
 client = docker.from_env()
@@ -57,6 +58,23 @@ deb_bundled_files = os.getenv(
 # Decoupled components SBOM path
 decoupled_sbom_path = os.getenv("DECOUPLED_COMPONENTS_SBOM", "")
 
+# ACE functional test cluster configuration (always 3 nodes)
+ace_pg_major_version = os.getenv("PG_MAJOR_VERSION", "16")
+ace_base_port = int(os.getenv("BASE_PORT", "5431"))
+ace_pg_password = os.getenv("PG_PASSWORD", "postgres")
+ace_cluster_name = os.getenv("ACE_CLUSTER_NAME", "demo")
+ace_rhel_pgbin = os.getenv("PG_BIN_PATH", f"/usr/pgsql-{ace_pg_major_version}/bin")
+ace_deb_pgbin = os.getenv("DEB_PG_BIN_PATH", f"/usr/lib/postgresql/{ace_pg_major_version}/bin")
+
+_ace_spock_guc = {
+    "shared_preload_libraries": "'spock'",
+    "wal_level": "logical",
+    "max_worker_processes": "10",
+    "max_replication_slots": "10",
+    "max_wal_senders": "10",
+    "track_commit_timestamp": "on",
+}
+
 
 def get_container_config(container_type):
     """Get configuration based on container type (rhel or deb)"""
@@ -72,6 +90,14 @@ def get_container_config(container_type):
             "ace_package": deb_ace_package,
             "bundled_files": deb_bundled_files
         }
+
+
+def _ace_pgbin(container_type):
+    return ace_rhel_pgbin.rstrip('/') if container_type == "rhel" else ace_deb_pgbin.rstrip('/')
+
+
+def _ace_pguser(container_type):
+    return rhel_pguser if container_type == "rhel" else deb_pguser
 
 
 # ============================================================================
@@ -395,6 +421,536 @@ def test_ace_help(container_name, container_type):
     assert exit_code == 0, f"ace --help failed with exit code {exit_code}: {output_str}"
     assert len(output_str) > 0, "ace --help returned empty output"
     print(f"✅ ace --help executed successfully")
+
+
+# ============================================================================
+# ACE Functional Tests (3-node cluster)
+# ============================================================================
+
+@pytest.mark.parametrize("container_name,container_type", all_containers)
+def test_ace_functional_setup_cluster(container_name, container_type):
+    """ACE Functional Step 1: Initialize a 3-node Spock cluster for ACE functional testing"""
+    container_name = container_name.strip()
+    if not container_name:
+        pytest.skip("No container defined in env")
+
+    try:
+        container = client.containers.get(container_name)
+    except docker.errors.NotFound:
+        pytest.skip(f"Container {container_name} not found or not running.")
+
+    assert container.status == "running"
+
+    pgbin = _ace_pgbin(container_type)
+    pguser = _ace_pguser(container_type)
+
+    print(f"\n--- ACE: Initializing 3-node Spock cluster on {container_name} ---")
+
+    # Initialize nodes n1, n2, n3
+    for node_num in range(1, 4):
+        node_name = f"n{node_num}"
+        node_port = ace_base_port + node_num - 1
+        node_pgdata = f"/tmp/{node_name}"
+
+        print(f"\n▶️  Initializing {node_name} (port {node_port})")
+
+        # Stop and clean up any existing node
+        container.exec_run(
+            ["bash", "-c",
+             f"[ -d {node_pgdata} ] && {pgbin}/pg_ctl -D {node_pgdata} -m fast stop 2>/dev/null; "
+             f"rm -rf {node_pgdata}"],
+            user="root"
+        )
+        container.exec_run(
+            ["bash", "-c", f"fuser -k {node_port}/tcp 2>/dev/null; true"],
+            user="root"
+        )
+
+        success, _, message = pg_server_management.init_cluster(
+            container, pgbin, node_pgdata, pguser, _ace_spock_guc
+        )
+        assert success, f"Failed to init {node_name}: {message}"
+
+        success, _, message = pg_server_management.start_server(
+            container, pgbin, node_pgdata, str(node_port), pguser
+        )
+        assert success, f"Failed to start {node_name}: {message}"
+        print(f"✅ {node_name} running on port {node_port}")
+
+    # Create Spock extension and node on each instance
+    for node_num in range(1, 4):
+        node_name = f"n{node_num}"
+        node_port = ace_base_port + node_num - 1
+        node_dsn = (
+            f"host=localhost port={node_port} "
+            f"dbname=postgres user={pguser} password={ace_pg_password}"
+        )
+
+        for sql in [
+            "CREATE EXTENSION IF NOT EXISTS spock;",
+            f"SELECT spock.create_node(node_name := '{node_name}', dsn := '{node_dsn}');",
+        ]:
+            exit_code, output = container.exec_run(
+                ["psql", "-h", "localhost", "-p", str(node_port), "-U", pguser,
+                 "-d", "postgres", "-c", sql],
+                user="root"
+            )
+            assert exit_code == 0, f"SQL failed on {node_name}: {sql}\n{output.decode()}"
+
+        print(f"✅ Spock extension and node created on {node_name}")
+
+    n1_port = ace_base_port
+
+    # Create test table public.n1 on n1, add to default repset, seed 10 rows
+    setup_sql = (
+        "CREATE TABLE IF NOT EXISTS public.n1 (\n"
+        "    id SERIAL PRIMARY KEY,\n"
+        "    data TEXT,\n"
+        "    created_at TIMESTAMP DEFAULT NOW()\n"
+        ");\n"
+        "SELECT spock.repset_add_table('default', 'public.n1');\n"
+        "INSERT INTO public.n1 (data)\n"
+        "    SELECT 'initial_row_' || g FROM generate_series(1, 10) g;\n"
+    )
+    sql_file = "/tmp/ace_create_table.sql"
+    container.exec_run(
+        ["bash", "-c", f"cat > {sql_file} << 'EOF'\n{setup_sql}\nEOF"],
+        user="root"
+    )
+    exit_code, output = container.exec_run(
+        ["bash", "-c",
+         f"psql -h localhost -p {n1_port} -U {pguser} -d postgres -f {sql_file}"],
+        user="root"
+    )
+    assert exit_code == 0, f"Failed to create/seed public.n1 on n1: {output.decode()}"
+    print(f"✅ Table public.n1 seeded with 10 rows on n1")
+
+    # Subscribe n2 and n3 to n1 for initial data sync
+    n1_dsn = (
+        f"host=localhost port={n1_port} dbname=postgres "
+        f"user={pguser} password={ace_pg_password}"
+    )
+    for sub_num in [2, 3]:
+        sub_port = ace_base_port + sub_num - 1
+        sub_name = f"sub_n{sub_num}_n1"
+        sub_sql = (
+            f"SELECT spock.create_subscription("
+            f"sub_name := '{sub_name}', "
+            f"provider_dsn := '{n1_dsn}', "
+            f"replication_sets := ARRAY['default'], "
+            f"synchronize_data := true);"
+        )
+        exit_code, output = container.exec_run(
+            ["psql", "-h", "localhost", "-p", str(sub_port), "-U", pguser,
+             "-d", "postgres", "-c", sub_sql],
+            user="root"
+        )
+        assert exit_code == 0, (
+            f"Failed to create subscription {sub_name}: {output.decode()}"
+        )
+        print(f"✅ n{sub_num} subscribed to n1 ({sub_name})")
+
+    print(f"\n⏳ Waiting 15 seconds for initial replication to n2 and n3...")
+    time.sleep(15)
+
+    # Verify table replicated to n2 and n3
+    for check_num in [2, 3]:
+        check_port = ace_base_port + check_num - 1
+        exit_code, output = container.exec_run(
+            ["psql", "-h", "localhost", "-p", str(check_port), "-U", pguser,
+             "-d", "postgres", "-t", "-c", "SELECT COUNT(*) FROM public.n1;"],
+            user="root"
+        )
+        assert exit_code == 0, f"Failed to query n{check_num}: {output.decode()}"
+        count = output.decode().strip()
+        assert int(count) >= 10, (
+            f"Replication incomplete on n{check_num}: only {count} rows"
+        )
+        print(f"✅ n{check_num} has {count} rows — initial replication confirmed")
+
+    print(f"\n✅ 3-node Spock cluster ready for ACE functional tests")
+
+
+@pytest.mark.parametrize("container_name,container_type", all_containers)
+def test_ace_functional_create_divergence(container_name, container_type):
+    """ACE Functional Step 2: Disable subscriptions and create data divergence across all nodes"""
+    container_name = container_name.strip()
+    if not container_name:
+        pytest.skip("No container defined in env")
+
+    try:
+        container = client.containers.get(container_name)
+    except docker.errors.NotFound:
+        pytest.skip(f"Container {container_name} not found or not running.")
+
+    assert container.status == "running"
+
+    pguser = _ace_pguser(container_type)
+
+    print(f"\n--- ACE: Disabling subscriptions and creating data divergence ---")
+
+    # Disable all subscriptions on every node so writes stay local
+    print(f"\n▶️  Disabling Spock subscriptions on all nodes")
+    disable_sql = (
+        "DO $$ DECLARE r RECORD; BEGIN "
+        "FOR r IN SELECT sub_name FROM spock.subscription LOOP "
+        "PERFORM spock.sub_disable(r.sub_name); "
+        "END LOOP; END $$;"
+    )
+    for node_num in range(1, 4):
+        node_port = ace_base_port + node_num - 1
+        exit_code, output = container.exec_run(
+            ["psql", "-h", "localhost", "-p", str(node_port), "-U", pguser,
+             "-d", "postgres", "-c", disable_sql],
+            user="root"
+        )
+        if exit_code != 0:
+            out = output.decode()
+            if "does not exist" in out or "no subscription" in out.lower():
+                print(f"   ℹ️  n{node_num}: no subscriptions to disable")
+            else:
+                print(f"   ⚠️  Could not disable subscriptions on n{node_num}: {out}")
+        else:
+            print(f"   ✅ Subscriptions disabled on n{node_num}")
+
+    time.sleep(2)
+
+    # Insert 5 unique rows on n2 (these will NOT replicate to n1/n3)
+    print(f"\n▶️  Inserting 5 divergent rows on n2")
+    exit_code, output = container.exec_run(
+        ["psql", "-h", "localhost", "-p", str(ace_base_port + 1), "-U", pguser,
+         "-d", "postgres", "-c",
+         "INSERT INTO public.n1 (data) "
+         "SELECT 'n2_divergent_' || g FROM generate_series(1, 5) g;"],
+        user="root"
+    )
+    assert exit_code == 0, f"Failed to insert divergent rows on n2: {output.decode()}"
+    print(f"✅ 5 divergent rows inserted on n2")
+
+    # Insert 5 unique rows on n3
+    print(f"\n▶️  Inserting 5 divergent rows on n3")
+    exit_code, output = container.exec_run(
+        ["psql", "-h", "localhost", "-p", str(ace_base_port + 2), "-U", pguser,
+         "-d", "postgres", "-c",
+         "INSERT INTO public.n1 (data) "
+         "SELECT 'n3_divergent_' || g FROM generate_series(1, 5) g;"],
+        user="root"
+    )
+    assert exit_code == 0, f"Failed to insert divergent rows on n3: {output.decode()}"
+    print(f"✅ 5 divergent rows inserted on n3")
+
+    # Insert 100 rows on n1
+    print(f"\n▶️  Adding 100 rows on n1")
+    exit_code, output = container.exec_run(
+        ["psql", "-h", "localhost", "-p", str(ace_base_port), "-U", pguser,
+         "-d", "postgres", "-c",
+         "INSERT INTO public.n1 (data) "
+         "SELECT 'n1_load_' || g FROM generate_series(1, 100) g;"],
+        user="root"
+    )
+    assert exit_code == 0, f"Failed to insert 100 rows on n1: {output.decode()}"
+    print(f"✅ 100 rows added on n1")
+
+    # Print row counts per node to confirm divergence
+    print(f"\n▶️  Row counts per node:")
+    for node_num in range(1, 4):
+        node_port = ace_base_port + node_num - 1
+        exit_code, output = container.exec_run(
+            ["psql", "-h", "localhost", "-p", str(node_port), "-U", pguser,
+             "-d", "postgres", "-t", "-c", "SELECT COUNT(*) FROM public.n1;"],
+            user="root"
+        )
+        print(f"   n{node_num}: {output.decode().strip()} rows")
+
+    print(f"\n✅ Data divergence created — each node has unique rows")
+
+
+@pytest.mark.parametrize("container_name,container_type", all_containers)
+def test_ace_functional_create_config(container_name, container_type):
+    """ACE Functional Step 3: Write pg_service.conf, run ace cluster init and config init, create pgcrypto"""
+    container_name = container_name.strip()
+    if not container_name:
+        pytest.skip("No container defined in env")
+
+    try:
+        container = client.containers.get(container_name)
+    except docker.errors.NotFound:
+        pytest.skip(f"Container {container_name} not found or not running.")
+
+    assert container.status == "running"
+
+    pguser = _ace_pguser(container_type)
+    n1_port = ace_base_port
+    n2_port = ace_base_port + 1
+    n3_port = ace_base_port + 2
+    pg_service_path = "/tmp/pg_service.conf"
+    ace_yaml_path = "/tmp/ace.yaml"
+
+    print(f"\n--- ACE: Creating configuration files ---")
+
+    # Write pg_service.conf
+    pg_service_content = (
+        f"[{ace_cluster_name}]\n"
+        f"dbname=postgres\n"
+        f"user={pguser}\n"
+        f"password={ace_pg_password}\n"
+        f"\n"
+        f"[{ace_cluster_name}.n1]\n"
+        f"host=localhost\n"
+        f"port={n1_port}\n"
+        f"\n"
+        f"[{ace_cluster_name}.n2]\n"
+        f"host=localhost\n"
+        f"port={n2_port}\n"
+        f"\n"
+        f"[{ace_cluster_name}.n3]\n"
+        f"host=localhost\n"
+        f"port={n3_port}\n"
+    )
+    exit_code, output = container.exec_run(
+        ["bash", "-c",
+         f"cat > {pg_service_path} << 'EOF'\n{pg_service_content}\nEOF"],
+        user="root"
+    )
+    assert exit_code == 0, f"Failed to write pg_service.conf: {output.decode()}"
+    print(f"✅ pg_service.conf written to {pg_service_path}")
+
+    # ace cluster init
+    print(f"\n▶️  Running: ace cluster init --path {pg_service_path}")
+    exit_code, output = container.exec_run(
+        ["bash", "-c",
+         f"cd /tmp && PGSERVICEFILE={pg_service_path} "
+         f"/usr/bin/ace cluster init --path {pg_service_path}"],
+        user="root"
+    )
+    output_str = output.decode()
+    print(f"   {output_str[:500]}")
+    if exit_code != 0:
+        print(f"   ⚠️  ace cluster init exit code {exit_code} (output above)")
+    else:
+        print(f"✅ ace cluster init completed")
+
+    # ace config init
+    print(f"\n▶️  Running: ace config init --path {ace_yaml_path}")
+    exit_code, output = container.exec_run(
+        ["bash", "-c",
+         f"cd /tmp && PGSERVICEFILE={pg_service_path} "
+         f"/usr/bin/ace config init --path {ace_yaml_path}"],
+        user="root"
+    )
+    output_str = output.decode()
+    print(f"   {output_str[:500]}")
+    if exit_code != 0:
+        print(f"   ⚠️  ace config init exit code {exit_code} (output above)")
+    else:
+        print(f"✅ ace config init completed — ace.yaml at {ace_yaml_path}")
+
+    # Create pgcrypto extension on all nodes (required for mtree SHA-256 hashing)
+    print(f"\n▶️  Creating pgcrypto extension on all nodes")
+    for node_num in range(1, 4):
+        node_port = ace_base_port + node_num - 1
+        exit_code, output = container.exec_run(
+            ["psql", "-h", "localhost", "-p", str(node_port), "-U", pguser,
+             "-d", "postgres", "-c",
+             "CREATE EXTENSION IF NOT EXISTS pgcrypto;"],
+            user="root"
+        )
+        assert exit_code == 0, (
+            f"Failed to create pgcrypto on n{node_num}: {output.decode()}"
+        )
+        print(f"✅ pgcrypto created on n{node_num}")
+
+    print(f"\n✅ ACE configuration complete")
+
+
+@pytest.mark.parametrize("container_name,container_type", all_containers)
+def test_ace_table_diff(container_name, container_type):
+    """ACE Functional Step 4: Run ace table-diff to detect row differences across nodes"""
+    container_name = container_name.strip()
+    if not container_name:
+        pytest.skip("No container defined in env")
+
+    try:
+        container = client.containers.get(container_name)
+    except docker.errors.NotFound:
+        pytest.skip(f"Container {container_name} not found or not running.")
+
+    assert container.status == "running"
+
+    pg_service_path = "/tmp/pg_service.conf"
+
+    print(f"\n--- ACE: Running table-diff on public.n1 ---")
+
+    exit_code, output = container.exec_run(
+        ["bash", "-c",
+         f"cd /tmp && PGSERVICEFILE={pg_service_path} "
+         f"/usr/bin/ace table-diff -o html public.n1"],
+        user="root"
+    )
+    output_str = output.decode()
+    print(f"   Output:\n{output_str[:1000]}")
+
+    assert exit_code == 0, f"ace table-diff failed (exit {exit_code}):\n{output_str}"
+    print(f"✅ ace table-diff completed successfully")
+
+
+@pytest.mark.parametrize("container_name,container_type", all_containers)
+def test_ace_mtree_init(container_name, container_type):
+    """ACE Functional Step 5: Initialize Merkle tree infrastructure on all nodes"""
+    container_name = container_name.strip()
+    if not container_name:
+        pytest.skip("No container defined in env")
+
+    try:
+        container = client.containers.get(container_name)
+    except docker.errors.NotFound:
+        pytest.skip(f"Container {container_name} not found or not running.")
+
+    assert container.status == "running"
+
+    pg_service_path = "/tmp/pg_service.conf"
+
+    print(f"\n--- ACE: Running mtree init for cluster '{ace_cluster_name}' ---")
+
+    exit_code, output = container.exec_run(
+        ["bash", "-c",
+         f"cd /tmp && PGSERVICEFILE={pg_service_path} "
+         f"/usr/bin/ace mtree init --dbname postgres {ace_cluster_name}"],
+        user="root"
+    )
+    output_str = output.decode()
+    print(f"   Output:\n{output_str[:1000]}")
+
+    assert exit_code == 0, f"ace mtree init failed (exit {exit_code}):\n{output_str}"
+    print(f"✅ ace mtree init completed successfully")
+
+
+@pytest.mark.parametrize("container_name,container_type", all_containers)
+def test_ace_mtree_build(container_name, container_type):
+    """ACE Functional Step 6: Build Merkle tree for public.n1"""
+    container_name = container_name.strip()
+    if not container_name:
+        pytest.skip("No container defined in env")
+
+    try:
+        container = client.containers.get(container_name)
+    except docker.errors.NotFound:
+        pytest.skip(f"Container {container_name} not found or not running.")
+
+    assert container.status == "running"
+
+    pg_service_path = "/tmp/pg_service.conf"
+
+    print(f"\n--- ACE: Running mtree build for public.n1 ---")
+
+    exit_code, output = container.exec_run(
+        ["bash", "-c",
+         f"cd /tmp && PGSERVICEFILE={pg_service_path} "
+         f"/usr/bin/ace mtree build --dbname postgres {ace_cluster_name} public.n1"],
+        user="root"
+    )
+    output_str = output.decode()
+    print(f"   Output:\n{output_str[:1000]}")
+
+    assert exit_code == 0, f"ace mtree build failed (exit {exit_code}):\n{output_str}"
+    print(f"✅ ace mtree build completed successfully")
+
+
+@pytest.mark.parametrize("container_name,container_type", all_containers)
+def test_ace_mtree_table_diff(container_name, container_type):
+    """ACE Functional Step 7: Detect differences using Merkle tree comparison"""
+    container_name = container_name.strip()
+    if not container_name:
+        pytest.skip("No container defined in env")
+
+    try:
+        container = client.containers.get(container_name)
+    except docker.errors.NotFound:
+        pytest.skip(f"Container {container_name} not found or not running.")
+
+    assert container.status == "running"
+
+    pg_service_path = "/tmp/pg_service.conf"
+
+    print(f"\n--- ACE: Running mtree table-diff for public.n1 ---")
+
+    exit_code, output = container.exec_run(
+        ["bash", "-c",
+         f"cd /tmp && PGSERVICEFILE={pg_service_path} "
+         f"/usr/bin/ace mtree table-diff --dbname postgres {ace_cluster_name} public.n1 -o html"],
+        user="root"
+    )
+    output_str = output.decode()
+    print(f"   Output:\n{output_str[:1000]}")
+
+    assert exit_code == 0, f"ace mtree table-diff failed (exit {exit_code}):\n{output_str}"
+    print(f"✅ ace mtree table-diff completed successfully")
+
+
+@pytest.mark.parametrize("container_name,container_type", all_containers)
+def test_ace_mtree_update(container_name, container_type):
+    """ACE Functional Step 8: Advance the Merkle tree to the current LSN"""
+    container_name = container_name.strip()
+    if not container_name:
+        pytest.skip("No container defined in env")
+
+    try:
+        container = client.containers.get(container_name)
+    except docker.errors.NotFound:
+        pytest.skip(f"Container {container_name} not found or not running.")
+
+    assert container.status == "running"
+
+    pg_service_path = "/tmp/pg_service.conf"
+
+    print(f"\n--- ACE: Running mtree update for public.n1 ---")
+
+    exit_code, output = container.exec_run(
+        ["bash", "-c",
+         f"cd /tmp && PGSERVICEFILE={pg_service_path} "
+         f"/usr/bin/ace mtree update --dbname postgres {ace_cluster_name} public.n1"],
+        user="root"
+    )
+    output_str = output.decode()
+    print(f"   Output:\n{output_str[:1000]}")
+
+    assert exit_code == 0, f"ace mtree update failed (exit {exit_code}):\n{output_str}"
+    print(f"✅ ace mtree update completed successfully")
+
+
+@pytest.mark.parametrize("container_name,container_type", all_containers)
+def test_ace_functional_cleanup(container_name, container_type):
+    """ACE Functional Step 9: Stop all PostgreSQL nodes used in ACE functional tests"""
+    container_name = container_name.strip()
+    if not container_name:
+        pytest.skip("No container defined in env")
+
+    try:
+        container = client.containers.get(container_name)
+    except docker.errors.NotFound:
+        pytest.skip(f"Container {container_name} not found or not running.")
+
+    assert container.status == "running"
+
+    pgbin = _ace_pgbin(container_type)
+    pguser = _ace_pguser(container_type)
+
+    print(f"\n--- ACE: Stopping all PostgreSQL nodes ---")
+
+    for node_num in range(1, 4):
+        node_name = f"n{node_num}"
+        node_pgdata = f"/tmp/{node_name}"
+        node_port = ace_base_port + node_num - 1
+
+        success, _, message = pg_server_management.stop_server(
+            container, pgbin, node_pgdata, str(node_port), pguser
+        )
+        if success:
+            print(f"✅ {node_name} stopped")
+        else:
+            print(f"⚠️  Could not stop {node_name}: {message}")
+
+    print(f"\n✅ ACE functional test cleanup complete")
 
 
 @pytest.mark.parametrize("container_name,container_type", all_containers)

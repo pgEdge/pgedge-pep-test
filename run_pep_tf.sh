@@ -11,6 +11,7 @@ PGVER=""
 PLATFORMS=""
 COMPONENTS=""
 REPO_OVERRIDE=""
+SPOCK_OVERRIDE=""
 TARGET="docker"   # default: local Docker containers
 CONTAINERS_OVERRIDE=""
 LIST_CONTAINERS=false
@@ -36,6 +37,11 @@ while [[ $# -gt 0 ]]; do
       ;;
     --repo)
       REPO_OVERRIDE="$2"
+      CLI_MODE=true
+      shift 2
+      ;;
+    --spock)
+      SPOCK_OVERRIDE="$2"
       CLI_MODE=true
       shift 2
       ;;
@@ -89,6 +95,10 @@ OPTIONS:
   --repo <repository>     Repository to use (default: staging)
                           Values: release, staging, daily
 
+  --spock <major>         Spock major version to install/verify (default: from config, 60)
+                          Values: 50, 60
+                          Overrides SPOCK_MAJOR from the config env file for this run.
+
   --target <target>       Execution target (default: docker)
                           Values: docker, aws
                           docker: run against local Docker containers (containers_list.json)
@@ -131,6 +141,9 @@ EXAMPLES:
 
   # Test everything with release repo
   ./$(basename "$0") --pgver all --platforms all --components all --repo release
+
+  # Test zerodowntime on PG 18 RPM against spock50 from the daily repo
+  ./$(basename "$0") --pgver 18 --platforms rpm --components zerodowntime --repo daily --spock 50
 HELPTEXT
       exit 0
       ;;
@@ -585,6 +598,12 @@ for fam, name in selected:
     echo "[dry-run] skipping test execution (no pytest, no Docker, no package install, no repo setup)"
     unset _platforms_lc
     continue
+  fi
+
+  # Apply spock major version override if specified via CLI
+  if [[ -n "$SPOCK_OVERRIDE" ]]; then
+    export SPOCK_MAJOR="$SPOCK_OVERRIDE"
+    echo "   Overriding SPOCK_MAJOR to: $SPOCK_OVERRIDE"
   fi
 
   for platform in "${platform_list[@]}"; do

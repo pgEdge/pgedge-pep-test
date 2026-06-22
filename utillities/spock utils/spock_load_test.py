@@ -69,6 +69,60 @@ def signal_handler(sig, frame):
 
 signal.signal(signal.SIGINT, signal_handler)
 
+# ── PK SEQUENCE INIT (thread-safe, once per database node) ─────────────────
+# The Northwind schema defines order_id / product_id as INTEGER NOT NULL
+# without a SERIAL default.  We create lightweight helper sequences the first
+# time we touch each node so concurrent threads never collide on PKs.
+_initialized_hosts: set = set()
+_init_lock = threading.Lock()
+
+
+def _ensure_load_sequences(conn):
+    """Create (or advance) _load_order_seq / _load_product_seq on this database node.
+
+    Called once per database node per process.  Using CREATE … IF NOT EXISTS
+    followed by setval() means repeated test runs always advance the sequence
+    past the current table MAX — avoiding the duplicate-key collisions that
+    occur when a sequence persists from a previous run at a stale position.
+    """
+    try:
+        if HAS_PSYCOPG2 and hasattr(conn, 'get_dsn_parameters'):
+            p = conn.get_dsn_parameters()
+            node_key = f"{p.get('host', 'localhost')}:{p.get('port', '5432')}"
+        elif HAS_PSYCOPG3 and hasattr(conn, 'info'):
+            node_key = f"{conn.info.host}:{conn.info.port}"
+        else:
+            node_key = str(id(conn))
+    except Exception:
+        node_key = str(id(conn))
+
+    if node_key in _initialized_hosts:
+        return
+
+    with _init_lock:
+        if node_key in _initialized_hosts:
+            return
+        cur = conn.cursor()
+
+        # Ensure sequences exist (no START WITH — setval takes care of position)
+        cur.execute("CREATE SEQUENCE IF NOT EXISTS _load_order_seq")
+        cur.execute("CREATE SEQUENCE IF NOT EXISTS _load_product_seq")
+
+        # Advance past the current table maximum every run.
+        # setval(seq, n, false) → next nextval() returns n, handling repeated runs
+        # where CREATE … IF NOT EXISTS is a no-op but MAX has grown since last run.
+        cur.execute("SELECT COALESCE(MAX(order_id),   10000) + 5000 FROM orders")
+        safe_order = cur.fetchone()[0]
+        cur.execute("SELECT COALESCE(MAX(product_id),   100) + 1000 FROM products")
+        safe_prod  = cur.fetchone()[0]
+
+        cur.execute("SELECT setval('_load_order_seq',   %s, false)", (safe_order,))
+        cur.execute("SELECT setval('_load_product_seq', %s, false)", (safe_prod,))
+
+        conn.commit()
+        cur.close()
+        _initialized_hosts.add(node_key)
+
 NORTHWIND_TABLES = [
     "categories", "customers", "employees", "shippers",
     "suppliers", "products", "orders", "order_details",
@@ -238,6 +292,7 @@ def insert_customer(conn):
 
 def insert_order(conn):
     cur = conn.cursor()
+    _ensure_load_sequences(conn)
     cur.execute("SELECT customer_id FROM customers ORDER BY RANDOM() LIMIT 1;")
     cust = cur.fetchone()
     if not cust:
@@ -250,9 +305,10 @@ def insert_order(conn):
     ship = cur.fetchone()
     ship_id = ship[0] if ship else 1
     cur.execute("""
-        INSERT INTO orders (customer_id, employee_id, order_date, required_date, shipped_date,
-                            ship_via, freight, ship_name, ship_address, ship_city, ship_country)
-        VALUES (%s, %s, NOW(), NOW() + INTERVAL '14 days', NULL,
+        INSERT INTO orders (order_id, customer_id, employee_id, order_date, required_date,
+                            shipped_date, ship_via, freight, ship_name, ship_address,
+                            ship_city, ship_country)
+        VALUES (nextval('_load_order_seq'), %s, %s, NOW(), NOW() + INTERVAL '14 days', NULL,
                 %s, %s, %s, %s, %s, %s)
         RETURNING order_id
     """, (
@@ -274,6 +330,7 @@ def insert_order(conn):
 
 def insert_product(conn):
     cur = conn.cursor()
+    _ensure_load_sequences(conn)
     cur.execute("SELECT category_id FROM categories ORDER BY RANDOM() LIMIT 1;")
     cat = cur.fetchone()
     cat_id = cat[0] if cat else 1
@@ -281,9 +338,10 @@ def insert_product(conn):
     sup = cur.fetchone()
     sup_id = sup[0] if sup else 1
     cur.execute("""
-        INSERT INTO products (product_name, supplier_id, category_id, quantity_per_unit,
-                              unit_price, units_in_stock, units_on_order, reorder_level, discontinued)
-        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+        INSERT INTO products (product_id, product_name, supplier_id, category_id,
+                              quantity_per_unit, unit_price, units_in_stock,
+                              units_on_order, reorder_level, discontinued)
+        VALUES (nextval('_load_product_seq'), %s, %s, %s, %s, %s, %s, %s, %s, %s)
     """, (
         f"{random.choice(['Organic','Fresh','Premium','Classic','Artisan'])} {random_string(6)}",
         sup_id, cat_id, f"{random.randint(1,48)} boxes",

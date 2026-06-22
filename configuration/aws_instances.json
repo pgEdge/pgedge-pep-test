@@ -7,7 +7,7 @@
   "rhel": [
     {
       "name":        "z_RHEL9AMD",
-      "host":        "ec2-52-66-209-211.ap-south-1.compute.amazonaws.com",
+      "host":        "ec2-13-206-110-89.ap-south-1.compute.amazonaws.com",
       "username":    "rocky",
       "key_file":    "",
       "description": "Rocky Linux 9 / ap-south-1",
@@ -23,7 +23,7 @@
     },
     {
       "name":        "z_Rocky10_AMD",
-      "host":        "ec2-35-154-17-78.ap-south-1.compute.amazonaws.com",
+      "host":        "ec2-13-232-124-236.ap-south-1.compute.amazonaws.com",
       "username":    "rocky",
       "key_file":    "",
       "description": "Rocky Linux 10 AMD / ap-south-1",
@@ -50,7 +50,7 @@
     },
     {
       "name":        "z_Debian12_AMD",
-      "host":        "ec2-35-154-105-66.ap-south-1.compute.amazonaws.com",
+      "host":        "ec2-13-235-81-235.ap-south-1.compute.amazonaws.com",
       "username":    "admin",
       "key_file":    "",
       "description": "Debian 12 AMD / ap-south-1",
@@ -66,19 +66,19 @@
     },
     {
       "name":        "z_Debain11_AMD",
-      "host":        "ec2-13-233-104-123.ap-south-1.compute.amazonaws.com",
+      "host":        "ec2-13-204-63-100.ap-south-1.compute.amazonaws.com",
       "username":    "admin",
       "key_file":    "",
       "description": "Debian 11 ARM / ap-south-1",
-      "enabled":     false
+      "enabled":     true
     },
     {
       "name":        "z_Ubuntu22.04_AMD",
-      "host":        "ec2-13-203-18-145.ap-south-1.compute.amazonaws.com",
+      "host":        "ec2-13-205-3-235.ap-south-1.compute.amazonaws.com",
       "username":    "ubuntu",
       "key_file":    "",
       "description": "Ubuntu 22.04 AMD / ap-south-1",
-      "enabled":     false
+      "enabled":     true
     },
     {
       "name":        "z_Ubuntu 24.04 LTS Pro2",
@@ -90,11 +90,11 @@
     },
     {
       "name":        "z_Ubuntu2404_AMD",
-      "host":        "ec2-13-207-176-156.ap-south-1.compute.amazonaws.com",
+      "host":        "ec2-65-2-172-53.ap-south-1.compute.amazonaws.com",
       "username":    "ubuntu",
       "key_file":    "",
       "description": "Ubuntu 24.04 AMD / ap-south-1",
-      "enabled":     false
+      "enabled":     true
     },
     {
       "name":        "z_Ubuntu2404_ARM",

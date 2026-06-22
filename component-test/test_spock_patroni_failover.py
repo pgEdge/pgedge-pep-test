@@ -45,8 +45,22 @@ n2_restapi_port   = int(os.getenv("PATRONI_N2_RESTAPI_PORT", "8008"))
 n3_restapi_port   = int(os.getenv("PATRONI_N3_RESTAPI_PORT", "8009"))
 etcd_host         = os.getenv("PATRONI_ETCD_HOST", "localhost:2379")
 
-# Zodan cross-wiring script
-zodan_sql = os.getenv("LATEST_ZODAN_SQL", "zodan-508.sql")
+# Spock major version (e.g. "60" -> pgedge-spock60_xx). spock60 is a separate
+# major version from spock50; both coexist in the repo, so it is selectable.
+spock_major = os.getenv("SPOCK_MAJOR", "60")
+
+# Zodan cross-wiring script — must match the spock major. spock60 renamed
+# internal catalog columns (e.g. remote_lsn -> remote_commit_lsn), so it needs
+# zodan-600.sql; spock50 uses zodan-508.sql. Resolution order:
+#   1. per-major override  LATEST_ZODAN_SQL_SPOCK<major>
+#   2. legacy LATEST_ZODAN_SQL (honored for spock50 for back-compat)
+#   3. built-in per-major default
+_default_zodan_by_major = {"50": "zodan-508.sql", "60": "zodan-600.sql"}
+zodan_sql = (
+    os.getenv(f"LATEST_ZODAN_SQL_SPOCK{spock_major}")
+    or (os.getenv("LATEST_ZODAN_SQL") if spock_major == "50" else None)
+    or _default_zodan_by_major.get(spock_major, "zodan-508.sql")
+)
 zodan_sql_script = (Path(__file__).parent.parent / "config" / "spock" / zodan_sql).resolve()
 
 # User / auth
@@ -73,7 +87,7 @@ def get_container_config(container_type):
             # Install spock first — it pulls pgedge-postgresql*-server as a dependency.
             # contrib is required separately for dblink (used by zodan cross-wiring).
             "server_packages": [
-                f"pgedge-spock50_{pg_major_version}",
+                f"pgedge-spock{spock_major}_{pg_major_version}",
                 f"pgedge-postgresql{pg_major_version}-contrib",
             ],
             "patroni_packages": [
@@ -93,7 +107,7 @@ def get_container_config(container_type):
             # Install spock first — it pulls pgedge-postgresql-* as a dependency.
             # contrib is required separately for dblink (used by zodan cross-wiring).
             "server_packages": [
-                f"pgedge-postgresql-{pg_major_version}-spock50",
+                f"pgedge-postgresql-{pg_major_version}-spock{spock_major}",
                 f"pgedge-postgresql-{pg_major_version}",
             ],
             "patroni_packages": [
@@ -1354,15 +1368,16 @@ def test_cleanup(container_name, container_type):
     # Step 3: stop etcd service
     container.exec_run(["bash", "-c", "pkill -x etcd 2>/dev/null; systemctl stop etcd 2>/dev/null || true"], user="root")
 
-    # Step 4: remove all data directories
-    for node in ["n1", "n2", "n3"]:
-        container.exec_run(["bash", "-c", f"rm -rf /tmp/{node}"], user="root")
+    # Step 4: remove all files and directories under /tmp/
+    # This covers PG data dirs (n1/n2/n3), Patroni logs, pgpass files,
+    # copied scripts (zodan, reset_patroni, northwind, spock_load_test, etc.)
+    rc, out = container.exec_run(
+        ["bash", "-c", "find /tmp -mindepth 1 -exec rm -rf {} + 2>/dev/null; echo 'tmp cleaned'"],
+        user="root"
+    )
+    print(f"/tmp cleanup: {out.decode().strip()}")
 
-    # Step 5: remove log and pgpass files
-    for f in ["patroni_n2.log", "patroni_n3.log", "pgpass_n2", "pgpass_n3"]:
-        container.exec_run(["bash", "-c", f"rm -f /tmp/{f}"], user="root")
-
-    # Step 6: remove all pgedge-* packages
+    # Step 5: remove all pgedge-* packages
     rc, out = container.exec_run(
         ["bash", "-c",
          "if command -v dnf &>/dev/null; then "

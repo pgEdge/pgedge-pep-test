@@ -1,0 +1,1451 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <title>pgEdge Test Reports - All Components</title>
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+            max-width: 1400px;
+            margin: 40px auto;
+            padding: 20px;
+            background: #f5f5f5;
+        }
+        .header {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 40px;
+            border-radius: 8px;
+            margin-bottom: 30px;
+            text-align: center;
+        }
+        .header h1 {
+            margin: 0 0 10px 0;
+            font-size: 32px;
+        }
+        .header .subtitle {
+            opacity: 0.9;
+            font-size: 16px;
+        }
+        .header .timestamp {
+            opacity: 0.7;
+            font-size: 12px;
+            margin-top: 15px;
+        }
+        .components-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(380px, 1fr));
+            gap: 20px;
+            margin-top: 20px;
+        }
+        .component-card {
+            background: white;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+            overflow: hidden;
+            transition: transform 0.2s, box-shadow 0.2s;
+        }
+        .component-card:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+        }
+        .component-card-header {
+            background: #f8f9fa;
+            padding: 20px;
+            border-bottom: 1px solid #eee;
+        }
+        .component-card-header h2 {
+            margin: 0;
+            font-size: 18px;
+            color: #333;
+        }
+        .component-card-body {
+            padding: 15px 20px;
+        }
+        .version-table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 13px;
+        }
+        .version-table th {
+            text-align: left;
+            padding: 8px 5px;
+            border-bottom: 2px solid #eee;
+            color: #666;
+            font-size: 11px;
+            text-transform: uppercase;
+        }
+        .version-table td {
+            padding: 8px 5px;
+            border-bottom: 1px solid #eee;
+        }
+        .version-table tr:last-child td {
+            border-bottom: none;
+        }
+        .version-badge {
+            background: #667eea;
+            color: white;
+            padding: 2px 8px;
+            border-radius: 10px;
+            font-size: 11px;
+            font-weight: 600;
+        }
+        .platform-badge {
+            padding: 2px 8px;
+            border-radius: 4px;
+            font-size: 10px;
+            font-weight: 600;
+        }
+        .platform-badge.rpm {
+            background: #fee2e2;
+            color: #991b1b;
+        }
+        .platform-badge.deb {
+            background: #dbeafe;
+            color: #1e40af;
+        }
+        .stats {
+            display: flex;
+            gap: 8px;
+            font-size: 11px;
+        }
+        .stat {
+            padding: 2px 6px;
+            border-radius: 4px;
+            font-weight: 600;
+        }
+        .stat.passed {
+            background: #d1fae5;
+            color: #065f46;
+        }
+        .stat.failed {
+            background: #fee2e2;
+            color: #991b1b;
+        }
+        .stat.skipped {
+            background: #fef3c7;
+            color: #92400e;
+        }
+        .component-card-footer {
+            background: #f8f9fa;
+            padding: 15px 20px;
+            text-align: center;
+        }
+        .view-all-link {
+            color: #667eea;
+            text-decoration: none;
+            font-weight: 600;
+            font-size: 14px;
+        }
+        .view-all-link:hover {
+            text-decoration: underline;
+        }
+        .consolidated-link {
+            background: white;
+            padding: 20px;
+            border-radius: 8px;
+            margin-bottom: 30px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+            text-align: center;
+        }
+        .consolidated-link a {
+            color: #667eea;
+            text-decoration: none;
+            font-weight: 600;
+        }
+        .consolidated-link a:hover {
+            text-decoration: underline;
+        }
+        .no-reports {
+            text-align: center;
+            padding: 40px;
+            color: #666;
+        }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <h1>🧪 pgEdge Test Reports</h1>
+        <div class="subtitle">Comprehensive test results for all components</div>
+        <div class="timestamp">Generated: 2026-06-22 15:34:37</div>
+    </div>
+
+    <div class="consolidated-link">
+        📊 <a href="consolidated-20260622_153136/index.html">View Latest Consolidated Report →</a>
+    </div>
+
+    <h2>Components</h2>
+    <div class="components-grid">
+        <div class="component-card">
+            <div class="component-card-header">
+                <h2>Snowflake</h2>
+            </div>
+            <div class="component-card-body">
+                <table class="version-table">
+                    <thead>
+                        <tr>
+                            <th>Version</th>
+                            <th>Platform</th>
+                            <th>Container</th>
+                            <th>Results</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <tr>
+                            <td><span class="version-badge">PG 16</span></td>
+                            <td><span class="platform-badge rpm">RPM</span></td>
+                            <td>z_RHEL9AMD</td>
+                            <td>
+                                <span class="stats">
+                                    <span class="stat passed">✓ 25</span>
+                                    <span class="stat failed">✗ 0</span>
+                                    <span class="stat skipped">○ 0</span>
+                                </span>
+                            </td>
+                        </tr>
+                        <tr>
+                            <td><span class="version-badge">PG 16</span></td>
+                            <td><span class="platform-badge rpm">RPM</span></td>
+                            <td>z_Rocky10_AMD</td>
+                            <td>
+                                <span class="stats">
+                                    <span class="stat passed">✓ 25</span>
+                                    <span class="stat failed">✗ 0</span>
+                                    <span class="stat skipped">○ 0</span>
+                                </span>
+                            </td>
+                        </tr>
+                        <tr>
+                            <td><span class="version-badge">PG 16</span></td>
+                            <td><span class="platform-badge deb">DEB</span></td>
+                            <td>z_Debain11_AMD</td>
+                            <td>
+                                <span class="stats">
+                                    <span class="stat passed">✓ 25</span>
+                                    <span class="stat failed">✗ 0</span>
+                                    <span class="stat skipped">○ 0</span>
+                                </span>
+                            </td>
+                        </tr>
+                        <tr>
+                            <td><span class="version-badge">PG 16</span></td>
+                            <td><span class="platform-badge deb">DEB</span></td>
+                            <td>z_Debian12_AMD</td>
+                            <td>
+                                <span class="stats">
+                                    <span class="stat passed">✓ 24</span>
+                                    <span class="stat failed">✗ 1</span>
+                                    <span class="stat skipped">○ 0</span>
+                                </span>
+                            </td>
+                        </tr>
+                        <tr>
+                            <td><span class="version-badge">PG 16</span></td>
+                            <td><span class="platform-badge deb">DEB</span></td>
+                            <td>z_Ubuntu22.04_AMD</td>
+                            <td>
+                                <span class="stats">
+                                    <span class="stat passed">✓ 25</span>
+                                    <span class="stat failed">✗ 0</span>
+                                    <span class="stat skipped">○ 0</span>
+                                </span>
+                            </td>
+                        </tr>
+                        <tr>
+                            <td><span class="version-badge">PG 16</span></td>
+                            <td><span class="platform-badge deb">DEB</span></td>
+                            <td>z_Ubuntu2404_AMD</td>
+                            <td>
+                                <span class="stats">
+                                    <span class="stat passed">✓ 25</span>
+                                    <span class="stat failed">✗ 0</span>
+                                    <span class="stat skipped">○ 0</span>
+                                </span>
+                            </td>
+                        </tr>
+                        <tr>
+                            <td><span class="version-badge">PG 17</span></td>
+                            <td><span class="platform-badge rpm">RPM</span></td>
+                            <td>z_RHEL9AMD</td>
+                            <td>
+                                <span class="stats">
+                                    <span class="stat passed">✓ 25</span>
+                                    <span class="stat failed">✗ 0</span>
+                                    <span class="stat skipped">○ 0</span>
+                                </span>
+                            </td>
+                        </tr>
+                        <tr>
+                            <td><span class="version-badge">PG 17</span></td>
+                            <td><span class="platform-badge rpm">RPM</span></td>
+                            <td>z_Rocky10_AMD</td>
+                            <td>
+                                <span class="stats">
+                                    <span class="stat passed">✓ 24</span>
+                                    <span class="stat failed">✗ 1</span>
+                                    <span class="stat skipped">○ 0</span>
+                                </span>
+                            </td>
+                        </tr>
+                        <tr>
+                            <td><span class="version-badge">PG 17</span></td>
+                            <td><span class="platform-badge deb">DEB</span></td>
+                            <td>z_Debain11_AMD</td>
+                            <td>
+                                <span class="stats">
+                                    <span class="stat passed">✓ 25</span>
+                                    <span class="stat failed">✗ 0</span>
+                                    <span class="stat skipped">○ 0</span>
+                                </span>
+                            </td>
+                        </tr>
+                        <tr>
+                            <td><span class="version-badge">PG 17</span></td>
+                            <td><span class="platform-badge deb">DEB</span></td>
+                            <td>z_Debian12_AMD</td>
+                            <td>
+                                <span class="stats">
+                                    <span class="stat passed">✓ 25</span>
+                                    <span class="stat failed">✗ 0</span>
+                                    <span class="stat skipped">○ 0</span>
+                                </span>
+                            </td>
+                        </tr>
+                        <tr>
+                            <td><span class="version-badge">PG 17</span></td>
+                            <td><span class="platform-badge deb">DEB</span></td>
+                            <td>z_Ubuntu22.04_AMD</td>
+                            <td>
+                                <span class="stats">
+                                    <span class="stat passed">✓ 25</span>
+                                    <span class="stat failed">✗ 0</span>
+                                    <span class="stat skipped">○ 0</span>
+                                </span>
+                            </td>
+                        </tr>
+                        <tr>
+                            <td><span class="version-badge">PG 17</span></td>
+                            <td><span class="platform-badge deb">DEB</span></td>
+                            <td>z_Ubuntu2404_AMD</td>
+                            <td>
+                                <span class="stats">
+                                    <span class="stat passed">✓ 25</span>
+                                    <span class="stat failed">✗ 0</span>
+                                    <span class="stat skipped">○ 0</span>
+                                </span>
+                            </td>
+                        </tr>
+                        <tr>
+                            <td><span class="version-badge">PG 18</span></td>
+                            <td><span class="platform-badge rpm">RPM</span></td>
+                            <td>z_RHEL9AMD</td>
+                            <td>
+                                <span class="stats">
+                                    <span class="stat passed">✓ 17</span>
+                                    <span class="stat failed">✗ 8</span>
+                                    <span class="stat skipped">○ 0</span>
+                                </span>
+                            </td>
+                        </tr>
+                        <tr>
+                            <td><span class="version-badge">PG 18</span></td>
+                            <td><span class="platform-badge rpm">RPM</span></td>
+                            <td>z_Rocky10_AMD</td>
+                            <td>
+                                <span class="stats">
+                                    <span class="stat passed">✓ 25</span>
+                                    <span class="stat failed">✗ 0</span>
+                                    <span class="stat skipped">○ 0</span>
+                                </span>
+                            </td>
+                        </tr>
+                        <tr>
+                            <td><span class="version-badge">PG 18</span></td>
+                            <td><span class="platform-badge deb">DEB</span></td>
+                            <td>z_Debain11_AMD</td>
+                            <td>
+                                <span class="stats">
+                                    <span class="stat passed">✓ 25</span>
+                                    <span class="stat failed">✗ 0</span>
+                                    <span class="stat skipped">○ 0</span>
+                                </span>
+                            </td>
+                        </tr>
+                        <tr>
+                            <td><span class="version-badge">PG 18</span></td>
+                            <td><span class="platform-badge deb">DEB</span></td>
+                            <td>z_Debian12_AMD</td>
+                            <td>
+                                <span class="stats">
+                                    <span class="stat passed">✓ 24</span>
+                                    <span class="stat failed">✗ 1</span>
+                                    <span class="stat skipped">○ 0</span>
+                                </span>
+                            </td>
+                        </tr>
+                        <tr>
+                            <td><span class="version-badge">PG 18</span></td>
+                            <td><span class="platform-badge deb">DEB</span></td>
+                            <td>z_Ubuntu22.04_AMD</td>
+                            <td>
+                                <span class="stats">
+                                    <span class="stat passed">✓ 25</span>
+                                    <span class="stat failed">✗ 0</span>
+                                    <span class="stat skipped">○ 0</span>
+                                </span>
+                            </td>
+                        </tr>
+                        <tr>
+                            <td><span class="version-badge">PG 18</span></td>
+                            <td><span class="platform-badge deb">DEB</span></td>
+                            <td>z_Ubuntu2404_AMD</td>
+                            <td>
+                                <span class="stats">
+                                    <span class="stat passed">✓ 25</span>
+                                    <span class="stat failed">✗ 0</span>
+                                    <span class="stat skipped">○ 0</span>
+                                </span>
+                            </td>
+                        </tr>
+                    </tbody>
+                </table>
+            </div>
+            <div class="component-card-footer">
+                <a href="snowflake/index.html" class="view-all-link">View All Reports →</a>
+            </div>
+        </div>
+        <div class="component-card">
+            <div class="component-card-header">
+                <h2>Zerodowntime</h2>
+            </div>
+            <div class="component-card-body">
+                <table class="version-table">
+                    <thead>
+                        <tr>
+                            <th>Version</th>
+                            <th>Platform</th>
+                            <th>Container</th>
+                            <th>Results</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <tr>
+                            <td><span class="version-badge">PG 16</span></td>
+                            <td><span class="platform-badge deb">DEB</span></td>
+                            <td>auto-debian11</td>
+                            <td>
+                                <span class="stats">
+                                    <span class="stat passed">✓ 18</span>
+                                    <span class="stat failed">✗ 1</span>
+                                    <span class="stat skipped">○ 1</span>
+                                </span>
+                            </td>
+                        </tr>
+                        <tr>
+                            <td><span class="version-badge">PG 16</span></td>
+                            <td><span class="platform-badge deb">DEB</span></td>
+                            <td>auto-debian12-arm</td>
+                            <td>
+                                <span class="stats">
+                                    <span class="stat passed">✓ 18</span>
+                                    <span class="stat failed">✗ 1</span>
+                                    <span class="stat skipped">○ 1</span>
+                                </span>
+                            </td>
+                        </tr>
+                        <tr>
+                            <td><span class="version-badge">PG 16</span></td>
+                            <td><span class="platform-badge deb">DEB</span></td>
+                            <td>auto-debian13-amd</td>
+                            <td>
+                                <span class="stats">
+                                    <span class="stat passed">✓ 18</span>
+                                    <span class="stat failed">✗ 1</span>
+                                    <span class="stat skipped">○ 1</span>
+                                </span>
+                            </td>
+                        </tr>
+                        <tr>
+                            <td><span class="version-badge">PG 16</span></td>
+                            <td><span class="platform-badge deb">DEB</span></td>
+                            <td>auto-debian13-arm</td>
+                            <td>
+                                <span class="stats">
+                                    <span class="stat passed">✓ 18</span>
+                                    <span class="stat failed">✗ 1</span>
+                                    <span class="stat skipped">○ 1</span>
+                                </span>
+                            </td>
+                        </tr>
+                        <tr>
+                            <td><span class="version-badge">PG 16</span></td>
+                            <td><span class="platform-badge deb">DEB</span></td>
+                            <td>auto-ubuntu2204-arm</td>
+                            <td>
+                                <span class="stats">
+                                    <span class="stat passed">✓ 17</span>
+                                    <span class="stat failed">✗ 2</span>
+                                    <span class="stat skipped">○ 1</span>
+                                </span>
+                            </td>
+                        </tr>
+                        <tr>
+                            <td><span class="version-badge">PG 16</span></td>
+                            <td><span class="platform-badge deb">DEB</span></td>
+                            <td>auto-ubuntu2404-arm</td>
+                            <td>
+                                <span class="stats">
+                                    <span class="stat passed">✓ 18</span>
+                                    <span class="stat failed">✗ 1</span>
+                                    <span class="stat skipped">○ 1</span>
+                                </span>
+                            </td>
+                        </tr>
+                        <tr>
+                            <td><span class="version-badge">PG 17</span></td>
+                            <td><span class="platform-badge deb">DEB</span></td>
+                            <td>auto-debian11</td>
+                            <td>
+                                <span class="stats">
+                                    <span class="stat passed">✓ 18</span>
+                                    <span class="stat failed">✗ 1</span>
+                                    <span class="stat skipped">○ 1</span>
+                                </span>
+                            </td>
+                        </tr>
+                        <tr>
+                            <td><span class="version-badge">PG 17</span></td>
+                            <td><span class="platform-badge deb">DEB</span></td>
+                            <td>auto-debian12-arm</td>
+                            <td>
+                                <span class="stats">
+                                    <span class="stat passed">✓ 18</span>
+                                    <span class="stat failed">✗ 1</span>
+                                    <span class="stat skipped">○ 1</span>
+                                </span>
+                            </td>
+                        </tr>
+                        <tr>
+                            <td><span class="version-badge">PG 17</span></td>
+                            <td><span class="platform-badge deb">DEB</span></td>
+                            <td>auto-debian13-amd</td>
+                            <td>
+                                <span class="stats">
+                                    <span class="stat passed">✓ 18</span>
+                                    <span class="stat failed">✗ 1</span>
+                                    <span class="stat skipped">○ 1</span>
+                                </span>
+                            </td>
+                        </tr>
+                        <tr>
+                            <td><span class="version-badge">PG 17</span></td>
+                            <td><span class="platform-badge deb">DEB</span></td>
+                            <td>auto-debian13-arm</td>
+                            <td>
+                                <span class="stats">
+                                    <span class="stat passed">✓ 18</span>
+                                    <span class="stat failed">✗ 1</span>
+                                    <span class="stat skipped">○ 1</span>
+                                </span>
+                            </td>
+                        </tr>
+                        <tr>
+                            <td><span class="version-badge">PG 17</span></td>
+                            <td><span class="platform-badge deb">DEB</span></td>
+                            <td>auto-ubuntu2204-arm</td>
+                            <td>
+                                <span class="stats">
+                                    <span class="stat passed">✓ 18</span>
+                                    <span class="stat failed">✗ 1</span>
+                                    <span class="stat skipped">○ 1</span>
+                                </span>
+                            </td>
+                        </tr>
+                        <tr>
+                            <td><span class="version-badge">PG 17</span></td>
+                            <td><span class="platform-badge deb">DEB</span></td>
+                            <td>auto-ubuntu2404-arm</td>
+                            <td>
+                                <span class="stats">
+                                    <span class="stat passed">✓ 18</span>
+                                    <span class="stat failed">✗ 1</span>
+                                    <span class="stat skipped">○ 1</span>
+                                </span>
+                            </td>
+                        </tr>
+                        <tr>
+                            <td><span class="version-badge">PG 18</span></td>
+                            <td><span class="platform-badge rpm">RPM</span></td>
+                            <td>auto-rocky9-arm</td>
+                            <td>
+                                <span class="stats">
+                                    <span class="stat passed">✓ 17</span>
+                                    <span class="stat failed">✗ 1</span>
+                                    <span class="stat skipped">○ 4</span>
+                                </span>
+                            </td>
+                        </tr>
+                        <tr>
+                            <td><span class="version-badge">PG 18</span></td>
+                            <td><span class="platform-badge deb">DEB</span></td>
+                            <td>auto-ubuntu2204-arm</td>
+                            <td>
+                                <span class="stats">
+                                    <span class="stat passed">✓ 16</span>
+                                    <span class="stat failed">✗ 2</span>
+                                    <span class="stat skipped">○ 4</span>
+                                </span>
+                            </td>
+                        </tr>
+                    </tbody>
+                </table>
+            </div>
+            <div class="component-card-footer">
+                <a href="zerodowntime/index.html" class="view-all-link">View All Reports →</a>
+            </div>
+        </div>
+        <div class="component-card">
+            <div class="component-card-header">
+                <h2>Ace</h2>
+            </div>
+            <div class="component-card-body">
+                <table class="version-table">
+                    <thead>
+                        <tr>
+                            <th>Version</th>
+                            <th>Platform</th>
+                            <th>Container</th>
+                            <th>Results</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <tr>
+                            <td><span class="version-badge">PG 18</span></td>
+                            <td><span class="platform-badge rpm">RPM</span></td>
+                            <td>auto-rocky9-arm</td>
+                            <td>
+                                <span class="stats">
+                                    <span class="stat passed">✓ 15</span>
+                                    <span class="stat failed">✗ 4</span>
+                                    <span class="stat skipped">○ 0</span>
+                                </span>
+                            </td>
+                        </tr>
+                    </tbody>
+                </table>
+            </div>
+            <div class="component-card-footer">
+                <a href="ace/index.html" class="view-all-link">View All Reports →</a>
+            </div>
+        </div>
+        <div class="component-card">
+            <div class="component-card-header">
+                <h2>Repo_health</h2>
+            </div>
+            <div class="component-card-body">
+                <table class="version-table">
+                    <thead>
+                        <tr>
+                            <th>Version</th>
+                            <th>Platform</th>
+                            <th>Container</th>
+                            <th>Results</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <tr>
+                            <td><span class="version-badge">PG 16</span></td>
+                            <td><span class="platform-badge rpm">RPM</span></td>
+                            <td>auto-alma10-arm</td>
+                            <td>
+                                <span class="stats">
+                                    <span class="stat passed">✓ 19</span>
+                                    <span class="stat failed">✗ 0</span>
+                                    <span class="stat skipped">○ 1</span>
+                                </span>
+                            </td>
+                        </tr>
+                        <tr>
+                            <td><span class="version-badge">PG 16</span></td>
+                            <td><span class="platform-badge rpm">RPM</span></td>
+                            <td>auto-oel9-amd</td>
+                            <td>
+                                <span class="stats">
+                                    <span class="stat passed">✓ 19</span>
+                                    <span class="stat failed">✗ 0</span>
+                                    <span class="stat skipped">○ 1</span>
+                                </span>
+                            </td>
+                        </tr>
+                        <tr>
+                            <td><span class="version-badge">PG 16</span></td>
+                            <td><span class="platform-badge rpm">RPM</span></td>
+                            <td>auto-rocky9-arm</td>
+                            <td>
+                                <span class="stats">
+                                    <span class="stat passed">✓ 19</span>
+                                    <span class="stat failed">✗ 0</span>
+                                    <span class="stat skipped">○ 1</span>
+                                </span>
+                            </td>
+                        </tr>
+                        <tr>
+                            <td><span class="version-badge">PG 16</span></td>
+                            <td><span class="platform-badge deb">DEB</span></td>
+                            <td>auto-debian11</td>
+                            <td>
+                                <span class="stats">
+                                    <span class="stat passed">✓ 17</span>
+                                    <span class="stat failed">✗ 0</span>
+                                    <span class="stat skipped">○ 1</span>
+                                </span>
+                            </td>
+                        </tr>
+                        <tr>
+                            <td><span class="version-badge">PG 16</span></td>
+                            <td><span class="platform-badge deb">DEB</span></td>
+                            <td>auto-debian12-arm</td>
+                            <td>
+                                <span class="stats">
+                                    <span class="stat passed">✓ 17</span>
+                                    <span class="stat failed">✗ 0</span>
+                                    <span class="stat skipped">○ 1</span>
+                                </span>
+                            </td>
+                        </tr>
+                        <tr>
+                            <td><span class="version-badge">PG 16</span></td>
+                            <td><span class="platform-badge deb">DEB</span></td>
+                            <td>auto-debian13-amd</td>
+                            <td>
+                                <span class="stats">
+                                    <span class="stat passed">✓ 17</span>
+                                    <span class="stat failed">✗ 0</span>
+                                    <span class="stat skipped">○ 1</span>
+                                </span>
+                            </td>
+                        </tr>
+                        <tr>
+                            <td><span class="version-badge">PG 16</span></td>
+                            <td><span class="platform-badge deb">DEB</span></td>
+                            <td>auto-debian13-arm</td>
+                            <td>
+                                <span class="stats">
+                                    <span class="stat passed">✓ 17</span>
+                                    <span class="stat failed">✗ 0</span>
+                                    <span class="stat skipped">○ 1</span>
+                                </span>
+                            </td>
+                        </tr>
+                        <tr>
+                            <td><span class="version-badge">PG 16</span></td>
+                            <td><span class="platform-badge deb">DEB</span></td>
+                            <td>auto-ubuntu2204-arm</td>
+                            <td>
+                                <span class="stats">
+                                    <span class="stat passed">✓ 17</span>
+                                    <span class="stat failed">✗ 0</span>
+                                    <span class="stat skipped">○ 1</span>
+                                </span>
+                            </td>
+                        </tr>
+                        <tr>
+                            <td><span class="version-badge">PG 16</span></td>
+                            <td><span class="platform-badge deb">DEB</span></td>
+                            <td>auto-ubuntu2404-arm</td>
+                            <td>
+                                <span class="stats">
+                                    <span class="stat passed">✓ 17</span>
+                                    <span class="stat failed">✗ 0</span>
+                                    <span class="stat skipped">○ 1</span>
+                                </span>
+                            </td>
+                        </tr>
+                        <tr>
+                            <td><span class="version-badge">PG 17</span></td>
+                            <td><span class="platform-badge rpm">RPM</span></td>
+                            <td>auto-alma10-arm</td>
+                            <td>
+                                <span class="stats">
+                                    <span class="stat passed">✓ 19</span>
+                                    <span class="stat failed">✗ 0</span>
+                                    <span class="stat skipped">○ 1</span>
+                                </span>
+                            </td>
+                        </tr>
+                        <tr>
+                            <td><span class="version-badge">PG 17</span></td>
+                            <td><span class="platform-badge rpm">RPM</span></td>
+                            <td>auto-oel9-amd</td>
+                            <td>
+                                <span class="stats">
+                                    <span class="stat passed">✓ 19</span>
+                                    <span class="stat failed">✗ 0</span>
+                                    <span class="stat skipped">○ 1</span>
+                                </span>
+                            </td>
+                        </tr>
+                        <tr>
+                            <td><span class="version-badge">PG 17</span></td>
+                            <td><span class="platform-badge rpm">RPM</span></td>
+                            <td>auto-rocky9-arm</td>
+                            <td>
+                                <span class="stats">
+                                    <span class="stat passed">✓ 19</span>
+                                    <span class="stat failed">✗ 0</span>
+                                    <span class="stat skipped">○ 1</span>
+                                </span>
+                            </td>
+                        </tr>
+                        <tr>
+                            <td><span class="version-badge">PG 17</span></td>
+                            <td><span class="platform-badge deb">DEB</span></td>
+                            <td>auto-debian11</td>
+                            <td>
+                                <span class="stats">
+                                    <span class="stat passed">✓ 17</span>
+                                    <span class="stat failed">✗ 0</span>
+                                    <span class="stat skipped">○ 1</span>
+                                </span>
+                            </td>
+                        </tr>
+                        <tr>
+                            <td><span class="version-badge">PG 17</span></td>
+                            <td><span class="platform-badge deb">DEB</span></td>
+                            <td>auto-debian12-arm</td>
+                            <td>
+                                <span class="stats">
+                                    <span class="stat passed">✓ 16</span>
+                                    <span class="stat failed">✗ 1</span>
+                                    <span class="stat skipped">○ 1</span>
+                                </span>
+                            </td>
+                        </tr>
+                        <tr>
+                            <td><span class="version-badge">PG 17</span></td>
+                            <td><span class="platform-badge deb">DEB</span></td>
+                            <td>auto-debian13-amd</td>
+                            <td>
+                                <span class="stats">
+                                    <span class="stat passed">✓ 17</span>
+                                    <span class="stat failed">✗ 0</span>
+                                    <span class="stat skipped">○ 1</span>
+                                </span>
+                            </td>
+                        </tr>
+                        <tr>
+                            <td><span class="version-badge">PG 17</span></td>
+                            <td><span class="platform-badge deb">DEB</span></td>
+                            <td>auto-debian13-arm</td>
+                            <td>
+                                <span class="stats">
+                                    <span class="stat passed">✓ 17</span>
+                                    <span class="stat failed">✗ 0</span>
+                                    <span class="stat skipped">○ 1</span>
+                                </span>
+                            </td>
+                        </tr>
+                        <tr>
+                            <td><span class="version-badge">PG 17</span></td>
+                            <td><span class="platform-badge deb">DEB</span></td>
+                            <td>auto-ubuntu2204-arm</td>
+                            <td>
+                                <span class="stats">
+                                    <span class="stat passed">✓ 17</span>
+                                    <span class="stat failed">✗ 0</span>
+                                    <span class="stat skipped">○ 1</span>
+                                </span>
+                            </td>
+                        </tr>
+                        <tr>
+                            <td><span class="version-badge">PG 17</span></td>
+                            <td><span class="platform-badge deb">DEB</span></td>
+                            <td>auto-ubuntu2404-arm</td>
+                            <td>
+                                <span class="stats">
+                                    <span class="stat passed">✓ 17</span>
+                                    <span class="stat failed">✗ 0</span>
+                                    <span class="stat skipped">○ 1</span>
+                                </span>
+                            </td>
+                        </tr>
+                        <tr>
+                            <td><span class="version-badge">PG 18</span></td>
+                            <td><span class="platform-badge rpm">RPM</span></td>
+                            <td>auto-alma10-arm</td>
+                            <td>
+                                <span class="stats">
+                                    <span class="stat passed">✓ 19</span>
+                                    <span class="stat failed">✗ 0</span>
+                                    <span class="stat skipped">○ 1</span>
+                                </span>
+                            </td>
+                        </tr>
+                        <tr>
+                            <td><span class="version-badge">PG 18</span></td>
+                            <td><span class="platform-badge rpm">RPM</span></td>
+                            <td>auto-oel9-amd</td>
+                            <td>
+                                <span class="stats">
+                                    <span class="stat passed">✓ 19</span>
+                                    <span class="stat failed">✗ 0</span>
+                                    <span class="stat skipped">○ 1</span>
+                                </span>
+                            </td>
+                        </tr>
+                        <tr>
+                            <td><span class="version-badge">PG 18</span></td>
+                            <td><span class="platform-badge rpm">RPM</span></td>
+                            <td>auto-rocky9-arm</td>
+                            <td>
+                                <span class="stats">
+                                    <span class="stat passed">✓ 19</span>
+                                    <span class="stat failed">✗ 0</span>
+                                    <span class="stat skipped">○ 1</span>
+                                </span>
+                            </td>
+                        </tr>
+                        <tr>
+                            <td><span class="version-badge">PG 18</span></td>
+                            <td><span class="platform-badge deb">DEB</span></td>
+                            <td>auto-debian11</td>
+                            <td>
+                                <span class="stats">
+                                    <span class="stat passed">✓ 17</span>
+                                    <span class="stat failed">✗ 0</span>
+                                    <span class="stat skipped">○ 1</span>
+                                </span>
+                            </td>
+                        </tr>
+                        <tr>
+                            <td><span class="version-badge">PG 18</span></td>
+                            <td><span class="platform-badge deb">DEB</span></td>
+                            <td>auto-debian12-arm</td>
+                            <td>
+                                <span class="stats">
+                                    <span class="stat passed">✓ 17</span>
+                                    <span class="stat failed">✗ 0</span>
+                                    <span class="stat skipped">○ 1</span>
+                                </span>
+                            </td>
+                        </tr>
+                        <tr>
+                            <td><span class="version-badge">PG 18</span></td>
+                            <td><span class="platform-badge deb">DEB</span></td>
+                            <td>auto-debian13-amd</td>
+                            <td>
+                                <span class="stats">
+                                    <span class="stat passed">✓ 17</span>
+                                    <span class="stat failed">✗ 0</span>
+                                    <span class="stat skipped">○ 1</span>
+                                </span>
+                            </td>
+                        </tr>
+                        <tr>
+                            <td><span class="version-badge">PG 18</span></td>
+                            <td><span class="platform-badge deb">DEB</span></td>
+                            <td>auto-debian13-arm</td>
+                            <td>
+                                <span class="stats">
+                                    <span class="stat passed">✓ 17</span>
+                                    <span class="stat failed">✗ 0</span>
+                                    <span class="stat skipped">○ 1</span>
+                                </span>
+                            </td>
+                        </tr>
+                        <tr>
+                            <td><span class="version-badge">PG 18</span></td>
+                            <td><span class="platform-badge deb">DEB</span></td>
+                            <td>auto-ubuntu2204-arm</td>
+                            <td>
+                                <span class="stats">
+                                    <span class="stat passed">✓ 17</span>
+                                    <span class="stat failed">✗ 0</span>
+                                    <span class="stat skipped">○ 1</span>
+                                </span>
+                            </td>
+                        </tr>
+                        <tr>
+                            <td><span class="version-badge">PG 18</span></td>
+                            <td><span class="platform-badge deb">DEB</span></td>
+                            <td>auto-ubuntu2404-arm</td>
+                            <td>
+                                <span class="stats">
+                                    <span class="stat passed">✓ 17</span>
+                                    <span class="stat failed">✗ 0</span>
+                                    <span class="stat skipped">○ 1</span>
+                                </span>
+                            </td>
+                        </tr>
+                    </tbody>
+                </table>
+            </div>
+            <div class="component-card-footer">
+                <a href="repo_health/index.html" class="view-all-link">View All Reports →</a>
+            </div>
+        </div>
+        <div class="component-card">
+            <div class="component-card-header">
+                <h2>Ai_db_workbench</h2>
+            </div>
+            <div class="component-card-body">
+                <table class="version-table">
+                    <thead>
+                        <tr>
+                            <th>Version</th>
+                            <th>Platform</th>
+                            <th>Container</th>
+                            <th>Results</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <tr>
+                            <td><span class="version-badge">PG 17</span></td>
+                            <td><span class="platform-badge rpm">RPM</span></td>
+                            <td>auto-rocky10-arm</td>
+                            <td>
+                                <span class="stats">
+                                    <span class="stat passed">✓ 0</span>
+                                    <span class="stat failed">✗ 1</span>
+                                    <span class="stat skipped">○ 48</span>
+                                </span>
+                            </td>
+                        </tr>
+                        <tr>
+                            <td><span class="version-badge">PG 17</span></td>
+                            <td><span class="platform-badge rpm">RPM</span></td>
+                            <td>auto-rocky9-arm</td>
+                            <td>
+                                <span class="stats">
+                                    <span class="stat passed">✓ 36</span>
+                                    <span class="stat failed">✗ 7</span>
+                                    <span class="stat skipped">○ 6</span>
+                                </span>
+                            </td>
+                        </tr>
+                        <tr>
+                            <td><span class="version-badge">PG 17</span></td>
+                            <td><span class="platform-badge deb">DEB</span></td>
+                            <td>auto-debian11</td>
+                            <td>
+                                <span class="stats">
+                                    <span class="stat passed">✓ 32</span>
+                                    <span class="stat failed">✗ 11</span>
+                                    <span class="stat skipped">○ 6</span>
+                                </span>
+                            </td>
+                        </tr>
+                        <tr>
+                            <td><span class="version-badge">PG 17</span></td>
+                            <td><span class="platform-badge deb">DEB</span></td>
+                            <td>auto-debian12-arm</td>
+                            <td>
+                                <span class="stats">
+                                    <span class="stat passed">✓ 32</span>
+                                    <span class="stat failed">✗ 11</span>
+                                    <span class="stat skipped">○ 6</span>
+                                </span>
+                            </td>
+                        </tr>
+                        <tr>
+                            <td><span class="version-badge">PG 17</span></td>
+                            <td><span class="platform-badge deb">DEB</span></td>
+                            <td>auto-debian13-amd</td>
+                            <td>
+                                <span class="stats">
+                                    <span class="stat passed">✓ 14</span>
+                                    <span class="stat failed">✗ 29</span>
+                                    <span class="stat skipped">○ 6</span>
+                                </span>
+                            </td>
+                        </tr>
+                        <tr>
+                            <td><span class="version-badge">PG 17</span></td>
+                            <td><span class="platform-badge deb">DEB</span></td>
+                            <td>auto-debian13-arm</td>
+                            <td>
+                                <span class="stats">
+                                    <span class="stat passed">✓ 36</span>
+                                    <span class="stat failed">✗ 7</span>
+                                    <span class="stat skipped">○ 6</span>
+                                </span>
+                            </td>
+                        </tr>
+                        <tr>
+                            <td><span class="version-badge">PG 17</span></td>
+                            <td><span class="platform-badge deb">DEB</span></td>
+                            <td>auto-ubuntu2204-arm</td>
+                            <td>
+                                <span class="stats">
+                                    <span class="stat passed">✓ 32</span>
+                                    <span class="stat failed">✗ 11</span>
+                                    <span class="stat skipped">○ 6</span>
+                                </span>
+                            </td>
+                        </tr>
+                        <tr>
+                            <td><span class="version-badge">PG 17</span></td>
+                            <td><span class="platform-badge deb">DEB</span></td>
+                            <td>auto-ubuntu2404-arm</td>
+                            <td>
+                                <span class="stats">
+                                    <span class="stat passed">✓ 32</span>
+                                    <span class="stat failed">✗ 11</span>
+                                    <span class="stat skipped">○ 6</span>
+                                </span>
+                            </td>
+                        </tr>
+                        <tr>
+                            <td><span class="version-badge">PG 18</span></td>
+                            <td><span class="platform-badge rpm">RPM</span></td>
+                            <td>z_RHEL9AMD</td>
+                            <td>
+                                <span class="stats">
+                                    <span class="stat passed">✓ 42</span>
+                                    <span class="stat failed">✗ 0</span>
+                                    <span class="stat skipped">○ 7</span>
+                                </span>
+                            </td>
+                        </tr>
+                        <tr>
+                            <td><span class="version-badge">PG 18</span></td>
+                            <td><span class="platform-badge rpm">RPM</span></td>
+                            <td>z_Rocky10_AMD</td>
+                            <td>
+                                <span class="stats">
+                                    <span class="stat passed">✓ 42</span>
+                                    <span class="stat failed">✗ 0</span>
+                                    <span class="stat skipped">○ 7</span>
+                                </span>
+                            </td>
+                        </tr>
+                        <tr>
+                            <td><span class="version-badge">PG 18</span></td>
+                            <td><span class="platform-badge deb">DEB</span></td>
+                            <td>z_Debain11_AMD</td>
+                            <td>
+                                <span class="stats">
+                                    <span class="stat passed">✓ 42</span>
+                                    <span class="stat failed">✗ 1</span>
+                                    <span class="stat skipped">○ 6</span>
+                                </span>
+                            </td>
+                        </tr>
+                        <tr>
+                            <td><span class="version-badge">PG 18</span></td>
+                            <td><span class="platform-badge deb">DEB</span></td>
+                            <td>z_Ubuntu22.04_AMD</td>
+                            <td>
+                                <span class="stats">
+                                    <span class="stat passed">✓ 42</span>
+                                    <span class="stat failed">✗ 1</span>
+                                    <span class="stat skipped">○ 6</span>
+                                </span>
+                            </td>
+                        </tr>
+                        <tr>
+                            <td><span class="version-badge">PG 18</span></td>
+                            <td><span class="platform-badge deb">DEB</span></td>
+                            <td>z_Ubuntu2404_AMD</td>
+                            <td>
+                                <span class="stats">
+                                    <span class="stat passed">✓ 42</span>
+                                    <span class="stat failed">✗ 1</span>
+                                    <span class="stat skipped">○ 6</span>
+                                </span>
+                            </td>
+                        </tr>
+                    </tbody>
+                </table>
+            </div>
+            <div class="component-card-footer">
+                <a href="ai_db_workbench/index.html" class="view-all-link">View All Reports →</a>
+            </div>
+        </div>
+        <div class="component-card">
+            <div class="component-card-header">
+                <h2>Spock_patroni_failover</h2>
+            </div>
+            <div class="component-card-body">
+                <table class="version-table">
+                    <thead>
+                        <tr>
+                            <th>Version</th>
+                            <th>Platform</th>
+                            <th>Container</th>
+                            <th>Results</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <tr>
+                            <td><span class="version-badge">PG 16</span></td>
+                            <td><span class="platform-badge deb">DEB</span></td>
+                            <td>auto-debian11</td>
+                            <td>
+                                <span class="stats">
+                                    <span class="stat passed">✓ 19</span>
+                                    <span class="stat failed">✗ 4</span>
+                                    <span class="stat skipped">○ 0</span>
+                                </span>
+                            </td>
+                        </tr>
+                        <tr>
+                            <td><span class="version-badge">PG 16</span></td>
+                            <td><span class="platform-badge deb">DEB</span></td>
+                            <td>auto-debian12-arm</td>
+                            <td>
+                                <span class="stats">
+                                    <span class="stat passed">✓ 19</span>
+                                    <span class="stat failed">✗ 4</span>
+                                    <span class="stat skipped">○ 0</span>
+                                </span>
+                            </td>
+                        </tr>
+                        <tr>
+                            <td><span class="version-badge">PG 16</span></td>
+                            <td><span class="platform-badge deb">DEB</span></td>
+                            <td>auto-debian13-amd</td>
+                            <td>
+                                <span class="stats">
+                                    <span class="stat passed">✓ 21</span>
+                                    <span class="stat failed">✗ 2</span>
+                                    <span class="stat skipped">○ 0</span>
+                                </span>
+                            </td>
+                        </tr>
+                        <tr>
+                            <td><span class="version-badge">PG 16</span></td>
+                            <td><span class="platform-badge deb">DEB</span></td>
+                            <td>auto-debian13-arm</td>
+                            <td>
+                                <span class="stats">
+                                    <span class="stat passed">✓ 21</span>
+                                    <span class="stat failed">✗ 2</span>
+                                    <span class="stat skipped">○ 0</span>
+                                </span>
+                            </td>
+                        </tr>
+                        <tr>
+                            <td><span class="version-badge">PG 16</span></td>
+                            <td><span class="platform-badge deb">DEB</span></td>
+                            <td>auto-ubuntu2204-arm</td>
+                            <td>
+                                <span class="stats">
+                                    <span class="stat passed">✓ 21</span>
+                                    <span class="stat failed">✗ 2</span>
+                                    <span class="stat skipped">○ 0</span>
+                                </span>
+                            </td>
+                        </tr>
+                        <tr>
+                            <td><span class="version-badge">PG 16</span></td>
+                            <td><span class="platform-badge deb">DEB</span></td>
+                            <td>auto-ubuntu2404-arm</td>
+                            <td>
+                                <span class="stats">
+                                    <span class="stat passed">✓ 21</span>
+                                    <span class="stat failed">✗ 2</span>
+                                    <span class="stat skipped">○ 0</span>
+                                </span>
+                            </td>
+                        </tr>
+                        <tr>
+                            <td><span class="version-badge">PG 17</span></td>
+                            <td><span class="platform-badge deb">DEB</span></td>
+                            <td>auto-debian11</td>
+                            <td>
+                                <span class="stats">
+                                    <span class="stat passed">✓ 19</span>
+                                    <span class="stat failed">✗ 4</span>
+                                    <span class="stat skipped">○ 0</span>
+                                </span>
+                            </td>
+                        </tr>
+                        <tr>
+                            <td><span class="version-badge">PG 17</span></td>
+                            <td><span class="platform-badge deb">DEB</span></td>
+                            <td>auto-debian12-arm</td>
+                            <td>
+                                <span class="stats">
+                                    <span class="stat passed">✓ 19</span>
+                                    <span class="stat failed">✗ 4</span>
+                                    <span class="stat skipped">○ 0</span>
+                                </span>
+                            </td>
+                        </tr>
+                        <tr>
+                            <td><span class="version-badge">PG 17</span></td>
+                            <td><span class="platform-badge deb">DEB</span></td>
+                            <td>auto-debian13-amd</td>
+                            <td>
+                                <span class="stats">
+                                    <span class="stat passed">✓ 22</span>
+                                    <span class="stat failed">✗ 1</span>
+                                    <span class="stat skipped">○ 0</span>
+                                </span>
+                            </td>
+                        </tr>
+                        <tr>
+                            <td><span class="version-badge">PG 17</span></td>
+                            <td><span class="platform-badge deb">DEB</span></td>
+                            <td>auto-debian13-arm</td>
+                            <td>
+                                <span class="stats">
+                                    <span class="stat passed">✓ 22</span>
+                                    <span class="stat failed">✗ 1</span>
+                                    <span class="stat skipped">○ 0</span>
+                                </span>
+                            </td>
+                        </tr>
+                        <tr>
+                            <td><span class="version-badge">PG 17</span></td>
+                            <td><span class="platform-badge deb">DEB</span></td>
+                            <td>auto-ubuntu2204-arm</td>
+                            <td>
+                                <span class="stats">
+                                    <span class="stat passed">✓ 22</span>
+                                    <span class="stat failed">✗ 1</span>
+                                    <span class="stat skipped">○ 0</span>
+                                </span>
+                            </td>
+                        </tr>
+                        <tr>
+                            <td><span class="version-badge">PG 17</span></td>
+                            <td><span class="platform-badge deb">DEB</span></td>
+                            <td>auto-ubuntu2404-arm</td>
+                            <td>
+                                <span class="stats">
+                                    <span class="stat passed">✓ 22</span>
+                                    <span class="stat failed">✗ 1</span>
+                                    <span class="stat skipped">○ 0</span>
+                                </span>
+                            </td>
+                        </tr>
+                        <tr>
+                            <td><span class="version-badge">PG 18</span></td>
+                            <td><span class="platform-badge rpm">RPM</span></td>
+                            <td>auto-rocky9-arm</td>
+                            <td>
+                                <span class="stats">
+                                    <span class="stat passed">✓ 22</span>
+                                    <span class="stat failed">✗ 1</span>
+                                    <span class="stat skipped">○ 0</span>
+                                </span>
+                            </td>
+                        </tr>
+                        <tr>
+                            <td><span class="version-badge">PG 18</span></td>
+                            <td><span class="platform-badge deb">DEB</span></td>
+                            <td>auto-ubuntu2204-arm</td>
+                            <td>
+                                <span class="stats">
+                                    <span class="stat passed">✓ 22</span>
+                                    <span class="stat failed">✗ 1</span>
+                                    <span class="stat skipped">○ 0</span>
+                                </span>
+                            </td>
+                        </tr>
+                    </tbody>
+                </table>
+            </div>
+            <div class="component-card-footer">
+                <a href="spock_patroni_failover/index.html" class="view-all-link">View All Reports →</a>
+            </div>
+        </div>
+        <div class="component-card">
+            <div class="component-card-header">
+                <h2>Llvmjit</h2>
+            </div>
+            <div class="component-card-body">
+                <table class="version-table">
+                    <thead>
+                        <tr>
+                            <th>Version</th>
+                            <th>Platform</th>
+                            <th>Container</th>
+                            <th>Results</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <tr>
+                            <td><span class="version-badge">PG 18</span></td>
+                            <td><span class="platform-badge rpm">RPM</span></td>
+                            <td>auto-alma10-arm</td>
+                            <td>
+                                <span class="stats">
+                                    <span class="stat passed">✓ 6</span>
+                                    <span class="stat failed">✗ 0</span>
+                                    <span class="stat skipped">○ 0</span>
+                                </span>
+                            </td>
+                        </tr>
+                        <tr>
+                            <td><span class="version-badge">PG 18</span></td>
+                            <td><span class="platform-badge rpm">RPM</span></td>
+                            <td>auto-alma9-arm</td>
+                            <td>
+                                <span class="stats">
+                                    <span class="stat passed">✓ 6</span>
+                                    <span class="stat failed">✗ 0</span>
+                                    <span class="stat skipped">○ 0</span>
+                                </span>
+                            </td>
+                        </tr>
+                        <tr>
+                            <td><span class="version-badge">PG 18</span></td>
+                            <td><span class="platform-badge rpm">RPM</span></td>
+                            <td>auto-oel10-arm</td>
+                            <td>
+                                <span class="stats">
+                                    <span class="stat passed">✓ 4</span>
+                                    <span class="stat failed">✗ 2</span>
+                                    <span class="stat skipped">○ 0</span>
+                                </span>
+                            </td>
+                        </tr>
+                        <tr>
+                            <td><span class="version-badge">PG 18</span></td>
+                            <td><span class="platform-badge rpm">RPM</span></td>
+                            <td>auto-oel9-amd</td>
+                            <td>
+                                <span class="stats">
+                                    <span class="stat passed">✓ 4</span>
+                                    <span class="stat failed">✗ 2</span>
+                                    <span class="stat skipped">○ 0</span>
+                                </span>
+                            </td>
+                        </tr>
+                        <tr>
+                            <td><span class="version-badge">PG 18</span></td>
+                            <td><span class="platform-badge rpm">RPM</span></td>
+                            <td>auto-oel9-arm</td>
+                            <td>
+                                <span class="stats">
+                                    <span class="stat passed">✓ 4</span>
+                                    <span class="stat failed">✗ 2</span>
+                                    <span class="stat skipped">○ 0</span>
+                                </span>
+                            </td>
+                        </tr>
+                        <tr>
+                            <td><span class="version-badge">PG 18</span></td>
+                            <td><span class="platform-badge rpm">RPM</span></td>
+                            <td>my-rocky9-amd</td>
+                            <td>
+                                <span class="stats">
+                                    <span class="stat passed">✓ 6</span>
+                                    <span class="stat failed">✗ 0</span>
+                                    <span class="stat skipped">○ 0</span>
+                                </span>
+                            </td>
+                        </tr>
+                    </tbody>
+                </table>
+            </div>
+            <div class="component-card-footer">
+                <a href="llvmjit/index.html" class="view-all-link">View All Reports →</a>
+            </div>
+        </div>
+    </div>
+</body>
+</html>

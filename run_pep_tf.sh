@@ -576,7 +576,7 @@ IMAGES = {
     'alma9': 'almalinux:9',  'alma10': 'almalinux:10',  'alma8': 'almalinux:8',
     'oel9':  'oraclelinux:9', 'oel10': 'oraclelinux:10', 'oel8': 'oraclelinux:8',
     'debian11': 'debian:11', 'debian12': 'debian:12', 'debian13': 'debian:13',
-    'ubuntu2204': 'ubuntu:22.04', 'ubuntu2404': 'ubuntu:24.04',
+    'ubuntu2204': 'ubuntu:22.04', 'ubuntu2404': 'ubuntu:24.04', 'ubuntu2604': 'ubuntu:26.04',
 }
 def infer(name):
     n = name.lower()

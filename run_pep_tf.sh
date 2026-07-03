@@ -89,7 +89,7 @@ OPTIONS:
   --components <names>    Components to test (default: all)
                           Values: server, snowflake, pgbouncer, pgbackrest, postgrest, lolor, postgis,
                                   system_stats, vectorizer, zerodowntime, mcp, rag, ace, repo_health,
-                                  docloader, anonymizer, pg_vectorize, pg_tokenizer, vchord_bm25, pgaudit, pgadmin4, patroni, pg_stat_monitor, ai_db_workbench, radar, spock_patroni_failover, llvmjit, spock, all
+                                  docloader, anonymizer, pg_vectorize, pg_tokenizer, vchord_bm25, pgaudit, pgadmin4, patroni, pg_stat_monitor, ai_db_workbench, radar, spock_patroni_failover, llvmjit, spock, supautils, all
                           Comma-separated for multiple: lolor,postgis
 
   --repo <repository>     Repository to use (default: staging)
@@ -254,7 +254,8 @@ else
   echo "26) spock_patroni_failover - Spock + Patroni HA failover tests"
   echo "27) llvmjit - LLVM JIT tests"
   echo "28) spock - Spock 2-node replication tests (spock50/spock60)"
-  echo "29) all - All tests"
+  echo "29) supautils - Supautils tests"
+  echo "30) all - All tests"
   echo ""
   echo "💡 You can specify multiple components separated by commas"
   echo "   Example: lolor,postgis,system_stats"
@@ -287,7 +288,7 @@ fi
 
 # Determine test types to run
 if [[ "$test_type_choice" == "all" || "$test_type_choice" == "All" ]]; then
-  test_type_list=(server snowflake pgbouncer pgbackrest postgrest lolor postgis system_stats vectorizer zerodowntime mcp rag ace repo_health docloader anonymizer pg_vectorize pg_tokenizer vchord_bm25 pgaudit pgadmin4 patroni pg_stat_monitor ai_db_workbench radar spock_patroni_failover llvmjit spock)
+  test_type_list=(server snowflake pgbouncer pgbackrest postgrest lolor postgis system_stats vectorizer zerodowntime mcp rag ace repo_health docloader anonymizer pg_vectorize pg_tokenizer vchord_bm25 pgaudit pgadmin4 patroni pg_stat_monitor ai_db_workbench radar spock_patroni_failover llvmjit spock supautils)
 else
   # Split by comma and trim whitespace
   IFS=',' read -ra test_type_list <<< "$test_type_choice"
@@ -697,6 +698,9 @@ for fam, name in selected:
             spock)
               run_pytest_with_tracking "component-test/test_pep_spock.py" "$env" "rpm" "spock"
               ;;
+            supautils)
+              run_pytest_with_tracking "component-test/test_pep_supautils.py" "$env" "rpm" "supautils"
+              ;;
             *)
               echo "⚠️ Unknown test type: $test_type"
               ;;
@@ -788,6 +792,9 @@ for fam, name in selected:
               ;;
             spock)
               run_pytest_with_tracking "component-test/test_pep_spock.py" "$env" "deb" "spock"
+              ;;
+            supautils)
+              run_pytest_with_tracking "component-test/test_pep_supautils.py" "$env" "deb" "supautils"
               ;;
             *)
               echo "⚠️ Unknown test type: $test_type"
@@ -1455,7 +1462,7 @@ cat > "test-logs/index.html" <<EOF
 EOF
 
 # Add card for each component that has reports
-for test_type in server snowflake pgbouncer pgbackrest postgrest lolor postgis system_stats vectorizer zerodowntime mcp rag ace repo_health docloader anonymizer pg_vectorize pg_tokenizer vchord_bm25 pgaudit pgadmin4 patroni pg_stat_monitor ai_db_workbench radar spock_patroni_failover llvmjit spock; do
+for test_type in server snowflake pgbouncer pgbackrest postgrest lolor postgis system_stats vectorizer zerodowntime mcp rag ace repo_health docloader anonymizer pg_vectorize pg_tokenizer vchord_bm25 pgaudit pgadmin4 patroni pg_stat_monitor ai_db_workbench radar spock_patroni_failover llvmjit spock supautils; do
   component_dir="test-logs/${test_type}"
   if [[ -d "$component_dir" ]]; then
     # Check for any HTML reports

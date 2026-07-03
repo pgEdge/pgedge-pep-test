@@ -120,6 +120,15 @@ def detect_component_from_test_file(config):
             'deb_package_env': 'DEB_SPOCK_PACKAGE',
             'deb_package_default': f'pgedge-postgresql-{os.getenv("PG_MAJOR_VERSION", "16")}-spock{os.getenv("SPOCK_MAJOR", "60")}'
         },
+        'test_pep_supautils': {
+            'name': 'Supautils',
+            'version_env': 'PGEDGE_SUPAUTILS_VERSION',
+            'version_default': '3.2.2',
+            'rhel_package_env': 'SUPAUTILS_PACKAGE',
+            'rhel_package_default': f'pgedge-supautils_{os.getenv("PG_MAJOR_VERSION", "16")}',
+            'deb_package_env': 'DEB_SUPAUTILS_PACKAGE',
+            'deb_package_default': f'pgedge-postgresql-{os.getenv("PG_MAJOR_VERSION", "16")}-supautils'
+        },
         'test_pep_docloader': {
             'name': 'Docloader',
             'version_env': 'PGEDGE_DOCLOADER_VERSION',

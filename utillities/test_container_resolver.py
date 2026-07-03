@@ -145,8 +145,8 @@ def test_real_catalog_loads_with_all_aliases():
     """The shipped configuration/containers_list.json must load cleanly
     and expose an alias on every entry."""
     catalog = cr.load_catalog("configuration/containers_list.json")
-    assert len(catalog.entries) == 15, (
-        f"expected 15 catalog entries, got {len(catalog.entries)}"
+    assert len(catalog.entries) == 17, (
+        f"expected 17 catalog entries, got {len(catalog.entries)}"
     )
     for e in catalog.entries:
         assert e.alias, f"{e.name}: alias must be non-empty"
@@ -159,6 +159,8 @@ def test_real_catalog_specific_aliases():
     assert by_name["auto-rocky9-arm"] == "rocky9-arm64"
     assert by_name["auto-debian13-amd"] == "debian13-amd64"
     assert by_name["auto-ubuntu2404-arm"] == "ubuntu2404-arm64"
+    assert by_name["auto-ubuntu2604-arm"] == "ubuntu2604-arm64"
+    assert by_name["auto-ubuntu2604-amd"] == "ubuntu2604-amd64"
 
 
 def test_override_default_path_returns_enabled_subset(tmp_path, capsys):
@@ -415,9 +417,9 @@ def _run_cli(*args, env_extra=None, cwd=None):
 def test_cli_list_containers_against_real_catalog():
     cp = _run_cli("list-containers")
     assert cp.returncode == 0
-    # Real catalog has 15 entries
+    # Real catalog has 17 entries
     body_lines = [l for l in cp.stdout.splitlines() if l and "ALIAS" not in l]
-    assert len(body_lines) == 15
+    assert len(body_lines) == 17
 
 
 def test_cli_validate_global_default_emits_no_override_chatter():

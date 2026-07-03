@@ -20,6 +20,8 @@
     { "name": "auto-debian11-arm",       "alias": "debian11-arm64",   "description": "Debian 11 Bullseye / ARM64","enabled": false },
     { "name": "auto-debian12-arm",   "alias": "debian12-arm64",   "description": "Debian 12 Bookworm / ARM64","enabled": false },
     { "name": "auto-debian13-arm",   "alias": "debian13-arm64",   "description": "Debian 13 Trixie  / ARM64", "enabled": false },
-    { "name": "auto-debian13-amd",   "alias": "debian13-amd64",   "description": "Debian 13 Trixie  / AMD64", "enabled": false }
+    { "name": "auto-debian13-amd",   "alias": "debian13-amd64",   "description": "Debian 13 Trixie  / AMD64", "enabled": false },
+    { "name": "auto-ubuntu2604-arm", "alias": "ubuntu2604-arm64", "description": "Ubuntu 26.04 LTS / ARM64", "enabled": true },
+    { "name": "auto-ubuntu2604-amd", "alias": "ubuntu2604-amd64", "description": "Ubuntu 26.04 LTS / AMD64", "enabled": true }
   ]
 }

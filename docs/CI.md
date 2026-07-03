@@ -170,6 +170,8 @@ Aliases are shorter and match the workflow's `arches` vocabulary (`-arm64` /
 | `debian12-arm64`   | `auto-debian12-arm`        | deb    | arm64   | true              | Debian 12 Bookworm / ARM64 |
 | `debian13-arm64`   | `auto-debian13-arm`        | deb    | arm64   | true              | Debian 13 Trixie / ARM64   |
 | `debian13-amd64`   | `auto-debian13-amd`        | deb    | amd64   | true              | Debian 13 Trixie / AMD64   |
+| `ubuntu2604-arm64` | `auto-ubuntu2604-arm`      | deb    | arm64   | true              | Ubuntu 26.04 LTS / ARM64   |
+| `ubuntu2604-amd64` | `auto-ubuntu2604-amd`      | deb    | amd64   | true              | Ubuntu 26.04 LTS / AMD64   |
 
 The "Enabled (default)" column reflects the current state of
 `configuration/containers_list.json` at v2.2 time. It changes as the catalog is

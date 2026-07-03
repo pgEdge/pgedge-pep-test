@@ -155,28 +155,27 @@ Aliases are shorter and match the workflow's `arches` vocabulary (`-arm64` /
 
 | Alias              | Canonical name             | Family | Arch    | Enabled (default) | Description                |
 |---|---|---|---|---|---|
-| `rocky9-arm64`     | `auto-rocky9-arm`          | rpm    | arm64   | false             | Rocky Linux 9 / ARM64      |
+| `rocky9-arm64`     | `auto-rocky9-arm`          | rpm    | arm64   | true              | Rocky Linux 9 / ARM64      |
 | `rocky10-arm64`    | `auto-rocky10-arm`         | rpm    | arm64   | false             | Rocky Linux 10 / ARM64     |
-| `alma9-arm64`      | `auto-alma9-arm`           | rpm    | arm64   | true              | AlmaLinux 9 / ARM64        |
-| `alma10-arm64`     | `auto-alma10-arm`          | rpm    | arm64   | true              | AlmaLinux 10 / ARM64       |
-| `oel9-arm64`       | `auto-oel9-arm`            | rpm    | arm64   | true              | Oracle Linux 9 / ARM64     |
-| `oel10-arm64`      | `auto-oel10-arm`           | rpm    | arm64   | true              | Oracle Linux 10 / ARM64    |
-| `rocky9-amd64`     | `my-rocky9-amd`            | rpm    | amd64   | true              | Rocky Linux 9 / AMD64      |
+| `alma9-arm64`      | `auto-alma9-arm`           | rpm    | arm64   | false             | AlmaLinux 9 / ARM64        |
+| `alma10-arm64`     | `auto-alma10-arm`          | rpm    | arm64   | false             | AlmaLinux 10 / ARM64       |
+| `oel9-arm64`       | `auto-oel9-arm`            | rpm    | arm64   | false             | Oracle Linux 9 / ARM64     |
+| `oel10-arm64`      | `auto-oel10-arm`           | rpm    | arm64   | false             | Oracle Linux 10 / ARM64    |
+| `rocky9-amd64`     | `my-rocky9-amd`            | rpm    | amd64   | false             | Rocky Linux 9 / AMD64      |
 | `alma9-amd64`      | `auto-alma9-amd`           | rpm    | amd64   | false             | AlmaLinux 9 / AMD64        |
-| `oel9-amd64`       | `auto-oel9-amd`            | rpm    | amd64   | true              | Oracle Linux 9 / AMD64     |
+| `oel9-amd64`       | `auto-oel9-amd`            | rpm    | amd64   | false             | Oracle Linux 9 / AMD64     |
 | `ubuntu2204-arm64` | `auto-ubuntu2204-arm`      | deb    | arm64   | true              | Ubuntu 22.04 LTS / ARM64   |
-| `ubuntu2404-arm64` | `auto-ubuntu2404-arm`      | deb    | arm64   | true              | Ubuntu 24.04 LTS / ARM64   |
-| `debian11-arm64`   | `auto-debian11-arm`        | deb    | arm64   | true              | Debian 11 Bullseye / ARM64 |
-| `debian12-arm64`   | `auto-debian12-arm`        | deb    | arm64   | true              | Debian 12 Bookworm / ARM64 |
-| `debian13-arm64`   | `auto-debian13-arm`        | deb    | arm64   | true              | Debian 13 Trixie / ARM64   |
-| `debian13-amd64`   | `auto-debian13-amd`        | deb    | amd64   | true              | Debian 13 Trixie / AMD64   |
+| `ubuntu2404-arm64` | `auto-ubuntu2404-arm`      | deb    | arm64   | false             | Ubuntu 24.04 LTS / ARM64   |
+| `debian11-arm64`   | `auto-debian11-arm`        | deb    | arm64   | false             | Debian 11 Bullseye / ARM64 |
+| `debian12-arm64`   | `auto-debian12-arm`        | deb    | arm64   | false             | Debian 12 Bookworm / ARM64 |
+| `debian13-arm64`   | `auto-debian13-arm`        | deb    | arm64   | false             | Debian 13 Trixie / ARM64   |
+| `debian13-amd64`   | `auto-debian13-amd`        | deb    | amd64   | false             | Debian 13 Trixie / AMD64   |
 | `ubuntu2604-arm64` | `auto-ubuntu2604-arm`      | deb    | arm64   | true              | Ubuntu 26.04 LTS / ARM64   |
 | `ubuntu2604-amd64` | `auto-ubuntu2604-amd`      | deb    | amd64   | true              | Ubuntu 26.04 LTS / AMD64   |
 
-The "Enabled (default)" column reflects the current state of
-`configuration/containers_list.json` at v2.2 time. It changes as the catalog is
-edited; for the live state at any moment, run `./run_pep_tf.sh --list-containers`
-locally.
+The "Enabled (default)" column mirrors `configuration/containers_list.json` as of
+this branch. It changes as the catalog is edited; for the live state at any
+moment, run `./run_pep_tf.sh --list-containers` locally.
 
 ### CI examples
 

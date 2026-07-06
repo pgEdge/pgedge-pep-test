@@ -95,7 +95,7 @@ OPTIONS:
   --repo <repository>     Repository to use (default: staging)
                           Values: release, staging, daily
 
-  --spock <major>         Spock major version to install/verify (default: from config, 60)
+  --spock <major>         Spock major version to install/verify (default: from config, 50)
                           Values: 50, 60
                           Overrides SPOCK_MAJOR from the config env file for this run.
 

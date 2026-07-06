@@ -26,7 +26,7 @@ on:
         options: [preview, full]
         default: preview
       containers:
-        description: "Custom container override (csv). Empty = use containers_list.json defaults. A listed platform's opposite arch is also accepted even if only one arch is listed (e.g. ubuntu2404-amd64 when only ubuntu2404-arm64 exists); the counterpart is synthesized on the fly. 'all' (sole token) = entire catalog, but is CATALOG-ONLY and does NOT include these implicit counterparts. Example: 'rocky9-arm64, ubuntu2404-amd64'. See docs/CI.md for the alias list."
+        description: "Platforms to test. Empty = containers_list.json enabled entries; list aliases (e.g. rocky9-arm64, ubuntu2604-amd64) to override; 'all' = every listed platform (enabled or disabled). Aliases in docs/CI.md."
         default: ''
 
   # Scheduled trigger intentionally disabled for v1.

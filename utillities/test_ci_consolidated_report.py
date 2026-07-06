@@ -369,6 +369,26 @@ def test_container_display_falls_back_to_actual_when_no_alias():
     assert ccr.container_display("auto-alma9-arm", {}) == "auto-alma9-arm"
 
 
+def test_container_display_synthesized_counterpart_shows_alias():
+    """A synthesized opposite-arch counterpart (absent from containers_list.json)
+    still renders its alias via the resolver fallback. auto-ubuntu2404-arm is a
+    real catalog entry, so auto-ubuntu2404-amd is a valid implicit counterpart."""
+    assert ccr.container_display("auto-ubuntu2404-amd", {}) == "ubuntu2404-amd64"
+
+
+def test_container_display_defensive_when_resolver_unavailable(monkeypatch):
+    """If the resolver/catalog can't be loaded, alias prettification must not
+    break: fall back to the raw container name."""
+    monkeypatch.setattr(ccr, "_get_resolver", lambda: (None, None))
+    assert ccr.container_display("auto-ubuntu2404-amd", {}) == "auto-ubuntu2404-amd"
+
+    # Even a raising resolver is swallowed.
+    def _boom():
+        raise RuntimeError("catalog exploded")
+    monkeypatch.setattr(ccr, "_get_resolver", _boom)
+    assert ccr.container_display("auto-ubuntu2404-amd", {}) == "auto-ubuntu2404-amd"
+
+
 def test_component_section_container_cell_shows_alias_with_title_tooltip():
     row = _mkrow("16", "deb", "arm64", "postgis", "auto-debian12-arm",
                  "FAILED", tests=15, passed=14, failed=1)

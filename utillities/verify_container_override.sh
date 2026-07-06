@@ -149,6 +149,68 @@ else
   echo "  FAIL  PEP_CONTAINERS env fallback exit code: $RC"; FAIL=$((FAIL+1))
 fi
 
+echo "=== Scenario 9: implicit opposite-arch counterpart accepted (alias form) ==="
+# ubuntu2404 exists in the catalog only as -arm; ubuntu2404-amd64 is a genuine
+# lookup miss that must synthesize auto-ubuntu2404-amd and resolve to the same
+# image (ubuntu:24.04) + platform (linux/amd64) as real execution would.
+OUT=$(./run_pep_tf.sh --pgver 17 --platforms deb --arch amd64 --components server --containers ubuntu2404-amd64 --dry-run 2>&1)
+RC=$?
+_check "counterpart source=cli" 'container-override\] source=cli' "$OUT"
+_check "counterpart requested resolves to synthesized name" 'requested: auto-ubuntu2404-amd' "$OUT"
+_check "counterpart effective for deb/amd64" 'effective for target deb/amd64: auto-ubuntu2404-amd' "$OUT"
+_check "counterpart image/platform resolves" '\[image-resolution\] family=deb container=auto-ubuntu2404-amd image=ubuntu:24.04 platform=linux/amd64' "$OUT"
+if [[ $RC -eq 0 ]]; then
+  echo "  PASS  counterpart (alias) exits 0"; PASS=$((PASS+1))
+else
+  echo "  FAIL  counterpart (alias) exit code: $RC"; FAIL=$((FAIL+1))
+fi
+
+echo "=== Scenario 10: implicit counterpart accepted (canonical-name form) ==="
+OUT=$(./run_pep_tf.sh --pgver 17 --platforms deb --arch amd64 --components server --containers auto-ubuntu2404-amd --dry-run 2>&1)
+RC=$?
+_check "counterpart (name) effective for deb/amd64" 'effective for target deb/amd64: auto-ubuntu2404-amd' "$OUT"
+_check "counterpart (name) image/platform resolves" '\[image-resolution\] family=deb container=auto-ubuntu2404-amd image=ubuntu:24.04 platform=linux/amd64' "$OUT"
+if [[ $RC -eq 0 ]]; then
+  echo "  PASS  counterpart (name) exits 0"; PASS=$((PASS+1))
+else
+  echo "  FAIL  counterpart (name) exit code: $RC"; FAIL=$((FAIL+1))
+fi
+
+echo "=== Scenario 11: counterpart out of scope for the wrong arch target -> exit 2 ==="
+# The counterpart is deb/amd64; asking for it under --arch arm64 is global-zero.
+OUT=$(./run_pep_tf.sh --pgver 17 --platforms deb --arch arm64 --components server --containers ubuntu2404-amd64 --dry-run 2>&1)
+RC=$?
+_check "counterpart wrong-arch diagnostic" 'out of scope for the selected' "$OUT"
+if [[ $RC -eq 2 ]]; then
+  echo "  PASS  counterpart wrong-arch exits 2"; PASS=$((PASS+1))
+else
+  echo "  FAIL  counterpart wrong-arch expected exit 2, got $RC"; FAIL=$((FAIL+1))
+fi
+
+echo "=== Scenario 12: alias + canonical of the SAME synthesized counterpart dedup to one ==="
+OUT=$(./run_pep_tf.sh --pgver 17 --platforms deb --arch amd64 --components server --containers ubuntu2404-amd64,auto-ubuntu2404-amd --dry-run 2>&1)
+RC=$?
+_check "synthesized dedup emitted" "dedup'd" "$OUT"
+_check "synthesized dedup -> exactly 1 container" 'platforms=deb arch=amd64 -> 1 container.*auto-ubuntu2404-amd' "$OUT"
+if [[ $RC -eq 0 ]]; then
+  echo "  PASS  synthesized dedup exits 0"; PASS=$((PASS+1))
+else
+  echo "  FAIL  synthesized dedup exit code: $RC"; FAIL=$((FAIL+1))
+fi
+
+echo "=== Scenario 13: 'all' does NOT include implicit counterparts ==="
+# Under deb/amd64, 'all' yields only real amd64 deb entries (debian13-amd,
+# ubuntu2604-amd). The synthesized ubuntu2404 counterpart must be absent.
+OUT=$(./run_pep_tf.sh --pgver 17 --platforms deb --arch amd64 --components server --containers all --dry-run 2>&1)
+RC=$?
+_check_absent "'all' excludes synthesized ubuntu2404-amd" 'auto-ubuntu2404-amd' "$OUT"
+_check "'all' still yields real deb/amd64 entries" 'effective for target deb/amd64:.*auto-' "$OUT"
+if [[ $RC -eq 0 ]]; then
+  echo "  PASS  'all' excludes counterparts exits 0"; PASS=$((PASS+1))
+else
+  echo "  FAIL  'all' excludes counterparts exit code: $RC"; FAIL=$((FAIL+1))
+fi
+
 echo ""
 echo "summary: PASS=$PASS  FAIL=$FAIL"
 [[ $FAIL -eq 0 ]]

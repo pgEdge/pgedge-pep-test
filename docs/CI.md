@@ -23,7 +23,7 @@ The workflow wraps the existing `run_pep_tf.sh` framework without changing its b
 | `components` | text | `all` | Components to test. `all` or CSV of names (e.g. `pgbouncer,server`). Same vocabulary as `run_pep_tf.sh --components`. Passed through to every matrix target. |
 | `repo` | choice | `release` | pgEdge repo channel. `release` / `staging` / `daily`. Passed through. |
 | `execution_mode` | choice | `preview` | `preview` = `--help` + `--dry-run` only (no Docker pulls, no pytest, ~seconds per matrix target). `full` = real framework execution. |
-| `containers` | text | *(empty)* | Custom container override (csv). Empty = use `containers_list.json` defaults. Special value `all` (sole token) = entire catalog, including `enabled: false`. Example: `'rocky9-arm64, ubuntu2404-arm64'`. Accepts both aliases and canonical names. See [Selecting container targets at runtime](#selecting-container-targets-at-runtime) for the full table and validation behavior. |
+| `containers` | text | *(empty)* | Custom container override (csv). Empty = use `containers_list.json` defaults. Accepts both aliases and canonical names, plus a listed platform's opposite arch even if only one arch is listed (e.g. `ubuntu2404-amd64` when only `ubuntu2404-arm64` exists) — the counterpart is synthesized on the fly. Special value `all` (sole token) = entire catalog, including `enabled: false`, but is **catalog-only** and does NOT include these implicit counterparts. Example: `'rocky9-arm64, ubuntu2404-amd64'`. See [Selecting container targets at runtime](#selecting-container-targets-at-runtime) for the full table and validation behavior. |
 
 The first three are cross-producted into a matrix. With all three at `all`, that's 3 × 2 × 2 = **12 matrix targets** running in parallel.
 
@@ -177,12 +177,47 @@ The "Enabled (default)" column mirrors `configuration/containers_list.json` as o
 this branch. It changes as the catalog is edited; for the live state at any
 moment, run `./run_pep_tf.sh --list-containers` locally.
 
+### Implicit opposite-arch counterparts
+
+The catalog lists many platforms under a single architecture (e.g. only
+`ubuntu2404-arm64`). Because pgEdge platform support is arm64/amd64-equivalent,
+**the opposite architecture of any listed platform is also selectable via the
+override, even though it has no catalog entry.** Request it by the natural alias
+or canonical name and the resolver synthesizes the counterpart on the fly:
+
+```bash
+# ubuntu2404 is listed only as -arm64, but the amd64 counterpart is accepted:
+./run_pep_tf.sh --pgver 17 --platforms deb --arch amd64 --components server \
+  --containers ubuntu2404-amd64
+# -> resolves to auto-ubuntu2404-amd, image ubuntu:24.04, platform linux/amd64
+```
+
+Rules and caveats:
+
+- **Real catalog entries always win.** Synthesis happens only on a lookup miss;
+  a name/alias already in the catalog resolves to its real entry.
+- **Counterpart only, never a new OS.** A token synthesizes only when the *same*
+  OS/version exists under the other arch. A genuinely unknown OS/version still
+  **fails fast**.
+- **The synthesized canonical name** (e.g. `auto-ubuntu2404-amd`) preserves the
+  sibling's prefix and flips only the arch suffix. It is an **internal runtime
+  identifier** used to drive image/platform resolution — not a promise that a
+  future explicit catalog entry will use that exact name.
+- **`all` is catalog-only.** The `all` token expands to the real catalog and
+  does **not** include implicit counterparts. After this feature, "all catalog
+  entries" and "all supported implicit targets" are deliberately not the same
+  set — name a counterpart explicitly to run it.
+- **Equivalence is assumed, not verified.** If a platform were ever genuinely
+  single-arch, its synthesized counterpart would be accepted here and fail later
+  at `docker pull` (no matching manifest) rather than up front.
+
 ### CI examples
 
 | Goal | `containers` input | Other inputs |
 |---|---|---|
 | Default behavior (use catalog `enabled: true`) | *(empty)* | any |
 | Run two specific targets across the full matrix | `rocky9-arm64, ubuntu2404-arm64` | `families=all`, `arches=all` |
+| Run a listed platform's unlisted opposite arch (implicit counterpart) | `ubuntu2404-amd64` | `families=deb`, `arches=amd64` |
 | Smoke against every catalog entry (incl. `enabled: false`) | `all` | as desired |
 | Single-platform run pinned to one container | `alma9-arm64` | `families=rpm`, `arches=arm64` |
 
@@ -206,7 +241,8 @@ PEP_CONTAINERS=rocky9-arm64 ./run_pep_tf.sh --pgver 17 --platforms rpm --compone
 |---|---|
 | `containers` empty | Use catalog `enabled: true` subset (current behavior, byte-equivalent logs). |
 | Override contains an alias or canonical name | Both accepted. |
-| Override is `all` (sole token) | Expand to the entire catalog, including `enabled: false`. |
+| Override names a listed platform's opposite arch (e.g. `ubuntu2404-amd64` when only `-arm64` is listed) | Accepted — the counterpart is synthesized on the fly and resolves to the same image. Real catalog entries still win first. |
+| Override is `all` (sole token) | Expand to the entire catalog, including `enabled: false`. **Catalog-only** — does NOT include implicit opposite-arch counterparts. |
 | Override mixes `all` with other tokens | **Fail-fast.** |
 | Unknown name / alias | **Fail-fast** with the valid names + aliases listed in the diagnostic. |
 | Container's family or arch matches none of the selected `families` / `arches` (global-zero) | **Fail-fast** in the CI plan job before any test target spawns; locally at script startup. |

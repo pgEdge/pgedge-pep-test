@@ -52,8 +52,8 @@ deb_pgbin = os.getenv("DEB_PG_BIN_PATH", f"/usr/lib/postgresql/{pg_major_version
 deb_pg_path = os.getenv("DEB_PG_PATH", f"/usr/lib/postgresql/{pg_major_version}")
 
 # Spock major version (e.g. "50" or "60"). spock50 and spock60 are separate
-# major versions that coexist in the repo; select with SPOCK_MAJOR (default 60).
-spock_major = os.getenv("SPOCK_MAJOR", "60")
+# major versions that coexist in the repo; select with SPOCK_MAJOR (default 50).
+spock_major = os.getenv("SPOCK_MAJOR", "50")
 
 # Cross-wiring utility (replaces the zodan SQL/py cross-wiring used elsewhere)
 crosswire_script = (Path(__file__).parent.parent / "utillities" / "spock utils" / "2node_crosswire.py").resolve()

@@ -369,6 +369,35 @@ def test_container_display_falls_back_to_actual_when_no_alias():
     assert ccr.container_display("auto-alma9-arm", {}) == "auto-alma9-arm"
 
 
+def test_report_containers_lists_distinct_aliases_excluding_placeholders():
+    aliases = {"auto-ubuntu2604-arm": "ubuntu2604-arm64",
+               "auto-ubuntu2604-amd": "ubuntu2604-amd64"}
+    rows = [
+        {"container": "auto-ubuntu2604-arm"},
+        {"container": "auto-ubuntu2604-arm"},   # dup -> collapsed
+        {"container": "auto-ubuntu2604-amd"},
+        {"container": "-"},                      # unattributed placeholder
+        {"container": "(none in scope)"},        # empty-target placeholder
+        {"container": "(not container-scoped)"}, # decoupled placeholder
+        {"container": ""},                       # missing
+    ]
+    assert ccr.report_containers(rows, aliases) == [
+        "ubuntu2604-amd64", "ubuntu2604-arm64",
+    ]
+
+
+def test_render_header_includes_os_containers_line():
+    html = ccr._render_header({"run_number": "1"},
+                              ["ubuntu2604-amd64", "ubuntu2604-arm64"])
+    assert "OS / containers:" in html
+    assert "ubuntu2604-arm64" in html and "ubuntu2604-amd64" in html
+
+
+def test_render_header_omits_os_line_when_empty():
+    html = ccr._render_header({"run_number": "1"}, [])
+    assert "OS / containers:" not in html
+
+
 def test_container_display_synthesized_counterpart_shows_alias():
     """A synthesized opposite-arch counterpart (absent from containers_list.json)
     still renders its alias via the resolver fallback. auto-ubuntu2404-arm is a

@@ -845,7 +845,14 @@ def _render_css() -> str:
     """
 
 
-def _render_header(ctx: dict) -> str:
+def _render_header(ctx: dict, os_list: list = None) -> str:
+    os_list = os_list or []
+    os_line = ""
+    if os_list:
+        os_line = f"""
+  <div class="context" style="margin-top:8px">
+    <strong>OS / containers:</strong> {_esc(', '.join(os_list))}
+  </div>"""
     return f"""<div class="header">
   <h1>PEP Regression Consolidated Report</h1>
   <div class="context">
@@ -861,8 +868,27 @@ def _render_header(ctx: dict) -> str:
     PG {_sel(ctx, 'pg_versions')} &middot; families {_sel(ctx, 'families')} &middot;
     arches {_sel(ctx, 'arches')} &middot; components {_sel(ctx, 'components')} &middot;
     repo {_sel(ctx, 'repo')} &middot; mode {_sel(ctx, 'execution_mode')}
-  </div>
+  </div>{os_line}
 </div>"""
+
+
+def report_containers(rows: list, aliases: dict = None) -> list:
+    """Sorted, distinct display labels for every real container in the report.
+
+    Drives the header's OS/containers line so the reader can see which images
+    the report covers (the effective-selection line shows families/arches but
+    not the concrete OS images). Placeholder 'containers' emitted for
+    unattributed or empty targets (UNATTRIBUTED '-', '(none in scope)',
+    '(not container-scoped)') are excluded. Uses container_display so aliases
+    (incl. synthesized counterparts) are shown."""
+    aliases = aliases or {}
+    seen = set()
+    for r in rows:
+        c = r.get("container", "")
+        if not c or c == UNATTRIBUTED_COMPONENT or c.startswith("("):
+            continue
+        seen.add(container_display(c, aliases))
+    return sorted(seen)
 
 
 def _render_banner() -> str:
@@ -1418,12 +1444,13 @@ def render_html(rows: list, ctx: dict, aliases: dict = None) -> str:
     if has_unattributed:
         slug_input.append(UNATTRIBUTED_COMPONENT)
     slugs = _assign_unique_slugs(slug_input)
+    os_list = report_containers(rows, aliases)
 
     return (
         '<!DOCTYPE html><html><head><meta charset="utf-8"/>'
         '<title>PEP Regression Consolidated Report</title>'
         f'<style>{_render_css()}</style></head><body>\n'
-        + _render_header(ctx) + "\n"
+        + _render_header(ctx, os_list) + "\n"
         + _render_banner() + "\n"
         + _render_summary_cards(totals) + "\n"
         + _render_unattributed_banner(

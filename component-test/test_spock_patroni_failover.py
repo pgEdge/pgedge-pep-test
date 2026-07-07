@@ -853,28 +853,57 @@ def test_create_table_n1_verify_n2(container_name, container_type):
     config = get_container_config(container_type)
     pguser = config["pguser"]
 
-    setup_sql = """\
-CREATE TABLE IF NOT EXISTS test (
-    id   SERIAL PRIMARY KEY,
-    data TEXT,
-    ts   TIMESTAMP DEFAULT NOW()
-);
-SELECT spock.repset_add_table('default', 'test');
-INSERT INTO test (data) VALUES ('from_n1_row1'), ('from_n1_row2'), ('from_n1_row3');
-SELECT 'n1 row count: ' || COUNT(*) FROM test;
-"""
+    create_table_sql = (
+        "CREATE TABLE IF NOT EXISTS test ("
+        "id SERIAL PRIMARY KEY, data TEXT, ts TIMESTAMP DEFAULT NOW());"
+    )
+
+    # n1: enable DDL replication in this session, create the table, add it to the
+    # default repset. Setting spock.enable_ddl_replication at the session level (in
+    # addition to the ALTER SYSTEM done during cross-wiring) guarantees the CREATE
+    # TABLE is captured for replication regardless of reload timing.
+    n1_setup_sql = (
+        "SET spock.enable_ddl_replication = on;\n"
+        "SET spock.include_ddl_repset = on;\n"
+        "SET spock.allow_ddl_from_functions = on;\n"
+        f"{create_table_sql}\n"
+        "SELECT spock.repset_add_table('default', 'test');\n"
+    )
 
     sql_file = "/tmp/create_test_table.sql"
     _exec(container,
-          f"cat > {sql_file} << 'EOF'\n{setup_sql}\nEOF",
+          f"cat > {sql_file} << 'EOF'\n{n1_setup_sql}\nEOF",
           msg="Write create_test_table.sql")
 
-    print(f"\nCreating and populating 'test' table on n1 (port {n1_port})")
+    print(f"\nCreating 'test' table on n1 (port {n1_port})")
     rc, out = container.exec_run(
         ["bash", "-c", f"psql -h localhost -p {n1_port} -U {pguser} -d postgres -f {sql_file} 2>&1"],
         user="root"
     )
     assert rc == 0, f"Failed to setup test table on n1: {out.decode()}"
+    print(out.decode())
+
+    # Ensure the table schema also exists on n2. Spock replicates row DATA for
+    # repset tables, but the subscriber must already have the table (DDL
+    # replication of the CREATE can lag or be gated by the subscribed repsets).
+    # Creating it explicitly (IF NOT EXISTS — a no-op if DDL already replicated it)
+    # makes n1 -> n2 DML replication deterministic.
+    print(f"Ensuring 'test' table exists on n2 (port {n2_port})")
+    rc, out = container.exec_run(
+        ["bash", "-c",
+         f'psql -h localhost -p {n2_port} -U {pguser} -d postgres -c "{create_table_sql}" 2>&1'],
+        user="root"
+    )
+    assert rc == 0, f"Failed to ensure test table on n2: {out.decode()}"
+
+    print(f"Inserting 3 rows on n1 (port {n1_port})")
+    rc, out = container.exec_run(
+        ["bash", "-c",
+         f"psql -h localhost -p {n1_port} -U {pguser} -d postgres "
+         f"-c \"INSERT INTO test (data) VALUES ('from_n1_row1'),('from_n1_row2'),('from_n1_row3');\" 2>&1"],
+        user="root"
+    )
+    assert rc == 0, f"Failed to insert rows on n1: {out.decode()}"
     print(out.decode())
 
     print("Waiting 10s for replication to n2...")

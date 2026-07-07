@@ -409,8 +409,8 @@ def test_verify_sbom(container_name, container_type):
         exit_code, output = container.exec_run(
             f"sh -c 'cd {sbom_dir} && sq verify "
             f"{_sq_signer_flag} /etc/apt/keyrings/pgedge-rsa.gpg "
-            f"{_sq_sig_flag} system_stats-sbom.json.asc "
-            f"system_stats-sbom.json'",
+            f"{_sq_sig_flag} system-stats-sbom.json.asc "
+            f"system-stats-sbom.json'",
             user="root",
         )
         output_str = output.decode().replace('\xa0', ' ')

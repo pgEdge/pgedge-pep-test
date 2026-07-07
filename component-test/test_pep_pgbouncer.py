@@ -50,7 +50,7 @@ pguser = rhel_pguser
 
 # PgBouncer configuration
 rhel_pgbouncer_user = os.getenv("PGBOUNCER_USER", "pgbouncer")
-deb_pgbouncer_user = os.getenv("DEB_PGBOUNCER_USER", "postgres")
+deb_pgbouncer_user = os.getenv("DEB_PGBOUNCER_USER", "pgbouncer")
 pgbouncer_port = os.getenv("PGBOUNCER_PORT", "6432")
 pgbouncer_config_dir = os.getenv("PGBOUNCER_CONFIG_DIR", "/etc/pgbouncer")
 pgbouncer_stripped_bin = os.getenv("PGBOUNCER_STRIPPED_BIN", "pgbouncer")
@@ -530,6 +530,16 @@ def test_start_server(container_name, container_type):
 
     print(f"\n--- Starting PostgreSQL server on {container_name} ---")
 
+    # A postmaster (or other listener) left on this port by a previous run causes
+    # "could not bind ... Address already in use". Stop any stale postmaster for
+    # this data dir and free the port before starting.
+    container.exec_run(
+        ["bash", "-c",
+         f"[ -d {pgdata} ] && {pgbin}/pg_ctl -D {pgdata} -m fast stop 2>/dev/null; "
+         f"fuser -k {pgport}/tcp 2>/dev/null; sleep 1; true"],
+        user="root"
+    )
+
     # Use the pg_server_management module to start the server
     try:
         success, server_output, message = pg_server_management.start_server(
@@ -619,8 +629,8 @@ def test_pgbouncer_copy_config_files(container_name, container_type):
             local_config_dir=str(local_config_dir),
             container_config_dir=pgbouncer_config_dir,
             file_mapping=file_mapping,
-            owner=pgbouncer_user,
-            group=pgbouncer_user,
+            owner=pguser,
+            group=pguser,
             permissions="600"
         )
         assert success, f"Config file copy failed: {message}"
@@ -655,8 +665,8 @@ def pgbouncer_set_permissions(container_name, container_type):
         success, file_info, message = file_management.set_file_permissions(
             container=container,
             file_path=userlist_file,
-            owner=pgbouncer_user,
-            group=pgbouncer_user,
+            owner=pguser,
+            group=pguser,
             permissions="600",
             create_user=True,
             user_options="-r -s /sbin/nologin"
@@ -691,7 +701,7 @@ def test_pgbouncer_start_service(container_name, container_type):
     pgbouncer_user = config["pgbouncer_user"]
     # Set ownership of config directory and files to pgbouncer
     exit_code, output = container.exec_run(
-        f"chown -R {pgbouncer_user}:{pgbouncer_user} {pgbouncer_config_dir}",
+        f"chown -R {pguser}:{pguser} {pgbouncer_config_dir}",
         user="root"
     )
     if exit_code != 0:
@@ -718,7 +728,7 @@ def test_pgbouncer_start_service(container_name, container_type):
     # Start pgbouncer as pgbouncer user
     exit_code, output = container.exec_run(
         f"{pgbouncer_bin} -d {pgbouncer_config_dir}/pgbouncer.ini",
-        user=pgbouncer_user
+        user=pguser
     )
     assert exit_code == 0, f"Failed to start pgbouncer: {output.decode()}"
     print(f"✅ PgBouncer started with daemon mode")
@@ -757,13 +767,13 @@ def test_pgbouncer_connect_psql(container_name, container_type):
 
     assert container.status == "running"
     # # Get container-specific configuration
-    # config = get_container_config(container_type)
-    # pgbouncer_user = config["pgbouncer_user"]
-    # print(f"\n--- Connecting to PgBouncer via psql on {container_name} ---")
+    config = get_container_config(container_type)
+    pgbouncer_user = config["pgbouncer_user"]
+    print(f"\n--- Connecting to PgBouncer via psql on {container_name} ---")
 
     # Connect to pgbouncer admin database
     exit_code, output = container.exec_run(
-        f"psql -h 127.0.0.1 -p {pgbouncer_port}  -d pgbouncer ",
+        f"psql  -p {pgbouncer_port}  -d pgbouncer -U {pgbouncer_user} ",
         user=pguser
     )
     assert exit_code == 0, f"Failed to connect to pgbouncer: {output.decode()}"

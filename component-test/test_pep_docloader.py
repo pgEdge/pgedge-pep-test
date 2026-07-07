@@ -305,10 +305,14 @@ def test_verify_sbom(container_name, container_type):
 
     config = get_container_config(container_type)
     docloader_package = config["docloader_package"]
-    sbom_dir = f"{decoupled_sbom_path}/{docloader_package}"
-    sbom_name = docloader_package.removeprefix("pgedge-")
+    # The SBOM file keeps the full package name (pgedge-docloader-sbom.json) on
+    # both platforms, but the directory differs:
+    #   RHEL: {decoupled_sbom_path}/pgedge-docloader-sbom.json          (no subdir)
+    #   Deb:  {decoupled_sbom_path}/pgedge-docloader/pgedge-docloader-sbom.json
+    sbom_name = docloader_package
 
     if container_type == "rhel":
+        sbom_dir = decoupled_sbom_path
         print(f"\n--- Verifying SBOM on {container_name} (RHEL) in {sbom_dir} ---")
 
         exit_code, output = container.exec_run(
@@ -333,6 +337,7 @@ def test_verify_sbom(container_name, container_type):
         print(f"   {output_str.strip()}")
 
     else:  # deb
+        sbom_dir = f"{decoupled_sbom_path}/{docloader_package}"
         print(f"\n--- Verifying SBOM on {container_name} (Deb) in {sbom_dir} ---")
 
         machine_prereq_setup.ensure_sq_installed(container)

@@ -1,13 +1,9 @@
 /etc/pgbouncer/pgbouncer.ini
 /etc/pgbouncer/userlist.txt
-/lib/systemd/system/pgbouncer.service
-/lib/systemd/system/pgbouncer.socket
-/usr/sbin/pgbouncer
-/usr/share/doc/pgedge-pgbouncer/NEWS.Debian.gz
-/usr/share/doc/pgedge-pgbouncer/NEWS.md.gz
+/usr/lib/systemd/system/pgbouncer.service
+/usr/lib/systemd/system/pgbouncer.socket
 /usr/share/doc/pgedge-pgbouncer/README.md.gz
 /usr/share/doc/pgedge-pgbouncer/changelog.Debian.gz
-/usr/share/doc/pgedge-pgbouncer/examples
 /usr/share/doc/pgedge-pgbouncer/examples/pgbouncer.ini
 /usr/share/doc/pgedge-pgbouncer/examples/userlist.txt
 /usr/share/doc/pgedge-pgbouncer/pgbouncer-minimal.ini
@@ -16,5 +12,5 @@
 /usr/share/man/man1/pgbouncer.1.gz
 /usr/share/man/man5/pgbouncer.5.gz
 /usr/share/pgbouncer/mkauth.py
-/usr/share/pgbouncer-sbom.json
-/usr/share/pgbouncer-sbom.json.asc
+/usr/share/pgedge-pgbouncer/pgbouncer-sbom.json
+/usr/share/pgedge-pgbouncer/pgbouncer-sbom.json.asc

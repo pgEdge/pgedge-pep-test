@@ -548,11 +548,69 @@ def load_container_aliases(path: Path = None) -> dict:
     return out
 
 
+# Lazily-loaded (module, catalog) pair from container_resolver, used ONLY to
+# derive a display alias for synthesized opposite-arch counterparts (implicit
+# targets like "auto-ubuntu2404-amd", which have no entry in containers_list.json
+# and therefore no alias in the dict above). Loaded via importlib-by-path so it
+# works whether or not utillities/ is on sys.path. Cached after first attempt.
+_RESOLVER = None  # None = not yet attempted; else (module_or_None, catalog_or_None)
+
+
+def _get_resolver():
+    """Return (resolver_module, catalog) or (None, None). Fully defensive:
+    a missing/malformed catalog or any import error yields (None, None) so
+    report generation never fails on account of alias prettification."""
+    global _RESOLVER
+    if _RESOLVER is not None:
+        return _RESOLVER
+    try:
+        import importlib.util
+        import sys
+        resolver_path = Path(__file__).resolve().parent / "container_resolver.py"
+        catalog_path = (Path(__file__).resolve().parent.parent
+                        / "configuration" / "containers_list.json")
+        spec = importlib.util.spec_from_file_location(
+            "pep_container_resolver_for_report", resolver_path
+        )
+        mod = importlib.util.module_from_spec(spec)
+        # Register in sys.modules BEFORE exec so @dataclass field-type
+        # resolution can find the module (Python 3.9 importlib gotcha).
+        sys.modules[spec.name] = mod
+        spec.loader.exec_module(mod)
+        catalog = mod.load_catalog(catalog_path)
+        _RESOLVER = (mod, catalog)
+    except Exception:
+        _RESOLVER = (None, None)
+    return _RESOLVER
+
+
 def container_display(name: str, aliases: dict) -> str:
     """Short label for one container: alias if present, otherwise the
     actual name (defensive -- a future container missing from the catalog
-    must not disappear from the report)."""
-    return aliases.get(name, name)
+    must not disappear from the report).
+
+    For synthesized opposite-arch counterparts (implicit targets absent from
+    containers_list.json), fall back to the resolver to derive the alias
+    (e.g. "auto-ubuntu2404-amd" -> "ubuntu2404-amd64"). Any failure in that
+    path is swallowed and the raw name is shown, so a catalog/resolver problem
+    never breaks report generation."""
+    alias = aliases.get(name)
+    if alias:
+        return alias
+    try:
+        mod, catalog = _get_resolver()
+        # Only attempt synthesis for names that are NOT real catalog
+        # identifiers. A real name the caller simply omitted from `aliases`
+        # must still fall back to the raw name (preserves the dict-driven
+        # contract); synthesis is reserved for genuine implicit counterparts.
+        if (mod is not None and catalog is not None
+                and name.lower() not in catalog.lookup_index):
+            entry = mod.resolve_token(catalog, name)
+            if entry is not None:
+                return entry.alias
+    except Exception:
+        pass
+    return name
 
 
 # Per-container detail-page filename helpers.
@@ -787,7 +845,14 @@ def _render_css() -> str:
     """
 
 
-def _render_header(ctx: dict) -> str:
+def _render_header(ctx: dict, os_list: list = None) -> str:
+    os_list = os_list or []
+    os_line = ""
+    if os_list:
+        os_line = f"""
+  <div class="context" style="margin-top:8px">
+    <strong>OS / containers:</strong> {_esc(', '.join(os_list))}
+  </div>"""
     return f"""<div class="header">
   <h1>PEP Regression Consolidated Report</h1>
   <div class="context">
@@ -803,8 +868,27 @@ def _render_header(ctx: dict) -> str:
     PG {_sel(ctx, 'pg_versions')} &middot; families {_sel(ctx, 'families')} &middot;
     arches {_sel(ctx, 'arches')} &middot; components {_sel(ctx, 'components')} &middot;
     repo {_sel(ctx, 'repo')} &middot; mode {_sel(ctx, 'execution_mode')}
-  </div>
+  </div>{os_line}
 </div>"""
+
+
+def report_containers(rows: list, aliases: dict = None) -> list:
+    """Sorted, distinct display labels for every real container in the report.
+
+    Drives the header's OS/containers line so the reader can see which images
+    the report covers (the effective-selection line shows families/arches but
+    not the concrete OS images). Placeholder 'containers' emitted for
+    unattributed or empty targets (UNATTRIBUTED '-', '(none in scope)',
+    '(not container-scoped)') are excluded. Uses container_display so aliases
+    (incl. synthesized counterparts) are shown."""
+    aliases = aliases or {}
+    seen = set()
+    for r in rows:
+        c = r.get("container", "")
+        if not c or c == UNATTRIBUTED_COMPONENT or c.startswith("("):
+            continue
+        seen.add(container_display(c, aliases))
+    return sorted(seen)
 
 
 def _render_banner() -> str:
@@ -1360,12 +1444,13 @@ def render_html(rows: list, ctx: dict, aliases: dict = None) -> str:
     if has_unattributed:
         slug_input.append(UNATTRIBUTED_COMPONENT)
     slugs = _assign_unique_slugs(slug_input)
+    os_list = report_containers(rows, aliases)
 
     return (
         '<!DOCTYPE html><html><head><meta charset="utf-8"/>'
         '<title>PEP Regression Consolidated Report</title>'
         f'<style>{_render_css()}</style></head><body>\n'
-        + _render_header(ctx) + "\n"
+        + _render_header(ctx, os_list) + "\n"
         + _render_banner() + "\n"
         + _render_summary_cards(totals) + "\n"
         + _render_unattributed_banner(

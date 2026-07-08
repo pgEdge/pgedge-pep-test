@@ -233,6 +233,12 @@ _RANDOM_NAME_RE = re.compile(r'(?:^|(?<=/))[a-f0-9]{8,}(?:\.|$)|(?<=\.)[a-f0-9]{
 # e.g. /usr/pgadmin4/venv/lib/python3.13/... or /usr/pgadmin4/venv/bin/pip3.13
 _PYTHON_VERSION_RE = re.compile(r'/python3\.\d+(?:[/_.]|$)', re.IGNORECASE)
 
+# Volatile dev-metadata basenames inside node_modules: dotfiles (.eslintrc,
+# .github, .nycrc, .npmignore, .gitattributes, .runkit_example.js, ...) and test
+# files (test.js/test.ts). npm includes or omits these depending on the package's
+# .npmignore/packaging, so they are not stable expected-output entries.
+_VOLATILE_NM_BASENAME_RE = re.compile(r'^\.|^test\.[jt]s$', re.IGNORECASE)
+
 
 def _has_random_name(file_path: str) -> bool:
     """Return True if the file's basename looks like it contains a random hash segment."""
@@ -247,6 +253,22 @@ def _has_python_version_path(file_path: str) -> bool:
     version bump and should not be part of the stable expected-output check.
     """
     return bool(_PYTHON_VERSION_RE.search(file_path))
+
+
+def _is_volatile_node_module_file(file_path: str) -> bool:
+    """Return True for volatile dev artifacts inside node_modules.
+
+    node_modules ships whatever npm decided to include for each dependency; dev
+    metadata (dotfiles like .eslintrc/.github, and test files/dirs) comes and goes
+    between builds, so it must not be asserted in the expected-output subset check.
+    """
+    if "/node_modules/" not in file_path:
+        return False
+    p = file_path.rstrip('/')
+    if "/test/" in p or "/tests/" in p:
+        return True
+    basename = p.rsplit('/', 1)[-1]
+    return bool(_VOLATILE_NM_BASENAME_RE.search(basename))
 
 
 @pytest.mark.parametrize("container_name,container_type", all_containers)
@@ -309,7 +331,9 @@ def test_verify_bundled_files(container_name, container_type):
         # change with every Python version bump and are not stable expected paths.
         filtered_expected = [
             p for p in raw_expected
-            if not _has_random_name(p) and not _has_python_version_path(p)
+            if not _has_random_name(p)
+            and not _has_python_version_path(p)
+            and not _is_volatile_node_module_file(p)
         ]
         skipped_random = len(raw_expected) - len(filtered_expected)
         if skipped_random:

@@ -39,11 +39,8 @@ pgdata = os.getenv("PG_DATA_DIR", "/tmp/n1")
 pg_major_version = os.getenv("PG_MAJOR_VERSION", "16")
 pg_stat_monitor_version = os.getenv(f"PGEDGE_PG_STAT_MONITOR_{pg_major_version}_VERSION", "")
 
-# Binary tests — set these when the component ships a standalone binary in /usr/bin.
-# If the component does not ship a binary, leave these as empty strings and the
-# test_binary_version / test_binary_stripped tests will be skipped automatically.
-component_binary = os.getenv("COMPONENT_BINARY", "")
-component_version = os.getenv("COMPONENT_BINARY_VERSION", "")
+# pg_stat_monitor ships no standalone binary — only pg_stat_monitor.so — so the
+# strip check targets the shared library (see test_lib_stripped).
 
 # User configuration
 rhel_pguser = os.getenv("PG_USER", "postgres")
@@ -81,14 +78,16 @@ def get_container_config(container_type):
             "pgbin": rhel_pgbin.rstrip('/'),
             "pguser": rhel_pguser,
             "pg_stat_monitor_package": rhel_pg_stat_monitor_package,
-            "bundled_files": rhel_bundled_files
+            "bundled_files": rhel_bundled_files,
+            "lib_path": f"{rhel_pg_path}/lib/pg_stat_monitor.so"
         }
     else:  # deb
         return {
             "pgbin": deb_pgbin.rstrip('/'),
             "pguser": deb_pguser,
             "pg_stat_monitor_package": deb_pg_stat_monitor_package,
-            "bundled_files": deb_bundled_files
+            "bundled_files": deb_bundled_files,
+            "lib_path": f"{deb_pg_path}/lib/pg_stat_monitor.so"
         }
 
 
@@ -575,7 +574,13 @@ def test_extension_version(container_name, container_type, extension):
     assert len(columns) >= 2, f"Unexpected \\dx row format: {ext_line}"
     installed_version = columns[1].strip()
 
-    assert pg_stat_monitor_version in installed_version, (
+    # The extension version (\dx) can be reported at coarser precision than the
+    # package version — e.g. package 2.3.0 but extension 2.3. Match on the common
+    # leading dot-components rather than a strict substring/equality.
+    _expected_parts = pg_stat_monitor_version.split(".")
+    _installed_parts = installed_version.split(".")
+    _common = min(len(_expected_parts), len(_installed_parts))
+    assert _common > 0 and _expected_parts[:_common] == _installed_parts[:_common], (
         f"Extension '{extension}' version mismatch: "
         f"expected '{pg_stat_monitor_version}', got '{installed_version}'"
     )
@@ -583,22 +588,14 @@ def test_extension_version(container_name, container_type, extension):
 
 
 @pytest.mark.parametrize("container_name,container_type", all_containers)
-def test_binary_version(container_name, container_type):
-    """Verify that the component binary reports the expected version string.
+def test_lib_stripped(container_name, container_type):
+    """Verify that the pg_stat_monitor shared library is a stripped ELF binary.
 
-    Skipped when COMPONENT_BINARY or COMPONENT_BINARY_VERSION is not set.
-    Set the env vars when the component ships a standalone binary, e.g.:
-      COMPONENT_BINARY=/usr/bin/pgedge-anonymizer
-      COMPONENT_BINARY_VERSION=1.0.0-beta2
-
-    Expected output format:
-      <binary-name> <version> (built <timestamp>)
+    pg_stat_monitor ships no standalone binary — only pg_stat_monitor.so:
+      RHEL: /usr/pgsql-<pg>/lib/pg_stat_monitor.so
+      Deb:  /usr/lib/postgresql/<pg>/lib/pg_stat_monitor.so
+    Runs 'file <lib>' and asserts the output contains 'stripped'.
     """
-    if not component_binary or not component_version:
-        pytest.skip(
-            "COMPONENT_BINARY or COMPONENT_BINARY_VERSION not set — skipping binary version check"
-        )
-
     container_name = container_name.strip()
     if not container_name:
         pytest.skip("No container defined in env")
@@ -610,61 +607,25 @@ def test_binary_version(container_name, container_type):
 
     assert container.status == "running"
 
-    print(f"\n--- Checking {component_binary} version on {container_name} ({container_type}) ---")
+    config = get_container_config(container_type)
+    lib_path = config["lib_path"]
+
+    print(f"\n--- Checking ELF strip status of {lib_path} on {container_name} ({container_type}) ---")
 
     exit_code, output = container.exec_run(
-        ["bash", "-c", f"{component_binary} version 2>&1"],
+        ["bash", "-c", f"file {lib_path} 2>&1"],
         user="root",
     )
-    assert exit_code == 0, f"'{component_binary} version' failed: {output.decode().strip()}"
-
-    version_output = output.decode().strip()
-    print(f"   Output: {version_output}")
-
-    assert component_version in version_output, (
-        f"Expected version '{component_version}' not found in binary output:\n  {version_output}"
-    )
-    print(f"✅ {component_binary} reports version {component_version}")
-
-
-@pytest.mark.parametrize("container_name,container_type", all_containers)
-def test_binary_stripped(container_name, container_type):
-    """Verify that the component binary is a stripped ELF binary.
-
-    Skipped when COMPONENT_BINARY is not set.
-    Runs 'file <binary>' and asserts the output contains 'stripped',
-    confirming debug symbols were removed at build time.
-    """
-    if not component_binary:
-        pytest.skip("COMPONENT_BINARY not set — skipping binary strip check")
-
-    container_name = container_name.strip()
-    if not container_name:
-        pytest.skip("No container defined in env")
-
-    try:
-        container = client.containers.get(container_name)
-    except docker.errors.NotFound:
-        pytest.skip(f"Container {container_name} not found or not running.")
-
-    assert container.status == "running"
-
-    print(f"\n--- Checking ELF strip status of {component_binary} on {container_name} ({container_type}) ---")
-
-    exit_code, output = container.exec_run(
-        ["bash", "-c", f"file {component_binary} 2>&1"],
-        user="root",
-    )
-    assert exit_code == 0, f"'file {component_binary}' failed: {output.decode().strip()}"
+    assert exit_code == 0, f"'file {lib_path}' failed: {output.decode().strip()}"
 
     file_output = output.decode().strip()
     print(f"   Output: {file_output}")
 
     assert "stripped" in file_output.lower(), (
-        f"Binary {component_binary} does not appear to be stripped.\n"
+        f"Library {lib_path} does not appear to be stripped.\n"
         f"'file' output: {file_output}"
     )
-    print(f"✅ {component_binary} is stripped")
+    print(f"✅ {lib_path} is stripped")
 
 
 @pytest.mark.parametrize("container_name,container_type", all_containers)

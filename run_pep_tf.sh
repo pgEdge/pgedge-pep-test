@@ -107,11 +107,18 @@ OPTIONS:
 
   --containers <csv>      Runtime container override (default: use containers_list.json
                           enabled:true subset). Accepts aliases (e.g. rocky9-arm64) and
-                          canonical names. Special value 'all' (sole token) = entire
-                          catalog regardless of enabled. See --list-containers.
+                          canonical names. A listed platform's opposite architecture is
+                          also accepted even if only one arch is listed (e.g. request
+                          ubuntu2404-amd64 when only ubuntu2404-arm64 is in the catalog);
+                          the counterpart is synthesized on the fly and maps to the same
+                          image. Special value 'all' (sole token) = entire catalog
+                          regardless of enabled, but 'all' is CATALOG-ONLY and does NOT
+                          include these implicit counterparts. See --list-containers.
 
   --list-containers       Print the catalog (alias, canonical name, family, arch,
-                          enabled, description) and exit.
+                          enabled, description) and exit. Note: any listed platform's
+                          opposite arch is also selectable via --containers even though
+                          only the listed arch appears here.
 
   --arch <arch>           Filter enabled containers by architecture (default: no filter)
                           Values: arm64, amd64
@@ -576,7 +583,7 @@ IMAGES = {
     'alma9': 'almalinux:9',  'alma10': 'almalinux:10',  'alma8': 'almalinux:8',
     'oel9':  'oraclelinux:9', 'oel10': 'oraclelinux:10', 'oel8': 'oraclelinux:8',
     'debian11': 'debian:11', 'debian12': 'debian:12', 'debian13': 'debian:13',
-    'ubuntu2204': 'ubuntu:22.04', 'ubuntu2404': 'ubuntu:24.04',
+    'ubuntu2204': 'ubuntu:22.04', 'ubuntu2404': 'ubuntu:24.04', 'ubuntu2604': 'ubuntu:26.04',
 }
 def infer(name):
     n = name.lower()

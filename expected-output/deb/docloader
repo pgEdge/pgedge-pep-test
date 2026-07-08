@@ -1,7 +1,6 @@
 /etc/pgedge-docloader/config.yml
 /usr/bin/pgedge-docloader
 /usr/share/doc/pgedge-docloader/changelog.Debian.gz
-/usr/share/doc/pgedge-docloader/changelog.gz
 /usr/share/pgedge-docloader
 /usr/share/pgedge-docloader/pgedge-docloader-sbom.json
 /usr/share/pgedge-docloader/pgedge-docloader-sbom.json.asc

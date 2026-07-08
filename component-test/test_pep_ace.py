@@ -66,6 +66,11 @@ ace_cluster_name = os.getenv("ACE_CLUSTER_NAME", "demo")
 ace_rhel_pgbin = os.getenv("PG_BIN_PATH", f"/usr/pgsql-{ace_pg_major_version}/bin")
 ace_deb_pgbin = os.getenv("DEB_PG_BIN_PATH", f"/usr/lib/postgresql/{ace_pg_major_version}/bin")
 
+# Spock major used to build the ACE functional cluster. pgedge-ace does not pull
+# in PostgreSQL; installing spock provides the server (and the postgres OS user)
+# plus the replication engine ACE diffs against.
+ace_spock_major = os.getenv("SPOCK_MAJOR", "50")
+
 _ace_spock_guc = {
     "shared_preload_libraries": "'spock'",
     "wal_level": "logical",
@@ -98,6 +103,22 @@ def _ace_pgbin(container_type):
 
 def _ace_pguser(container_type):
     return rhel_pguser if container_type == "rhel" else deb_pguser
+
+
+def _ace_spock_packages(container_type):
+    """Spock + PostgreSQL server packages needed to build the ACE functional
+    cluster. Installing spock pulls the pgedge-postgresql server (which creates
+    the postgres OS user and provides initdb/psql/pg_ctl)."""
+    if container_type == "rhel":
+        return [
+            f"pgedge-spock{ace_spock_major}_{ace_pg_major_version}",
+            f"pgedge-postgresql{ace_pg_major_version}-contrib",
+        ]
+    else:  # deb (contrib is bundled in the pgedge-postgresql-<xx> server package)
+        return [
+            f"pgedge-postgresql-{ace_pg_major_version}-spock{ace_spock_major}",
+            f"pgedge-postgresql-{ace_pg_major_version}",
+        ]
 
 
 # ============================================================================
@@ -446,6 +467,22 @@ def test_ace_functional_setup_cluster(container_name, container_type):
 
     print(f"\n--- ACE: Initializing 3-node Spock cluster on {container_name} ---")
 
+    # pgedge-ace ships only the ACE tool — it does not pull in PostgreSQL or
+    # spock. Install the spock package set first: it provides the PostgreSQL
+    # server (creating the postgres OS user and initdb/psql/pg_ctl) plus the
+    # replication engine the ACE functional tests operate against.
+    spock_packages = _ace_spock_packages(container_type)
+    print(f"▶️  Installing cluster prerequisites: {', '.join(spock_packages)}")
+    try:
+        success, platform, message = package_management.install_package(
+            container, spock_packages,
+            pg_major_version=ace_pg_major_version, install_pg_server=False
+        )
+        assert success, f"Failed to install spock/server packages for ACE cluster: {message}"
+        print(f"✅ Cluster prerequisites installed on {platform}")
+    except Exception as e:
+        pytest.fail(f"Failed to install spock/server packages for ACE cluster: {str(e)}")
+
     # Initialize nodes n1, n2, n3
     for node_num in range(1, 4):
         node_name = f"n{node_num}"
@@ -488,7 +525,9 @@ def test_ace_functional_setup_cluster(container_name, container_type):
 
         for sql in [
             "CREATE EXTENSION IF NOT EXISTS spock;",
-            f"SELECT spock.create_node(node_name := '{node_name}', dsn := '{node_dsn}');",
+            # Native spock.node_create (present in spock50 & spock60).
+            # spock.create_node is a zodan-defined procedure, which ACE does not load.
+            f"SELECT spock.node_create(node_name := '{node_name}', dsn := '{node_dsn}');",
         ]:
             exit_code, output = container.exec_run(
                 ["psql", "-h", "localhost", "-p", str(node_port), "-U", pguser,
@@ -533,11 +572,16 @@ def test_ace_functional_setup_cluster(container_name, container_type):
     for sub_num in [2, 3]:
         sub_port = ace_base_port + sub_num - 1
         sub_name = f"sub_n{sub_num}_n1"
+        # Native spock.sub_create (spock50 & spock60). spock.create_subscription
+        # is a zodan-defined procedure, which ACE does not load.
+        # synchronize_structure := true copies the table schema to the subscriber
+        # during initial sync (otherwise public.n1 never gets created on n2/n3).
         sub_sql = (
-            f"SELECT spock.create_subscription("
-            f"sub_name := '{sub_name}', "
+            f"SELECT spock.sub_create("
+            f"subscription_name := '{sub_name}', "
             f"provider_dsn := '{n1_dsn}', "
             f"replication_sets := ARRAY['default'], "
+            f"synchronize_structure := true, "
             f"synchronize_data := true);"
         )
         exit_code, output = container.exec_run(
@@ -615,11 +659,21 @@ def test_ace_functional_create_divergence(container_name, container_type):
 
     time.sleep(2)
 
+    # Spock replicates row data but not the sequence, so subscribers' n1_id_seq
+    # is still at 1 while ids 1-10 already exist — a local SERIAL insert would
+    # collide on the PK. Advance the sequence past the current max id before each
+    # node's divergent insert.
+    advance_seq = (
+        "SELECT setval(pg_get_serial_sequence('public.n1','id'), "
+        "(SELECT COALESCE(MAX(id), 1) FROM public.n1)); "
+    )
+
     # Insert 5 unique rows on n2 (these will NOT replicate to n1/n3)
     print(f"\n▶️  Inserting 5 divergent rows on n2")
     exit_code, output = container.exec_run(
         ["psql", "-h", "localhost", "-p", str(ace_base_port + 1), "-U", pguser,
          "-d", "postgres", "-c",
+         advance_seq +
          "INSERT INTO public.n1 (data) "
          "SELECT 'n2_divergent_' || g FROM generate_series(1, 5) g;"],
         user="root"
@@ -632,6 +686,7 @@ def test_ace_functional_create_divergence(container_name, container_type):
     exit_code, output = container.exec_run(
         ["psql", "-h", "localhost", "-p", str(ace_base_port + 2), "-U", pguser,
          "-d", "postgres", "-c",
+         advance_seq +
          "INSERT INTO public.n1 (data) "
          "SELECT 'n3_divergent_' || g FROM generate_series(1, 5) g;"],
         user="root"
@@ -644,6 +699,7 @@ def test_ace_functional_create_divergence(container_name, container_type):
     exit_code, output = container.exec_run(
         ["psql", "-h", "localhost", "-p", str(ace_base_port), "-U", pguser,
          "-d", "postgres", "-c",
+         advance_seq +
          "INSERT INTO public.n1 (data) "
          "SELECT 'n1_load_' || g FROM generate_series(1, 100) g;"],
         user="root"

@@ -617,10 +617,6 @@
 /usr/pgadmin4/bin/resources/app/node_modules/ansi-styles/package.json
 /usr/pgadmin4/bin/resources/app/node_modules/ansi-styles/readme.md
 /usr/pgadmin4/bin/resources/app/node_modules/async-function
-/usr/pgadmin4/bin/resources/app/node_modules/async-function/.eslintrc
-/usr/pgadmin4/bin/resources/app/node_modules/async-function/.github
-/usr/pgadmin4/bin/resources/app/node_modules/async-function/.github/FUNDING.yml
-/usr/pgadmin4/bin/resources/app/node_modules/async-function/.nycrc
 /usr/pgadmin4/bin/resources/app/node_modules/async-function/CHANGELOG.md
 /usr/pgadmin4/bin/resources/app/node_modules/async-function/LICENSE
 /usr/pgadmin4/bin/resources/app/node_modules/async-function/README.md
@@ -1337,7 +1333,6 @@
 /usr/pgadmin4/bin/resources/app/node_modules/path-exists/readme.md
 /usr/pgadmin4/bin/resources/app/node_modules/proxy-from-env
 /usr/pgadmin4/bin/resources/app/node_modules/proxy-from-env/.eslintrc
-/usr/pgadmin4/bin/resources/app/node_modules/proxy-from-env/.travis.yml
 /usr/pgadmin4/bin/resources/app/node_modules/proxy-from-env/LICENSE
 /usr/pgadmin4/bin/resources/app/node_modules/proxy-from-env/README.md
 /usr/pgadmin4/bin/resources/app/node_modules/proxy-from-env/index.js

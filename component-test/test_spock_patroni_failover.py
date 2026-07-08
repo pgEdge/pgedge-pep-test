@@ -133,6 +133,24 @@ def _exec(container, cmd, user="root", check=True, msg=""):
     return exit_code, out
 
 
+def _copy_file_to_container(container, local_path, remote_path, msg=""):
+    """Copy a local file into the target.
+
+    On AWS (SSHExecutor) large files must go over SFTP — inlining them as a
+    `cat > ... << heredoc` command through paramiko's exec_command sends the
+    whole file as one SSH request and resets the connection (EOFError). For
+    Docker containers the heredoc is fine.
+    """
+    from aspects.ssh_executor import SSHExecutor as _SSHExecutor
+    if isinstance(container, _SSHExecutor):
+        container.put_file(str(local_path), remote_path)
+        return
+    with open(local_path, "r") as fh:
+        content = fh.read()
+    _exec(container, f"cat > {remote_path} << 'PEPCOPYEOF'\n{content}\nPEPCOPYEOF",
+          msg=msg or f"Copy {remote_path}")
+
+
 # ============================================================================
 # STEP 1 – Prerequisites
 # ============================================================================
@@ -291,30 +309,6 @@ def test_initialize_clusters(container_name, container_type):
         print(f"{node_name} started on port {port}")
 
 
-# ============================================================================
-# STEP 5 – Setup Spock on n1 and n2, then cross-wire
-# ============================================================================
-
-@pytest.mark.parametrize("container_name,container_type", all_containers)
-def test_create_spock_extension_on_spock_nodes(container_name, container_type):
-    """Step 5a: Create Spock extension on n1 and n2"""
-    container_name = container_name.strip()
-    if not container_name:
-        pytest.skip("Invalid container")
-
-    container = _get_container(container_name)
-    assert container.status == "running"
-
-    config = get_container_config(container_type)
-    pguser = config["pguser"]
-
-    for node_name, port in [("n1", n1_port), ("n2", n2_port)]:
-        print(f"\nCreating Spock extension on {node_name} (port {port})")
-        _exec(container,
-              f'psql -h localhost -p {port} -U {pguser} -d postgres '
-              f'-c "CREATE EXTENSION IF NOT EXISTS spock;" 2>&1',
-              msg=f"CREATE EXTENSION spock on {node_name}")
-        print(f"Spock extension created on {node_name}")
 
 
 # ============================================================================
@@ -331,7 +325,17 @@ def test_configure_etcd(container_name, container_type):
     container = _get_container(container_name)
     assert container.status == "running"
 
-    etcd_conf = """\
+    # RHEL uses etcd.yml (YAML format); DEB uses etcd.conf (systemd
+    # EnvironmentFile / ETCD_* key=value format) — different file AND format.
+    if container_type == "deb":
+        etcd_conf = """\
+ETCD_NAME="default"
+ETCD_DATA_DIR="/var/lib/etcd/default.etcd"
+ETCD_LISTEN_CLIENT_URLS="http://localhost:2379"
+ETCD_ADVERTISE_CLIENT_URLS="http://localhost:2379"
+"""
+    else:  # rhel
+        etcd_conf = """\
 name: "default"
 data-dir: "/var/lib/etcd/default.etcd"
 listen-peer-urls: "http://localhost:2380"
@@ -345,7 +349,6 @@ initial-cluster-state: "new"
     _exec(container, "mkdir -p /etc/etcd", msg="mkdir /etc/etcd")
     _exec(container, "mkdir -p /var/lib/etcd && chmod 700 /var/lib/etcd", msg="mkdir /var/lib/etcd")
 
-    # RHEL uses etcd.yml; DEB uses etcd.conf — same content, different filename
     etcd_conf_path = "/etc/etcd/etcd.conf" if container_type == "deb" else "/etc/etcd/etcd.yml"
     write_cmd = f"cat > {etcd_conf_path} << 'ETCDEOF'\n{etcd_conf}\nETCDEOF"
     _exec(container, write_cmd, msg=f"Write {etcd_conf_path}")
@@ -748,6 +751,30 @@ def validate_patroni_cluster(container_name, container_type):
     assert "n3" in output and "Replica" in output, \
         f"Expected n3 as Replica in patronictl output:\n{output}"
     print("Patroni cluster validated: n2=Leader, n3=Replica")
+# ============================================================================
+# STEP 5 – Setup Spock on n1 and n2, then cross-wire
+# ============================================================================
+
+@pytest.mark.parametrize("container_name,container_type", all_containers)
+def test_create_spock_extension_on_spock_nodes(container_name, container_type):
+    """Step 5a: Create Spock extension on n1 and n2"""
+    container_name = container_name.strip()
+    if not container_name:
+        pytest.skip("Invalid container")
+
+    container = _get_container(container_name)
+    assert container.status == "running"
+
+    config = get_container_config(container_type)
+    pguser = config["pguser"]
+
+    for node_name, port in [("n1", n1_port), ("n2", n2_port)]:
+        print(f"\nCreating Spock extension on {node_name} (port {port})")
+        _exec(container,
+              f'psql -h localhost -p {port} -U {pguser} -d postgres '
+              f'-c "CREATE EXTENSION IF NOT EXISTS spock;" 2>&1',
+              msg=f"CREATE EXTENSION spock on {node_name}")
+        print(f"Spock extension created on {node_name}")
 
 @pytest.mark.parametrize("container_name,container_type", all_containers)
 def test_cross_wire_n1_n2(container_name, container_type):
@@ -1027,25 +1054,63 @@ def test_promote_n3_to_leader(container_name, container_type):
     container = _get_container(container_name)
     assert container.status == "running"
 
+    config = get_container_config(container_type)
+    pguser = config["pguser"]
+
+    # Patroni copies the spock logical slot onto the n3 standby only on its
+    # periodic HA loop, and only while n3 is still a replica — once n3 is the
+    # leader that sync stops. The manual procedure "wins" this race by accident
+    # (the human spends time answering the switchover prompts, giving Patroni's
+    # loop time to sync the slot). Automation answers instantly, so we must
+    # explicitly wait for the slot to appear on the n3 standby BEFORE switching
+    # over; otherwise n3 gets promoted without the spk_% slot.
+    print(f"\nWaiting for spock slot to sync to the n3 standby (port {n3_port}) before switchover")
+    slot_synced = False
+    for attempt in range(18):  # up to ~90s
+        rc, out = container.exec_run(
+            ["bash", "-c",
+             f"psql -h localhost -p {n3_port} -U {pguser} -d postgres "
+             f"-t -c \"SELECT slot_name FROM pg_replication_slots WHERE slot_name LIKE 'spk_%';\" 2>&1"],
+            user="root"
+        )
+        if rc == 0 and "spk_" in out.decode():
+            slot_synced = True
+            print(f"   spock slot present on n3 standby: {out.decode().strip()}")
+            break
+        print(f"   attempt {attempt + 1}: spock slot not synced to n3 yet")
+        time.sleep(5)
+    if not slot_synced:
+        print("   ⚠️  spock slot not observed on n3 standby before switchover — "
+              "proceeding anyway (post-switchover check will catch it)")
+
     print(f"\nInitiating Patroni switchover: n2 -> n3")
 
-    # --primary for Patroni >= 3.0 (replaces deprecated --master)
+    # Drive the switchover from /tmp using the candidate's config (n3.yml) and
+    # answer the interactive prompts via stdin (rather than --force), mirroring
+    # the working manual procedure.
+    #
+    # Prompt sequence answered below (printf lines):
+    #   Primary [n2]:                        -> n2
+    #   Candidate ['n3'] []:                 -> n3
+    #   When should the switchover ... [now]: -> (empty = now)
+    #   Are you sure you want to switchover? [y/N]: -> y
     switchover_cmd = (
-        f"patronictl -c /etc/patroni/n2.yml switchover {patroni_scope} "
-        f"--primary n2 --candidate n3 --force 2>&1"
+        f"cd /tmp && printf 'n2\\nn3\\n\\ny\\n' | "
+        f"patronictl -c /etc/patroni/n3.yml switchover {patroni_scope} 2>&1"
     )
     rc, out = container.exec_run(["bash", "-c", switchover_cmd], user="root")
     output = out.decode()
     print(f"Switchover output:\n{output}")
 
-    if rc != 0 and "switchover" not in output.lower() and "failover" not in output.lower():
-        failover_cmd = (
-            f"patronictl -c /etc/patroni/n2.yml failover {patroni_scope} "
-            f"--primary n2 --candidate n3 --force 2>&1"
-        )
-        rc, out = container.exec_run(["bash", "-c", failover_cmd], user="root")
-        output = out.decode()
-        print(f"Failover output:\n{output}")
+    # if rc != 0 and "switchover" not in output.lower() and "failover" not in output.lower():
+    #     # Failover prompts only for the candidate then confirmation.
+    #     failover_cmd = (
+    #         f"cd /tmp && printf 'n3\\ny\\n' | "
+    #         f"patronictl -c /etc/patroni/n3.yml failover {patroni_scope} 2>&1"
+    #     )
+    #     rc, out = container.exec_run(["bash", "-c", failover_cmd], user="root")
+    #     output = out.decode()
+    #     print(f"Failover output:\n{output}")
 
     print("Waiting 20s for switchover to complete...")
     time.sleep(20)
@@ -1062,6 +1127,53 @@ def test_promote_n3_to_leader(container_name, container_type):
         f"n3 should be Leader after switchover:\n{list_output}"
 
     print("n3 is now the Patroni leader — failover successful")
+
+
+# ============================================================================
+# STEP 17a – Verify the Spock replication slot exists on the new leader (n3)
+# ============================================================================
+
+@pytest.mark.parametrize("container_name,container_type", all_containers)
+def test_verify_spock_slot_on_new_leader(container_name, container_type):
+    """Step 17a: After promotion, the spock logical replication slot (spk_%) must
+    exist on the new leader n3. It may be inactive (active = f) until n1's
+    subscription is re-pointed to n3 in the next step; we only require presence."""
+    container_name = container_name.strip()
+    if not container_name:
+        pytest.skip("Invalid container")
+
+    container = _get_container(container_name)
+    assert container.status == "running"
+
+    config = get_container_config(container_type)
+    pguser = config["pguser"]
+
+    slot_query = (
+        "SELECT slot_name, active FROM pg_replication_slots "
+        "WHERE slot_name LIKE 'spk_%';"
+    )
+
+    print(f"\nChecking for spock replication slot(s) on new leader n3 (port {n3_port})")
+    output = ""
+    slot_found = False
+    for attempt in range(12):  # up to ~60s for Patroni to sync the slot to n3
+        time.sleep(5)
+        rc, out = container.exec_run(
+            ["bash", "-c",
+             f"psql -h localhost -p {n3_port} -U {pguser} -d postgres "
+             f"-c \"{slot_query}\" 2>&1"],
+            user="root"
+        )
+        output = out.decode()
+        if rc == 0 and "spk_" in output:
+            slot_found = True
+            break
+        print(f"   attempt {attempt + 1}: no spk_ slot yet")
+
+    print(f"\npg_replication_slots (spk_%) on n3:\n{output}")
+    assert slot_found, \
+        f"Expected a 'spk_%' replication slot on the new leader n3:\n{output}"
+    print("Spock replication slot present on new leader n3")
 
 
 # ============================================================================
@@ -1090,8 +1202,9 @@ def test_update_spock_subscription_after_failover(container_name, container_type
               f'psql -h localhost -p {n1_port} -U {pguser} -d postgres -c "{sql}" 2>&1',
               msg=msg)
 
-    # 1. Disable subscription while we update the interface
-    psql_n1(f"SELECT spock.sub_disable('{sub_name}')", f"Disable {sub_name}")
+    # 1. Disable subscription while we update the interface. immediate := true
+    #    stops the apply worker right away so the interface change is clean.
+    psql_n1(f"SELECT spock.sub_disable('{sub_name}', true)", f"Disable {sub_name}")
 
     # 2. Add a new interface pointing to n3's port
     psql_n1(
@@ -1105,24 +1218,33 @@ def test_update_spock_subscription_after_failover(container_name, container_type
         f"Switch {sub_name} to {iface_name}"
     )
 
-    # 4. Re-enable
-    psql_n1(f"SELECT spock.sub_enable('{sub_name}')", f"Re-enable {sub_name}")
+    # 4. Re-enable. immediate := true restarts the apply worker now; without it
+    #    sub_enable defers until the next worker cycle and the subscription stays
+    #    'down' rather than transitioning to 'replicating'.
+    psql_n1(f"SELECT spock.sub_enable('{sub_name}', true)", f"Re-enable {sub_name}")
 
-    print("Waiting 5s for subscription to sync...")
-    time.sleep(5)
+    # 5. Poll sub_show_status() until the subscription reports 'replicating'.
+    #    The apply worker needs a few seconds to reconnect to the promoted n3.
+    print("Waiting for subscription to reach 'replicating'...")
+    output = ""
+    replicating = False
+    for attempt in range(12):  # up to ~60s
+        time.sleep(5)
+        rc, out = container.exec_run(
+            ["bash", "-c",
+             f"psql -h localhost -p {n1_port} -U {pguser} -d postgres "
+             f"-c \"SELECT * FROM spock.sub_show_status();\" 2>&1"],
+            user="root"
+        )
+        output = out.decode()
+        if rc == 0 and "replicating" in output.lower():
+            replicating = True
+            break
+        print(f"   attempt {attempt + 1}: not replicating yet")
 
-    # 5. Verify
-    rc, out = container.exec_run(
-        ["bash", "-c",
-         f"psql -h localhost -p {n1_port} -U {pguser} -d postgres "
-         f"-c \"SELECT * FROM spock.sub_show_status();\" 2>&1"],
-        user="root"
-    )
-    output = out.decode()
     print(f"\nspock.sub_show_status() on n1:\n{output}")
-    assert rc == 0, f"sub_show_status() failed on n1: {output}"
-    assert "replicating" in output.lower(), \
-        f"Expected 'replicating' in sub_show_status() on n1:\n{output}"
+    assert replicating, \
+        f"Expected 'replicating' in sub_show_status() on n1 after redirect:\n{output}"
     print(f"Subscription {sub_name} redirected to n3 (port {n3_port}) and replicating")
 
 
@@ -1212,12 +1334,8 @@ def test_spock_load_test(container_name, container_type):
 
     # ── Load Northwind schema + data on n1 ──
     print(f"\n--- Loading Northwind schema on n1 (port {n1_port}) ---")
-    with open(northwind_sql_path, 'r') as fh:
-        northwind_content = fh.read()
-
-    _exec(container,
-          f"cat > /tmp/northwind.sql << 'NWEOF'\n{northwind_content}\nNWEOF",
-          msg="Copy northwind.sql to container")
+    _copy_file_to_container(container, northwind_sql_path, "/tmp/northwind.sql",
+                            msg="Copy northwind.sql to container")
 
     rc, out = container.exec_run(
         ["bash", "-c",
@@ -1262,12 +1380,8 @@ def test_spock_load_test(container_name, container_type):
 
     # ── Copy spock_load_test.py to the container ──
     print(f"\n--- Copying spock_load_test.py to container ---")
-    with open(load_test_py_path, 'r') as fh:
-        load_test_content = fh.read()
-
-    _exec(container,
-          f"cat > /tmp/spock_load_test.py << 'LTEOF'\n{load_test_content}\nLTEOF",
-          msg="Copy spock_load_test.py to container")
+    _copy_file_to_container(container, load_test_py_path, "/tmp/spock_load_test.py",
+                            msg="Copy spock_load_test.py to container")
     print(f"✅ spock_load_test.py copied to /tmp/spock_load_test.py")
 
     # ── Non-interactive runner: reads config from env vars, calls module functions directly ──
@@ -1391,8 +1505,28 @@ def test_cleanup(container_name, container_type):
     else:
         print(f"WARNING: reset_patroni.sh not found at {reset_script} — skipping")
 
-    # Step 2: stop n1 (managed manually, not by Patroni)
-    pg_server_management.stop_server(container, pgbin, "/tmp/n1", str(n1_port), pguser)
+    # Step 2: reset_patroni.sh can leave Patroni (and thus Postgres) running on
+    # Debian — it stops Postgres via a hardcoded RHEL pg_ctl path and its `set -e`
+    # can abort on the etcd step. So terminate explicitly and in the right order:
+    #
+    #   (a) Kill Patroni FIRST — otherwise it keeps supervising/respawning the
+    #       Postgres it manages (n2/n3). The '[p]atroni' bracket keeps pkill from
+    #       matching its own command line.
+    container.exec_run(["bash", "-c", "pkill -9 -f '[p]atroni' 2>/dev/null; true"], user="root")
+    time.sleep(3)
+
+    #   (b) Stop every node's Postgres with the platform-correct pgbin.
+    for node_name, node_port in [("n1", n1_port), ("n2", n2_port), ("n3", n3_port)]:
+        node_pgdata = f"/tmp/{node_name}"
+        container.exec_run(
+            ["bash", "-c",
+             f"[ -d {node_pgdata} ] && {pgbin}/pg_ctl -D {node_pgdata} -m immediate stop 2>/dev/null; true"],
+            user="root"
+        )
+
+    #   (c) Fallback: force-kill any Postgres still bound to a /tmp/n* data dir.
+    container.exec_run(["bash", "-c", "pkill -9 -f '[p]ostgres -D /tmp/n' 2>/dev/null; true"], user="root")
+    time.sleep(2)
 
     # Step 3: stop etcd service
     container.exec_run(["bash", "-c", "pkill -x etcd 2>/dev/null; systemctl stop etcd 2>/dev/null || true"], user="root")

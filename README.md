@@ -191,7 +191,7 @@ Run without arguments to enter interactive menu mode:
 |--------|-------------|--------|
 | `--pgver` | PostgreSQL versions to test | `16`, `17`, `18`, `all` |
 | `--platforms` | Target platforms | `rpm`, `deb`, `all` |
-| `--components` | Components to test | `server`, `snowflake`, `pgbouncer`, `pgbackrest`, `postgrest`, `lolor`, `postgis`, `system_stats`, `vectorizer`, `zerodowntime`, `mcp`, `rag`, `ace`, `repo_health`, `docloader`, `anonymizer`, `pg_vectorize`, `pg_tokenizer`, `vchord_bm25`, `pgaudit`, `pgadmin4`, `patroni`, `pg_stat_monitor`, `ai_db_workbench`, `radar`, `spock_patroni_failover`, `llvmjit`, `all` |
+| `--components` | Components to test | `server`, `snowflake`, `pgbouncer`, `pgbackrest`, `postgrest`, `lolor`, `postgis`, `system_stats`, `vectorizer`, `zerodowntime`, `mcp`, `rag`, `ace`, `repo_health`, `docloader`, `anonymizer`, `pg_vectorize`, `pg_tokenizer`, `vchord_bm25`, `pgaudit`, `pgadmin4`, `patroni`, `pg_stat_monitor`, `ai_db_workbench`, `radar`, `spock_patroni_failover`, `llvmjit`, `ai_kb`, `all` |
 | `--repo` | Repository to use | `release`, `staging`, `daily` |
 | `--target` | Execution target | `docker` (default), `aws` |
 | `--help`, `-h` | Show help message | - |
@@ -248,6 +248,7 @@ pgedge-pep-test/
 │   ├── test_pep_pgadmin4.py
 │   ├── test_pep_ace.py
 │   ├── test_pep_ai_db_workbench.py
+│   ├── test_pep_ai_kb.py
 │   ├── test_pep_system_stats.py
 │   ├── test_pep_vectorizer.py
 │   ├── test_pep_mcp.py
@@ -342,3 +343,4 @@ pgedge-pep-test/
 | `radar` | Radar monitoring and observability tool |
 | `spock_patroni_failover` | Spock logical replication + Patroni HA failover (n1/n2 Spock cluster with r1 standby) |
 | `llvmjit` | LLVM JIT compilation support for PostgreSQL |
+| `ai_kb` | AI knowledge-base embedding-model packages (gemini, ollama, openai, voyage) |

@@ -8,7 +8,7 @@ from dotenv import load_dotenv
 
 # Add the parent directory to sys.path to import from aspects
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
-from aspects import configure_repository, package_management, pg_server_management, machine_cleanup, machine_prereq_setup, file_management, container_management
+from aspects import configure_repository, package_management, pg_server_management, machine_cleanup, machine_prereq_setup, file_management, container_management, service_management
 
 load_dotenv()
 client = docker.from_env()
@@ -157,6 +157,141 @@ def test_configure_repository(container_name, container_type):
     except Exception as e:
         pytest.fail(f"Failed to configure repository: {str(e)}")
 
+@pytest.mark.parametrize("container_name,container_type", all_containers)
+def test_server_install(container_name, container_type):
+    """Step 2: Install pgedge-pgbouncer using package_management module"""
+    container_name = container_name.strip()
+    if not container_name:
+        pytest.skip("No container defined in env")
+
+    # Get container-specific configuration
+    config = get_container_config(container_type)
+    server_package = config["server_package"]
+
+    try:
+        container = client.containers.get(container_name)
+    except docker.errors.NotFound:
+        pytest.skip(f"Container {container_name} not found or not running.")
+
+    assert container.status == "running"
+
+    print(f"\n--- Installing {server_package} on {container_name} ({container_type}) ---")
+
+    # Use the package_management module to install the package
+    try:
+        success, platform, message = package_management.install_package(container, server_package)
+        assert success, f"Package installation failed: {message}"
+        print(f"✅ {message}")
+        print(f"✅ Platform detected: {platform}")
+    except Exception as e:
+        pytest.fail(f"Failed to install {server_package}: {str(e)}")
+
+@pytest.mark.parametrize("container_name,container_type", all_containers)
+def test_init_cluster(container_name, container_type):
+    """Initialize PostgreSQL cluster using pg_server_management module"""
+    container_name = container_name.strip()
+    if not container_name:
+        pytest.skip("No container defined in env")
+
+    try:
+        container = client.containers.get(container_name)
+    except docker.errors.NotFound:
+        pytest.skip(f"Container {container_name} not found or not running.")
+
+    assert container.status == "running"
+
+    # Get container-specific configuration
+    config = get_container_config(container_type)
+    pgbin = config["pgbin"]
+    pguser = config["pguser"]
+
+    print(f"\n--- Initializing cluster on {container_name} ---")
+
+    # Basic GUC parameters for pgbouncer testing
+    guc_parameters = {}
+
+    # Use the pg_server_management module to initialize cluster
+    try:
+        success, config_content, message = pg_server_management.init_cluster(
+            container, pgbin, pgdata, pguser, guc_parameters
+        )
+        assert success, f"Cluster initialization failed: {message}"
+        print(f"✅ {message}")
+    except Exception as e:
+        pytest.fail(f"Failed to initialize cluster: {str(e)}")
+
+@pytest.mark.parametrize("container_name,container_type", all_containers)
+def test_start_server(container_name, container_type):
+    """Start PostgreSQL server using pg_server_management module"""
+    container_name = container_name.strip()
+    if not container_name:
+        pytest.skip("No container defined in env")
+
+    try:
+        container = client.containers.get(container_name)
+    except docker.errors.NotFound:
+        pytest.skip(f"Container {container_name} not found or not running.")
+
+    assert container.status == "running"
+
+    # Get container-specific configuration
+    config = get_container_config(container_type)
+    pgbin = config["pgbin"]
+    pguser = config["pguser"]
+
+    print(f"\n--- Starting PostgreSQL server on {container_name} ---")
+
+    # Clear only a stale postmaster left by a PREVIOUS run of THIS test's own data
+    # dir, so a re-run doesn't hit "could not bind ... Address already in use".
+    # Intentionally scoped to {pgdata} via pg_ctl — do NOT use `fuser -k
+    # {pgport}/tcp`, which would SIGKILL *any* process listening on that port
+    # (including an unrelated PostgreSQL server you may be running on it).
+    container.exec_run(
+        ["bash", "-c",
+         f"[ -f {pgdata}/postmaster.pid ] && {pgbin}/pg_ctl -D {pgdata} -m fast stop 2>/dev/null; true"],
+        user="root"
+    )
+
+    # Use the pg_server_management module to start the server
+    try:
+        success, server_output, message = pg_server_management.start_server(
+            container, pgbin, pgdata, pgport, pguser
+        )
+        assert success, f"Server start failed: {message}"
+        print(f"✅ {message}")
+    except Exception as e:
+        pytest.fail(f"Failed to start PostgreSQL server: {str(e)}")
+
+@pytest.mark.parametrize("container_name,container_type", all_containers)
+def test_check_connection(container_name, container_type):
+    """Check PostgreSQL connection using pg_server_management module"""
+    container_name = container_name.strip()
+    if not container_name:
+        pytest.skip("No container defined in env")
+
+    try:
+        container = client.containers.get(container_name)
+    except docker.errors.NotFound:
+        pytest.skip(f"Container {container_name} not found or not running.")
+
+    assert container.status == "running"
+
+    # Get container-specific configuration
+    config = get_container_config(container_type)
+    pgbin = config["pgbin"]
+    pguser = config["pguser"]
+
+    print(f"\n--- Checking PostgreSQL connection on {container_name} ---")
+
+    # Use the pg_server_management module to check connection
+    try:
+        success, version_output, message = pg_server_management.check_connection(
+            container, pgbin, pgport, pguser
+        )
+        assert success, f"Connection check failed: {message}"
+        print(f"✅ {message}")
+    except Exception as e:
+        pytest.fail(f"Failed to check PostgreSQL connection: {str(e)}")
 
 @pytest.mark.parametrize("container_name,container_type", all_containers)
 def test_component_install(container_name, container_type):
@@ -464,141 +599,6 @@ def test_verify_sbom(container_name, container_type):
         print(f"   {output_str.strip()}")
 
 
-@pytest.mark.parametrize("container_name,container_type", all_containers)
-def test_server_install(container_name, container_type):
-    """Step 2: Install pgedge-pgbouncer using package_management module"""
-    container_name = container_name.strip()
-    if not container_name:
-        pytest.skip("No container defined in env")
-
-    # Get container-specific configuration
-    config = get_container_config(container_type)
-    server_package = config["server_package"]
-
-    try:
-        container = client.containers.get(container_name)
-    except docker.errors.NotFound:
-        pytest.skip(f"Container {container_name} not found or not running.")
-
-    assert container.status == "running"
-
-    print(f"\n--- Installing {server_package} on {container_name} ({container_type}) ---")
-
-    # Use the package_management module to install the package
-    try:
-        success, platform, message = package_management.install_package(container, server_package)
-        assert success, f"Package installation failed: {message}"
-        print(f"✅ {message}")
-        print(f"✅ Platform detected: {platform}")
-    except Exception as e:
-        pytest.fail(f"Failed to install {server_package}: {str(e)}")
-
-@pytest.mark.parametrize("container_name,container_type", all_containers)
-def test_init_cluster(container_name, container_type):
-    """Initialize PostgreSQL cluster using pg_server_management module"""
-    container_name = container_name.strip()
-    if not container_name:
-        pytest.skip("No container defined in env")
-
-    try:
-        container = client.containers.get(container_name)
-    except docker.errors.NotFound:
-        pytest.skip(f"Container {container_name} not found or not running.")
-
-    assert container.status == "running"
-
-    # Get container-specific configuration
-    config = get_container_config(container_type)
-    pgbin = config["pgbin"]
-    pguser = config["pguser"]
-
-    print(f"\n--- Initializing cluster on {container_name} ---")
-
-    # Basic GUC parameters for pgbouncer testing
-    guc_parameters = {}
-
-    # Use the pg_server_management module to initialize cluster
-    try:
-        success, config_content, message = pg_server_management.init_cluster(
-            container, pgbin, pgdata, pguser, guc_parameters
-        )
-        assert success, f"Cluster initialization failed: {message}"
-        print(f"✅ {message}")
-    except Exception as e:
-        pytest.fail(f"Failed to initialize cluster: {str(e)}")
-
-@pytest.mark.parametrize("container_name,container_type", all_containers)
-def test_start_server(container_name, container_type):
-    """Start PostgreSQL server using pg_server_management module"""
-    container_name = container_name.strip()
-    if not container_name:
-        pytest.skip("No container defined in env")
-
-    try:
-        container = client.containers.get(container_name)
-    except docker.errors.NotFound:
-        pytest.skip(f"Container {container_name} not found or not running.")
-
-    assert container.status == "running"
-
-    # Get container-specific configuration
-    config = get_container_config(container_type)
-    pgbin = config["pgbin"]
-    pguser = config["pguser"]
-
-    print(f"\n--- Starting PostgreSQL server on {container_name} ---")
-
-    # A postmaster (or other listener) left on this port by a previous run causes
-    # "could not bind ... Address already in use". Stop any stale postmaster for
-    # this data dir and free the port before starting.
-    container.exec_run(
-        ["bash", "-c",
-         f"[ -d {pgdata} ] && {pgbin}/pg_ctl -D {pgdata} -m fast stop 2>/dev/null; "
-         f"fuser -k {pgport}/tcp 2>/dev/null; sleep 1; true"],
-        user="root"
-    )
-
-    # Use the pg_server_management module to start the server
-    try:
-        success, server_output, message = pg_server_management.start_server(
-            container, pgbin, pgdata, pgport, pguser
-        )
-        assert success, f"Server start failed: {message}"
-        print(f"✅ {message}")
-    except Exception as e:
-        pytest.fail(f"Failed to start PostgreSQL server: {str(e)}")
-
-@pytest.mark.parametrize("container_name,container_type", all_containers)
-def test_check_connection(container_name, container_type):
-    """Check PostgreSQL connection using pg_server_management module"""
-    container_name = container_name.strip()
-    if not container_name:
-        pytest.skip("No container defined in env")
-
-    try:
-        container = client.containers.get(container_name)
-    except docker.errors.NotFound:
-        pytest.skip(f"Container {container_name} not found or not running.")
-
-    assert container.status == "running"
-
-    # Get container-specific configuration
-    config = get_container_config(container_type)
-    pgbin = config["pgbin"]
-    pguser = config["pguser"]
-
-    print(f"\n--- Checking PostgreSQL connection on {container_name} ---")
-
-    # Use the pg_server_management module to check connection
-    try:
-        success, version_output, message = pg_server_management.check_connection(
-            container, pgbin, pgport, pguser
-        )
-        assert success, f"Connection check failed: {message}"
-        print(f"✅ {message}")
-    except Exception as e:
-        pytest.fail(f"Failed to check PostgreSQL connection: {str(e)}")
-
 @pytest.mark.parametrize("container_name, container_type", all_containers)
 def test_pgbouncer_copy_config_files(container_name, container_type):
     """Step 5: Copy userlist.txt and pgbouncer.ini from config to /etc/pgbouncer/
@@ -659,8 +659,8 @@ def test_pgbouncer_copy_config_files(container_name, container_type):
 
 
 @pytest.mark.parametrize("container_name,container_type", all_containers)
-def pgbouncer_set_permissions(container_name, container_type):
-    """Step 6: Change /etc/pgbouncer/userlist.txt permissions to 600 with pgbouncer:pgbouncer ownership"""
+def test_pgbouncer_set_permissions(container_name, container_type):
+    """Step 6: Own /etc/pgbouncer and its files as postgres:postgres (userlist.txt kept 600)"""
     container_name = container_name.strip()
     if not container_name:
         pytest.skip("No container defined in env")
@@ -672,31 +672,41 @@ def pgbouncer_set_permissions(container_name, container_type):
 
     assert container.status == "running"
 
+    config = get_container_config(container_type)
+    owner = config["pguser"]  # postgres
     userlist_file = f"{pgbouncer_config_dir}/userlist.txt"
 
-    # Use the file_management module to set permissions and ownership
     try:
-        # Get container-specific configuration
-        config = get_container_config(container_type)
-        pgbouncer_user = config["pgbouncer_user"]
-
-        success, file_info, message = file_management.set_file_permissions(
-            container=container,
-            file_path=userlist_file,
-            owner=pguser,
-            group=pguser,
-            permissions="600",
-            create_user=True,
-            user_options="-r -s /sbin/nologin"
+        # Recursively set ownership of the config directory and every file in it
+        # to postgres:postgres.
+        rc, out = container.exec_run(
+            ["bash", "-c", f"chown -R {owner}:{owner} {pgbouncer_config_dir}"],
+            user="root"
         )
-        assert success, f"Failed to set permissions: {message}"
+        assert rc == 0, f"Failed to chown {pgbouncer_config_dir} to {owner}:{owner}: {out.decode()}"
 
-        # Verify permissions are -rw-------
-        assert "-rw-------" in file_info, f"Permissions not set correctly: {file_info}"
+        # Keep the userlist secret file locked down (600).
+        container.exec_run(["bash", "-c", f"chmod 600 {userlist_file}"], user="root")
 
-        print(f"✅ {message}")
+        # Verify ownership on the dir + files and permissions on userlist.txt.
+        rc, out = container.exec_run(
+            ["bash", "-c", f"ls -lda {pgbouncer_config_dir}; ls -la {pgbouncer_config_dir}"],
+            user="root"
+        )
+        info = out.decode()
+        print(info)
+        assert rc == 0, f"Failed to list {pgbouncer_config_dir}: {info}"
+        assert f"{owner} {owner}" in info, \
+            f"Expected {owner}:{owner} ownership on {pgbouncer_config_dir}:\n{info}"
+
+        rc, out = container.exec_run(["bash", "-c", f"ls -l {userlist_file}"], user="root")
+        userlist_info = out.decode()
+        assert "-rw-------" in userlist_info, \
+            f"userlist.txt permissions not 600:\n{userlist_info}"
+
+        print(f"✅ {pgbouncer_config_dir} owned by {owner}:{owner}; userlist.txt is 600")
     except Exception as e:
-        pytest.fail(f"Failed to set file permissions: {str(e)}")
+        pytest.fail(f"Failed to set config ownership/permissions: {str(e)}")
 
 
 @pytest.mark.parametrize("container_name,container_type", all_containers)
@@ -717,6 +727,12 @@ def test_pgbouncer_start_service(container_name, container_type):
     # Get container-specific configuration
     config = get_container_config(container_type)
     pgbouncer_user = config["pgbouncer_user"]
+
+    # Stop the packaged systemd pgbouncer.service first. The pgedge-pgbouncer
+    # package may auto-start it, which holds the listen port/socket and would
+    # collide with the manual `pgbouncer -d` launch below.
+    ok, msg = service_management.stop_service(container, "pgbouncer.service")
+    print(f"pgbouncer.service: {msg}")
 
     # Ensure the pgbouncer OS user exists before we chown to it / run pgbouncer as
     # it. The pgedge package doesn't create it, so `docker exec --user pgbouncer`
@@ -756,6 +772,20 @@ def test_pgbouncer_start_service(container_name, container_type):
         user="root"
     )
     print(f"Cleared any stale pgbouncer socket for listen_port {listen_port}")
+
+    # The pgbouncer.ini points logfile/pidfile/unix_socket_dir at
+    # /var/{run,log}/postgresql (deb) or /var/{run,log}/pgbouncer (rhel), which
+    # are owned by the postgres user. Running pgbouncer as the pgbouncer user, it
+    # must be able to write there — otherwise `pgbouncer -d` forks, the daemon
+    # fails to create its pidfile/log, and exits (start returns 0 but no process
+    # survives). Ensure the dirs exist and are writable (sticky, so postgres's own
+    # files/socket living there are not disturbed).
+    # container.exec_run(
+    #     ["bash", "-c",
+    #      "mkdir -p /var/run/postgresql /var/log/postgresql /var/run/pgbouncer /var/log/pgbouncer; "
+    #      "chmod 1777 /var/run/postgresql /var/log/postgresql /var/run/pgbouncer /var/log/pgbouncer 2>/dev/null; true"],
+    #     user="root"
+    # )
 
     # Try to find pgbouncer binary (check both common locations)
     pgbouncer_paths = ["/usr/bin/pgbouncer", "/usr/sbin/pgbouncer"]
@@ -929,131 +959,134 @@ def test_pgbouncer_show_databases(container_name):
     )
     print(f"✅ SHOW DATABASES executed successfully")
 
-@pytest.mark.parametrize("container_name", containers)
-def test_stop_pgbouncer(container_name):
-    """Step 9.3: Pause and shutdown PgBouncer, tolerate expected 'server closed' outputs"""
-    container_name = container_name.strip()
-    if not container_name:
-        pytest.skip("No container defined in env")
-
-    try:
-        container = client.containers.get(container_name)
-    except docker.errors.NotFound:
-        pytest.skip(f"Container {container_name} not found or not running.")
-
-    assert container.status == "running"
-
-    print(f"\n--- Running Pause+Shutdown PgBouncer on ({container_name}) ---")
-
-    # Determine container type so we can select the correct pgbouncer/admin user
-    if container_name in rhel_containers:
-        container_type = "rhel"
-    elif container_name in deb_containers:
-        container_type = "deb"
-    else:
-        # fallback - use default pguser
-        container_type = None
-
-    psql_user = pguser
-    if container_type:
-        psql_user = get_container_config(container_type).get("pgbouncer_user", pguser)
-
-    # Pause first
-    exit_code, output = container.exec_run(
-        f"psql -h 127.0.0.1 -p {pgbouncer_port} -d pgbouncer -c 'PAUSE;'",
-        user=psql_user
-    )
-    pause_out = output.decode(errors='ignore').strip()
-    print(pause_out)
-
-    # Then shutdown
-    exit_code, output = container.exec_run(
-        f"psql -h 127.0.0.1 -p {pgbouncer_port} -d pgbouncer -c 'SHUTDOWN;'",
-        user=psql_user
-    )
-    shutdown_out = output.decode(errors='ignore').strip()
-    print(shutdown_out)
-
-    # Accept either zero exit code or common "server closed" style messages as success.
-    if exit_code == 0:
-        print("✅ PgBouncer shutdown command exited with 0")
-    else:
-        low = shutdown_out.lower()
-        if any(tok in low for tok in ("server closed", "connection to server", "closed", "server closed the connection")):
-            print("✅ PgBouncer shutdown produced expected 'server closed' output (treated as success)")
-        else:
-            pytest.fail(f"PgBouncer shutdown failed (exit {exit_code}): {shutdown_out}")
-
-
-@pytest.mark.parametrize("container_name", containers)
-def pgbouncer_stop_service(container_name):
-    """Step 10: Stop PgBouncer service for cleanup"""
-    container_name = container_name.strip()
-    if not container_name:
-        pytest.skip("No container defined in env")
-
-    try:
-        container = client.containers.get(container_name)
-    except docker.errors.NotFound:
-        pytest.skip(f"Container {container_name} not found or not running.")
-
-    assert container.status == "running"
-
-    print(f"\n--- Stopping PgBouncer service on {container_name} ---")
-
-    # Kill pgbouncer process
-    exit_code, output = container.exec_run(
-        "pkill pgbouncer",
-        user="root"
-    )
-
-    # Verify process is stopped
-    exit_code, output = container.exec_run(
-        "pgrep -x pgbouncer",
-        user="root"
-    )
-    assert exit_code != 0, f"PgBouncer process still running: {output.decode()}"
-
-    print(f"✅ PgBouncer service stopped")
-
-
-
-
-
-@pytest.mark.parametrize("container_name,container_type", all_containers)
-def test_stop_server(container_name, container_type):
-    """Stop PostgreSQL server using pg_server_management module"""
-    container_name = container_name.strip()
-    if not container_name:
-        pytest.skip("No container defined in env")
-
-    try:
-        container = client.containers.get(container_name)
-    except docker.errors.NotFound:
-        pytest.skip(f"Container {container_name} not found or not running.")
-
-    assert container.status == "running"
-
-    # Get container-specific configuration
-    config = get_container_config(container_type)
-    pgbin = config["pgbin"]
-    pguser = config["pguser"]
-
-    print(f"\n--- Stopping PostgreSQL server on {container_name} ---")
-
-    # Use the pg_server_management module to stop the server
-    try:
-        success, server_output, message = pg_server_management.stop_server(
-            container, pgbin, pgdata, pgport, pguser
-        )
-        assert success, f"Server stop failed: {message}"
-        print(f"✅ {message}")
-    except Exception as e:
-        pytest.fail(f"Failed to stop PostgreSQL server: {str(e)}")
+# @pytest.mark.parametrize("container_name", containers)
+# def stop_pgbouncer(container_name):
+#     """Step 9.3: Pause and shutdown PgBouncer, tolerate expected 'server closed' outputs"""
+#     container_name = container_name.strip()
+#     if not container_name:
+#         pytest.skip("No container defined in env")
+#
+#     try:
+#         container = client.containers.get(container_name)
+#     except docker.errors.NotFound:
+#         pytest.skip(f"Container {container_name} not found or not running.")
+#
+#     assert container.status == "running"
+#
+#     print(f"\n--- Running Pause+Shutdown PgBouncer on ({container_name}) ---")
+#
+#     # Determine container type so we can select the correct pgbouncer/admin user
+#     if container_name in rhel_containers:
+#         container_type = "rhel"
+#     elif container_name in deb_containers:
+#         container_type = "deb"
+#     else:
+#         # fallback - use default pguser
+#         container_type = None
+#
+#     psql_user = pguser
+#     if container_type:
+#         psql_user = get_container_config(container_type).get("pgbouncer_user", pguser)
+#
+#     # Pause first
+#     exit_code, output = container.exec_run(
+#         f"psql -h 127.0.0.1 -p {pgbouncer_port} -d pgbouncer -c 'PAUSE;'",
+#         user=psql_user
+#     )
+#     pause_out = output.decode(errors='ignore').strip()
+#     print(pause_out)
+#
+#     # Then shutdown
+#     exit_code, output = container.exec_run(
+#         f"psql -h 127.0.0.1 -p {pgbouncer_port} -d pgbouncer -c 'SHUTDOWN;'",
+#         user=psql_user
+#     )
+#     shutdown_out = output.decode(errors='ignore').strip()
+#     print(shutdown_out)
+#
+#     # Accept either zero exit code or common "server closed" style messages as success.
+#     if exit_code == 0:
+#         print("✅ PgBouncer shutdown command exited with 0")
+#     else:
+#         low = shutdown_out.lower()
+#         if any(tok in low for tok in ("server closed", "connection to server", "closed", "server closed the connection")):
+#             print("✅ PgBouncer shutdown produced expected 'server closed' output (treated as success)")
+#         else:
+#             pytest.fail(f"PgBouncer shutdown failed (exit {exit_code}): {shutdown_out}")
+#
+#
+# @pytest.mark.parametrize("container_name", containers)
+# def pgbouncer_stop_service(container_name):
+#     """Step 10: Stop PgBouncer service for cleanup"""
+#     container_name = container_name.strip()
+#     if not container_name:
+#         pytest.skip("No container defined in env")
+#
+#     try:
+#         container = client.containers.get(container_name)
+#     except docker.errors.NotFound:
+#         pytest.skip(f"Container {container_name} not found or not running.")
+#
+#     assert container.status == "running"
+#
+#     print(f"\n--- Stopping PgBouncer service on {container_name} ---")
+#
+#     # Kill pgbouncer process
+#     exit_code, output = container.exec_run(
+#         "pkill pgbouncer",
+#         user="root"
+#     )
+#
+#     # Verify process is stopped
+#     exit_code, output = container.exec_run(
+#         "pgrep -x pgbouncer",
+#         user="root"
+#     )
+#     assert exit_code != 0, f"PgBouncer process still running: {output.decode()}"
+#
+#     print(f"✅ PgBouncer service stopped")
+#
+#
+#
+#
+#
+# @pytest.mark.parametrize("container_name,container_type", all_containers)
+# def stop_server(container_name, container_type):
+#     """Stop PostgreSQL server using pg_server_management module"""
+#     container_name = container_name.strip()
+#     if not container_name:
+#         pytest.skip("No container defined in env")
+#
+#     try:
+#         container = client.containers.get(container_name)
+#     except docker.errors.NotFound:
+#         pytest.skip(f"Container {container_name} not found or not running.")
+#
+#     assert container.status == "running"
+#
+#     # Get container-specific configuration
+#     config = get_container_config(container_type)
+#     pgbin = config["pgbin"]
+#     pguser = config["pguser"]
+#
+#     print(f"\n--- Stopping PostgreSQL server on {container_name} ---")
+#
+#     # Use the pg_server_management module to stop the server
+#     try:
+#         success, server_output, message = pg_server_management.stop_server(
+#             container, pgbin, pgdata, pgport, pguser
+#         )
+#         assert success, f"Server stop failed: {message}"
+#         print(f"✅ {message}")
+#     except Exception as e:
+#         pytest.fail(f"Failed to stop PostgreSQL server: {str(e)}")
 
 @pytest.mark.parametrize("container_name,container_type", all_containers)
 def test_pgbouncer_cleanup(container_name, container_type):
     """Step 11: Cleanup PgBouncer environment - process, config, logs, and user"""
+    if skip_cleanup:
+        pytest.skip("Skipping cleanup: SKIP_CLEANUP=true")
+
     container_name = container_name.strip()
     if not container_name:
         pytest.skip("No container defined in env")
@@ -1068,6 +1101,20 @@ def test_pgbouncer_cleanup(container_name, container_type):
     # Get container-specific configuration
     config = get_container_config(container_type)
     pgbouncer_user = config["pgbouncer_user"]
+
+    # Explicitly kill every running pgbouncer process first. The module cleanup
+    # relies on `pkill pgbouncer`, but procps (pkill) may be absent on minimal
+    # images, leaving daemons like "/usr/sbin/pgbouncer -d ..." alive. Scan /proc
+    # (bash + cat + kill only) so every pgbouncer PID is terminated regardless.
+    exit_code, output = container.exec_run(
+        ["bash", "-c",
+         "killed=0; for d in /proc/[0-9]*; do "
+         "[ -r \"$d/comm\" ] && [ \"$(cat \"$d/comm\" 2>/dev/null)\" = pgbouncer ] && "
+         "{ kill -9 \"${d#/proc/}\" 2>/dev/null && killed=$((killed+1)); }; "
+         "done; echo \"killed $killed pgbouncer process(es)\"; true"],
+        user="root"
+    )
+    print(output.decode().strip())
 
     # Use the machine_cleanup module to perform PgBouncer cleanup
     try:

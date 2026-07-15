@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 """
 Spock Build Automation Script
-Automates the process of building PostgreSQL (16/17/18) with Spock extension from source.
+Automates the process of building PostgreSQL (15/16/17/18) with Spock extension from source.
 
 Supports both automated download and local source paths.
 Supports building from different branches (main, v5_STABLE, etc.)
-Supports PostgreSQL major versions: 16, 17, 18
+Supports PostgreSQL major versions: 15, 16, 17, 18
 
 Usage:
     # Build PG 17 (default) from main branch
@@ -36,12 +36,13 @@ from typing import List, Tuple, Optional
 class SpockBuilder:
     # Default minor versions for each major PG version
     DEFAULT_PG_VERSIONS = {
+        15: "15.10",
         16: "16.6",
         17: "17.7",
         18: "18.0"
     }
 
-    SUPPORTED_MAJOR_VERSIONS = [16, 17, 18]
+    SUPPORTED_MAJOR_VERSIONS = [15, 16, 17, 18]
 
     def __init__(self, install_dir: str, work_dir: str = None, verbose: bool = False,
                  pg_source_dir: str = None, patches_dir: str = None,
@@ -291,15 +292,8 @@ class SpockBuilder:
             # Remove duplicates and sort
             patches = list(set(patches))
 
-            # Sort patches by numerical prefix
-            def get_patch_number(filename: str) -> int:
-                match = re.search(r'pg17-(\d+)', filename)
-                if match:
-                    return int(match.group(1))
-                match = re.search(r'(\d+)', filename)
-                return int(match.group(1)) if match else 999
-
-            patches.sort(key=get_patch_number)
+            # Sort patches by numerical prefix (handles pg15/16/17/18-NNN)
+            patches.sort(key=self._get_patch_number)
 
             self.log(f"Found {len(patches)} patches from HTML: {patches}")
             return patches
@@ -309,7 +303,7 @@ class SpockBuilder:
             return []
 
     def get_spock_patches_from_api(self) -> List[str]:
-        """Fetch list of patch files from GitHub API for PG 17"""
+        """Fetch list of patch files from GitHub API for the target PG major version"""
         import json
 
         self.log(f"Fetching patch list from GitHub API (branch: {self.build_from})")
@@ -328,15 +322,8 @@ class SpockBuilder:
                     if name.endswith(('.patch', '.diff')):
                         patches.append(name)
 
-            # Sort patches by numerical prefix
-            def get_patch_number(filename: str) -> int:
-                match = re.search(r'pg17-(\d+)', filename)
-                if match:
-                    return int(match.group(1))
-                match = re.search(r'(\d+)', filename)
-                return int(match.group(1)) if match else 999
-
-            patches.sort(key=get_patch_number)
+            # Sort patches by numerical prefix (handles pg15/16/17/18-NNN)
+            patches.sort(key=self._get_patch_number)
 
             self.log(f"Found {len(patches)} patches from API: {patches}")
             return patches
@@ -911,7 +898,7 @@ echo "To start: pg_ctl -D $PGDATA start"
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Build PostgreSQL (16/17/18) with Spock extension and contrib modules from source",
+        description="Build PostgreSQL (15/16/17/18) with Spock extension and contrib modules from source",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
@@ -933,8 +920,9 @@ Examples:
   # Use local sources with contrib
   python build_spock.py --install-dir /opt/pgedge --pg-source /path/to/pg --contrib dblink,hstore --verbose
 
-Supported PostgreSQL major versions: 16, 17, 18
+Supported PostgreSQL major versions: 15, 16, 17, 18
 Default minor versions:
+  PG 15 -> 15.10
   PG 16 -> 16.6
   PG 17 -> 17.7
   PG 18 -> 18.0
@@ -957,7 +945,7 @@ Common contrib modules for Spock:
     parser.add_argument(
         '--pg-version',
         default='17.7',
-        help='PostgreSQL version to build. Can be major only (16, 17, 18) or full (16.6, 17.7, 18.0). Default: 17.7'
+        help='PostgreSQL version to build. Can be major only (15, 16, 17, 18) or full (15.10, 16.6, 17.7, 18.0). Default: 17.7'
     )
 
     parser.add_argument(

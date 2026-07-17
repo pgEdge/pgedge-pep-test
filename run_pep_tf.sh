@@ -262,9 +262,8 @@ else
   echo "27) llvmjit - LLVM JIT tests"
   echo "28) spock - Spock 2-node replication tests (spock50/spock60)"
   echo "29) supautils - Supautils tests"
-  echo "30) all - All tests"
-  echo "28) ai_kb - AI KB tests"
-  echo "29) all - All tests"
+  echo "30) ai_kb - AI KB tests"
+  echo "31) all - All tests"
   echo ""
   echo "💡 You can specify multiple components separated by commas"
   echo "   Example: lolor,postgis,system_stats"
@@ -709,6 +708,7 @@ for fam, name in selected:
               ;;
             supautils)
               run_pytest_with_tracking "component-test/test_pep_supautils.py" "$env" "rpm" "supautils"
+              ;;
             ai_kb)
               run_pytest_with_tracking "component-test/test_pep_ai_kb.py" "$env" "rpm" "ai_kb"
               ;;
@@ -806,6 +806,7 @@ for fam, name in selected:
               ;;
             supautils)
               run_pytest_with_tracking "component-test/test_pep_supautils.py" "$env" "deb" "supautils"
+              ;;
             ai_kb)
               run_pytest_with_tracking "component-test/test_pep_ai_kb.py" "$env" "deb" "ai_kb"
               ;;

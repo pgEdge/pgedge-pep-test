@@ -145,8 +145,8 @@ def test_real_catalog_loads_with_all_aliases():
     """The shipped configuration/containers_list.json must load cleanly
     and expose an alias on every entry."""
     catalog = cr.load_catalog("configuration/containers_list.json")
-    assert len(catalog.entries) == 15, (
-        f"expected 15 catalog entries, got {len(catalog.entries)}"
+    assert len(catalog.entries) == 17, (
+        f"expected 17 catalog entries, got {len(catalog.entries)}"
     )
     for e in catalog.entries:
         assert e.alias, f"{e.name}: alias must be non-empty"
@@ -159,33 +159,35 @@ def test_real_catalog_specific_aliases():
     assert by_name["auto-rocky9-arm"] == "rocky9-arm64"
     assert by_name["auto-debian13-amd"] == "debian13-amd64"
     assert by_name["auto-ubuntu2404-arm"] == "ubuntu2404-arm64"
+    assert by_name["auto-ubuntu2604-arm"] == "ubuntu2604-arm64"
+    assert by_name["auto-ubuntu2604-amd"] == "ubuntu2604-amd64"
 
 
 def test_override_default_path_returns_enabled_subset(tmp_path, capsys):
     p = _minimal_valid_catalog(tmp_path)
     catalog = cr.load_catalog(p)
-    canonical, source = cr._resolve_override_tokens(catalog, None, None)
+    resolved, source = cr._resolve_override_tokens(catalog, None, None)
     assert source == "default"
     # Default path returns [] here; the enabled subset is materialized by callers.
-    assert canonical == []
+    assert resolved == []
 
 
 def test_override_cli_beats_env(tmp_path):
     p = _minimal_valid_catalog(tmp_path)
     catalog = cr.load_catalog(p)
-    canonical, source = cr._resolve_override_tokens(
+    resolved, source = cr._resolve_override_tokens(
         catalog, "rocky9-arm64", "alma9-amd64"
     )
     assert source == "cli"
-    assert canonical == ["auto-rocky9-arm"]
+    assert [e.name for e in resolved] == ["auto-rocky9-arm"]
 
 
 def test_override_env_used_when_cli_absent(tmp_path):
     p = _minimal_valid_catalog(tmp_path)
     catalog = cr.load_catalog(p)
-    canonical, source = cr._resolve_override_tokens(catalog, None, "rocky9-arm64")
+    resolved, source = cr._resolve_override_tokens(catalog, None, "rocky9-arm64")
     assert source == "env"
-    assert canonical == ["auto-rocky9-arm"]
+    assert [e.name for e in resolved] == ["auto-rocky9-arm"]
 
 
 def test_override_cli_whitespace_falls_through_to_env(tmp_path):
@@ -214,10 +216,11 @@ def test_override_unknown_token_fails(tmp_path):
 def test_override_all_token_returns_full_catalog(tmp_path):
     p = _minimal_valid_catalog(tmp_path)
     catalog = cr.load_catalog(p)
-    canonical, source = cr._resolve_override_tokens(catalog, "all", None)
+    resolved, source = cr._resolve_override_tokens(catalog, "all", None)
     assert source == "cli"
     # All 4 entries from the fixture, including the enabled:false ones.
-    assert set(canonical) == {
+    # 'all' is real-catalog-only: no implicit opposite-arch counterparts.
+    assert {e.name for e in resolved} == {
         "auto-rocky9-arm", "auto-alma9-amd",
         "auto-debian12-arm", "auto-debian13-amd",
     }
@@ -233,12 +236,200 @@ def test_override_all_must_be_sole_token(tmp_path):
 def test_override_dedup_alias_and_canonical(tmp_path, capsys):
     p = _minimal_valid_catalog(tmp_path)
     catalog = cr.load_catalog(p)
-    canonical, source = cr._resolve_override_tokens(
+    resolved, source = cr._resolve_override_tokens(
         catalog, "rocky9-arm64, auto-rocky9-arm", None
     )
-    assert canonical == ["auto-rocky9-arm"]
+    assert [e.name for e in resolved] == ["auto-rocky9-arm"]
     err = capsys.readouterr().err
     assert "dedup'd" in err
+
+
+# ---------------------------------------------------------------------------
+# Opposite-arch counterpart synthesis (implicit targets).
+#
+# The minimal fixture has each OS present under exactly one arch:
+#   rocky9   -> only -arm   (rpm)   |  alma9    -> only -amd  (rpm)
+#   debian12 -> only -arm   (deb)   |  debian13 -> only -amd  (deb)
+# so every counterpart below is a genuine lookup miss that must synthesize.
+# ---------------------------------------------------------------------------
+
+def test_resolve_token_returns_real_entry_first(tmp_path):
+    """Real catalog entries always win; synthesis only on a miss."""
+    p = _minimal_valid_catalog(tmp_path)
+    catalog = cr.load_catalog(p)
+    e = cr.resolve_token(catalog, "rocky9-arm64")
+    assert e.name == "auto-rocky9-arm"
+    assert e.enabled is True  # the real entry, not a synthesized (enabled=False) one
+
+
+def test_resolve_token_synthesizes_counterpart_from_alias(tmp_path):
+    p = _minimal_valid_catalog(tmp_path)
+    catalog = cr.load_catalog(p)
+    e = cr.resolve_token(catalog, "rocky9-amd64")  # only rocky9-arm64 is real
+    assert e is not None
+    assert e.name == "auto-rocky9-amd"      # sibling prefix preserved, suffix flipped
+    assert e.alias == "rocky9-amd64"
+    assert e.family == "rpm"                # inherited from sibling
+    assert e.arch == "amd64"
+    assert e.enabled is False               # synthesized entries are not "enabled"
+
+
+def test_resolve_token_synthesizes_counterpart_from_canonical_name(tmp_path):
+    p = _minimal_valid_catalog(tmp_path)
+    catalog = cr.load_catalog(p)
+    e = cr.resolve_token(catalog, "auto-debian12-amd")  # only auto-debian12-arm is real
+    assert e is not None
+    assert e.name == "auto-debian12-amd"
+    assert e.alias == "debian12-amd64"
+    assert e.family == "deb"
+    assert e.arch == "amd64"
+
+
+def test_resolve_token_preserves_nonstandard_prefix(tmp_path):
+    """Prefix (e.g. 'my-') is preserved; only the arch suffix flips."""
+    p = tmp_path / "c.json"
+    p.write_text(json.dumps({
+        "rhel": [{"name": "my-rocky9-amd", "alias": "rocky9-amd64",
+                  "description": "Rocky 9 AMD", "enabled": True}],
+        "deb": [{"name": "auto-debian12-arm", "alias": "debian12-arm64",
+                 "description": "Debian 12 ARM", "enabled": True}],
+    }))
+    catalog = cr.load_catalog(p)
+    e = cr.resolve_token(catalog, "rocky9-arm64")  # counterpart of my-rocky9-amd
+    assert e is not None
+    assert e.name == "my-rocky9-arm"   # 'my-' prefix preserved
+    assert e.alias == "rocky9-arm64"
+    assert e.arch == "arm64"
+
+
+def _mixed_prefix_catalog(tmp_path):
+    """Catalog where rocky9 exists under BOTH arches but with different name
+    prefixes: auto-rocky9-arm (arm64) and my-rocky9-amd (amd64). Exercises the
+    'real entry wins by target identity, not just by input token' rule."""
+    p = tmp_path / "mixed.json"
+    p.write_text(json.dumps({
+        "rhel": [
+            {"name": "auto-rocky9-arm", "alias": "rocky9-arm64",
+             "description": "Rocky 9 ARM", "enabled": True},
+            {"name": "my-rocky9-amd", "alias": "rocky9-amd64",
+             "description": "Rocky 9 AMD", "enabled": False},
+        ],
+        "deb": [
+            {"name": "auto-debian12-arm", "alias": "debian12-arm64",
+             "description": "Debian 12 ARM", "enabled": True},
+        ],
+    }))
+    return p
+
+
+def test_resolve_token_inferred_canonical_returns_real_diff_prefix(tmp_path):
+    """auto-rocky9-amd (inferred canonical) must return the REAL my-rocky9-amd
+    entry — not a synthesized auto-rocky9-amd duplicate — because rocky9-amd64
+    already exists in the catalog under a different prefix."""
+    catalog = cr.load_catalog(_mixed_prefix_catalog(tmp_path))
+    e = cr.resolve_token(catalog, "auto-rocky9-amd")
+    assert e is not None
+    assert e.name == "my-rocky9-amd"   # the real entry, not synthesized auto-*
+    assert e.alias == "rocky9-amd64"
+    assert e.arch == "amd64"
+
+
+def test_resolve_token_inferred_canonical_returns_real_arm_diff_prefix(tmp_path):
+    """my-rocky9-arm (inferred canonical) must return the REAL auto-rocky9-arm
+    entry because rocky9-arm64 already exists under a different prefix."""
+    catalog = cr.load_catalog(_mixed_prefix_catalog(tmp_path))
+    e = cr.resolve_token(catalog, "my-rocky9-arm")
+    assert e is not None
+    assert e.name == "auto-rocky9-arm"  # the real entry, not synthesized my-*
+    assert e.enabled is True            # proves it's the real (enabled) entry
+    assert e.arch == "arm64"
+
+
+def test_override_alias_and_inferred_canonical_dedupe_to_real(tmp_path, capsys):
+    """rocky9-amd64 (alias -> real my-rocky9-amd) and auto-rocky9-amd (inferred
+    canonical, also -> real my-rocky9-amd) collapse to ONE real entry."""
+    catalog = cr.load_catalog(_mixed_prefix_catalog(tmp_path))
+    resolved, source = cr._resolve_override_tokens(
+        catalog, "rocky9-amd64, auto-rocky9-amd", None
+    )
+    assert [e.name for e in resolved] == ["my-rocky9-amd"]  # exactly one, real
+    assert "dedup'd" in capsys.readouterr().err
+
+
+def test_resolve_token_unknown_os_returns_none(tmp_path):
+    """Truly unknown OS/version (absent under both arches) does NOT synthesize."""
+    p = _minimal_valid_catalog(tmp_path)
+    catalog = cr.load_catalog(p)
+    assert cr.resolve_token(catalog, "fedora99-amd64") is None
+    assert cr.resolve_token(catalog, "auto-fedora99-amd") is None
+    assert cr.resolve_token(catalog, "not-arch-suffixed") is None
+
+
+def test_override_accepts_counterpart_alias(tmp_path):
+    p = _minimal_valid_catalog(tmp_path)
+    catalog = cr.load_catalog(p)
+    resolved, source = cr._resolve_override_tokens(catalog, "debian13-arm64", None)
+    assert source == "cli"
+    assert [e.name for e in resolved] == ["auto-debian13-arm"]
+    assert resolved[0].arch == "arm64" and resolved[0].family == "deb"
+
+
+def test_override_unknown_os_still_fails_fast(tmp_path):
+    p = _minimal_valid_catalog(tmp_path)
+    catalog = cr.load_catalog(p)
+    with pytest.raises(cr.ResolverError, match="Unknown container 'fedora99-amd64'"):
+        cr._resolve_override_tokens(catalog, "fedora99-amd64", None)
+
+
+def test_override_dedup_alias_and_canonical_of_synthesized(tmp_path, capsys):
+    """An alias and the canonical form of the SAME synthesized counterpart
+    collapse to a single effective entry."""
+    p = _minimal_valid_catalog(tmp_path)
+    catalog = cr.load_catalog(p)
+    resolved, source = cr._resolve_override_tokens(
+        catalog, "debian12-amd64, auto-debian12-amd", None
+    )
+    assert [e.name for e in resolved] == ["auto-debian12-amd"]  # exactly one
+    assert "dedup'd" in capsys.readouterr().err
+
+
+def test_override_all_excludes_counterparts(tmp_path):
+    """'all' expands to the real catalog only — never implicit counterparts."""
+    p = _minimal_valid_catalog(tmp_path)
+    catalog = cr.load_catalog(p)
+    resolved, _ = cr._resolve_override_tokens(catalog, "all", None)
+    names = {e.name for e in resolved}
+    # None of the synthesizable counterparts appear.
+    for absent in ("auto-rocky9-amd", "auto-alma9-arm",
+                   "auto-debian12-amd", "auto-debian13-arm"):
+        assert absent not in names
+
+
+def test_validate_global_accepts_counterpart_in_scope(tmp_path):
+    p = _minimal_valid_catalog(tmp_path)
+    catalog = cr.load_catalog(p)
+    resolved, source = cr.validate_global(
+        catalog, "debian13-arm64", None,           # synthesized deb/arm64
+        scope_families={"deb"}, scope_arches={"arm64"},
+    )
+    assert source == "cli"
+    assert resolved == ["auto-debian13-arm"]
+
+
+def test_resolve_for_target_filters_synthesized_by_arch(tmp_path):
+    """A synthesized deb/amd64 counterpart is kept for the amd64 target and
+    filtered out of the arm64 target."""
+    p = _minimal_valid_catalog(tmp_path)
+    catalog = cr.load_catalog(p)
+    # debian12-amd64 is synthesized (only debian12-arm64 is real).
+    eff_amd, oos_amd, _ = cr.resolve_for_target(
+        catalog, "debian12-amd64", None, target_family="deb", target_arch="amd64"
+    )
+    assert eff_amd == ["auto-debian12-amd"] and oos_amd == []
+    eff_arm, oos_arm, _ = cr.resolve_for_target(
+        catalog, "debian12-amd64", None, target_family="deb", target_arch="arm64"
+    )
+    assert eff_arm == [] and oos_arm == ["auto-debian12-amd"]
 
 
 def test_validate_global_default_path_returns_enabled_subset(tmp_path):
@@ -415,9 +606,9 @@ def _run_cli(*args, env_extra=None, cwd=None):
 def test_cli_list_containers_against_real_catalog():
     cp = _run_cli("list-containers")
     assert cp.returncode == 0
-    # Real catalog has 15 entries
+    # Real catalog has 17 entries
     body_lines = [l for l in cp.stdout.splitlines() if l and "ALIAS" not in l]
-    assert len(body_lines) == 15
+    assert len(body_lines) == 17
 
 
 def test_cli_validate_global_default_emits_no_override_chatter():

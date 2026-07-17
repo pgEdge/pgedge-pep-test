@@ -67,12 +67,14 @@ def get_container_config(container_type):
             "pgbin": rhel_pgbin.rstrip('/'),
             "pguser": rhel_pguser,
             "pgaudit_package": rhel_pgaudit_package,
+            "lib_path": f"{rhel_pg_path}/lib/pgaudit.so",
         }
     else:  # deb
         return {
             "pgbin": deb_pgbin.rstrip('/'),
             "pguser": deb_pguser,
             "pgaudit_package": deb_pgaudit_package,
+            "lib_path": f"{deb_pg_path}/lib/pgaudit.so",
         }
 
 
@@ -342,6 +344,47 @@ def test_verify_sbom(container_name, container_type):
             f"Expected '1 good signature.' or '1 authenticated signature.' not found in output:\n{output_str}"
         print(f"✅ SBOM signature verified on {container_name} (Deb)")
         print(f"   {output_str.strip()}")
+
+
+@pytest.mark.parametrize("container_name,container_type", all_containers)
+def test_lib_stripped(container_name, container_type):
+    """Verify that the pgaudit shared library is a stripped ELF binary.
+
+    pgaudit ships no standalone binary — only pgaudit.so:
+      RHEL: /usr/pgsql-<pg>/lib/pgaudit.so
+      Deb:  /usr/lib/postgresql/<pg>/lib/pgaudit.so
+    Runs 'file <lib>' and asserts the output contains 'stripped'.
+    """
+    container_name = container_name.strip()
+    if not container_name:
+        pytest.skip("No container defined in env")
+
+    try:
+        container = client.containers.get(container_name)
+    except docker.errors.NotFound:
+        pytest.skip(f"Container {container_name} not found or not running.")
+
+    assert container.status == "running"
+
+    config = get_container_config(container_type)
+    lib_path = config["lib_path"]
+
+    print(f"\n--- Checking ELF strip status of {lib_path} on {container_name} ({container_type}) ---")
+
+    exit_code, output = container.exec_run(
+        ["bash", "-c", f"file {lib_path} 2>&1"],
+        user="root",
+    )
+    assert exit_code == 0, f"'file {lib_path}' failed: {output.decode().strip()}"
+
+    file_output = output.decode().strip()
+    print(f"   Output: {file_output}")
+
+    assert "stripped" in file_output.lower(), (
+        f"Library {lib_path} does not appear to be stripped.\n"
+        f"'file' output: {file_output}"
+    )
+    print(f"✅ {lib_path} is stripped")
 
 
 @pytest.mark.parametrize("container_name,container_type", all_containers)

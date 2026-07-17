@@ -52,6 +52,7 @@ deb_pguser = os.getenv("DEB_PG_USER", "postgres")
 rhel_pgbin = os.getenv("PG_BIN_PATH", f"/usr/pgsql-{pg_major_version}/bin")
 rhel_pg_path = os.getenv("RHEL_PG_PATH", f"/usr/pgsql-{pg_major_version}")
 rhel_radar_package = os.getenv("RADAR_PACKAGE", "pgedge-radar")
+rhel_server_package = os.getenv("SERVER_PACKAGE", f"pgedge-postgresql{pg_major_version}-server")
 rhel_bundled_files = os.getenv("RADAR_BUNDLED_FILES", "").split(",")
 
 # Debian-specific configuration
@@ -59,6 +60,7 @@ deb_pgbin = os.getenv("DEB_PG_BIN_PATH", f"/usr/lib/postgresql/{pg_major_version
 deb_pg_path = os.getenv("DEB_PG_PATH", f"/usr/lib/postgresql/{pg_major_version}")
 deb_pg_share_path = os.getenv("DEB_PG_SHARE_PATH", f"/usr/share/postgresql/{pg_major_version}")
 deb_radar_package = os.getenv("DEB_RADAR_PACKAGE", "pgedge-radar")
+deb_server_package = os.getenv("DEB_SERVER_PACKAGE", f"pgedge-postgresql-{pg_major_version}")
 deb_bundled_files = os.getenv("DEB_RADAR_BUNDLED_FILES", "").split(",")
 
 # Additional configuration for component tests
@@ -77,12 +79,14 @@ def get_container_config(container_type):
             "pgbin": rhel_pgbin.rstrip('/'),
             "pguser": rhel_pguser,
             "radar_package": rhel_radar_package,
+            "server_package": rhel_server_package,
         }
     else:  # deb
         return {
             "pgbin": deb_pgbin.rstrip('/'),
             "pguser": deb_pguser,
             "radar_package": deb_radar_package,
+            "server_package": deb_server_package,
         }
 
 
@@ -341,6 +345,41 @@ def test_verify_sbom(container_name, container_type):
 
 
 @pytest.mark.parametrize("container_name,container_type", all_containers)
+def test_server_install(container_name, container_type):
+    """Install the PostgreSQL server before cluster init.
+
+    pgedge-radar does not pull in PostgreSQL, so without this the postgres OS
+    user and initdb/psql binaries are missing and test_init_cluster fails with
+    "sudo: user 'postgres' not found".
+    """
+    container_name = container_name.strip()
+    if not container_name:
+        pytest.skip("No container defined in env")
+
+    config = get_container_config(container_type)
+    server_package = config["server_package"]
+
+    try:
+        container = client.containers.get(container_name)
+    except docker.errors.NotFound:
+        pytest.skip(f"Container {container_name} not found or not running.")
+
+    assert container.status == "running"
+
+    print(f"\n--- Installing {server_package} on {container_name} ({container_type}) ---")
+
+    try:
+        success, platform, message = package_management.install_package(
+            container, server_package, pg_major_version=pg_major_version, install_pg_server=True
+        )
+        assert success, f"Server package installation failed: {message}"
+        print(f"✅ {message}")
+        print(f"✅ Platform detected: {platform}")
+    except Exception as e:
+        pytest.fail(f"Failed to install {server_package}: {str(e)}")
+
+
+@pytest.mark.parametrize("container_name,container_type", all_containers)
 def test_init_cluster(container_name, container_type):
     """Initialize PostgreSQL cluster using pg_server_management module"""
     container_name = container_name.strip()
@@ -523,7 +562,12 @@ def test_verify_license_file(container_name, container_type):
 
     config = get_container_config(container_type)
     radar_package = config["radar_package"]
-    license_path = f"/usr/share/licenses/{radar_package}/LICENCE.md"
+    # RHEL ships the license under /usr/share/licenses/<pkg>/; Debian ships it
+    # under /usr/share/doc/<pkg>/.
+    if container_type == "rhel":
+        license_path = f"/usr/share/licenses/{radar_package}/LICENCE.md"
+    else:  # deb
+        license_path = f"/usr/share/doc/{radar_package}/LICENCE.md"
 
     print(f"\n--- Verifying LICENSE file on {container_name} ({container_type}) ---")
 
@@ -551,9 +595,13 @@ def test_verify_readme_file(container_name, container_type):
 
     config = get_container_config(container_type)
     radar_package = config["radar_package"]
-    readme_path = f"/usr/share/doc/{radar_package}/README.md"
+    # RHEL ships README.md uncompressed; Debian ships it gzipped as README.md.gz.
+    if container_type == "rhel":
+        readme_path = f"/usr/share/doc/{radar_package}/README.md"
+    else:  # deb
+        readme_path = f"/usr/share/doc/{radar_package}/README.md.gz"
 
-    print(f"\n--- Verifying README.md file on {container_name} ({container_type}) ---")
+    print(f"\n--- Verifying README file on {container_name} ({container_type}) ---")
 
     exit_code, output = container.exec_run(
         f"test -f {readme_path}",

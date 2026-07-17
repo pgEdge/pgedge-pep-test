@@ -89,7 +89,7 @@ OPTIONS:
   --components <names>    Components to test (default: all)
                           Values: server, snowflake, pgbouncer, pgbackrest, postgrest, lolor, postgis,
                                   system_stats, vectorizer, zerodowntime, mcp, rag, ace, repo_health,
-                                  docloader, anonymizer, pg_vectorize, pg_tokenizer, vchord_bm25, pgaudit, pgadmin4, patroni, pg_stat_monitor, ai_db_workbench, radar, spock_patroni_failover, llvmjit, spock, supautils, all
+                                  docloader, anonymizer, pg_vectorize, pg_tokenizer, vchord_bm25, pgaudit, pgadmin4, patroni, pg_stat_monitor, ai_db_workbench, radar, spock_patroni_failover, llvmjit, ai_kb, spock, supautils, all
                           Comma-separated for multiple: lolor,postgis
 
   --repo <repository>     Repository to use (default: staging)
@@ -107,11 +107,18 @@ OPTIONS:
 
   --containers <csv>      Runtime container override (default: use containers_list.json
                           enabled:true subset). Accepts aliases (e.g. rocky9-arm64) and
-                          canonical names. Special value 'all' (sole token) = entire
-                          catalog regardless of enabled. See --list-containers.
+                          canonical names. A listed platform's opposite architecture is
+                          also accepted even if only one arch is listed (e.g. request
+                          ubuntu2404-amd64 when only ubuntu2404-arm64 is in the catalog);
+                          the counterpart is synthesized on the fly and maps to the same
+                          image. Special value 'all' (sole token) = entire catalog
+                          regardless of enabled, but 'all' is CATALOG-ONLY and does NOT
+                          include these implicit counterparts. See --list-containers.
 
   --list-containers       Print the catalog (alias, canonical name, family, arch,
-                          enabled, description) and exit.
+                          enabled, description) and exit. Note: any listed platform's
+                          opposite arch is also selectable via --containers even though
+                          only the listed arch appears here.
 
   --arch <arch>           Filter enabled containers by architecture (default: no filter)
                           Values: arm64, amd64
@@ -256,6 +263,8 @@ else
   echo "28) spock - Spock 2-node replication tests (spock50/spock60)"
   echo "29) supautils - Supautils tests"
   echo "30) all - All tests"
+  echo "28) ai_kb - AI KB tests"
+  echo "29) all - All tests"
   echo ""
   echo "💡 You can specify multiple components separated by commas"
   echo "   Example: lolor,postgis,system_stats"
@@ -288,7 +297,7 @@ fi
 
 # Determine test types to run
 if [[ "$test_type_choice" == "all" || "$test_type_choice" == "All" ]]; then
-  test_type_list=(server snowflake pgbouncer pgbackrest postgrest lolor postgis system_stats vectorizer zerodowntime mcp rag ace repo_health docloader anonymizer pg_vectorize pg_tokenizer vchord_bm25 pgaudit pgadmin4 patroni pg_stat_monitor ai_db_workbench radar spock_patroni_failover llvmjit spock supautils)
+  test_type_list=(server snowflake pgbouncer pgbackrest postgrest lolor postgis system_stats vectorizer zerodowntime mcp rag ace repo_health docloader anonymizer pg_vectorize pg_tokenizer vchord_bm25 pgaudit pgadmin4 patroni pg_stat_monitor ai_db_workbench radar spock_patroni_failover llvmjit ai_kb spock supautils)
 else
   # Split by comma and trim whitespace
   IFS=',' read -ra test_type_list <<< "$test_type_choice"
@@ -578,7 +587,7 @@ IMAGES = {
     'alma9': 'almalinux:9',  'alma10': 'almalinux:10',  'alma8': 'almalinux:8',
     'oel9':  'oraclelinux:9', 'oel10': 'oraclelinux:10', 'oel8': 'oraclelinux:8',
     'debian11': 'debian:11', 'debian12': 'debian:12', 'debian13': 'debian:13',
-    'ubuntu2204': 'ubuntu:22.04', 'ubuntu2404': 'ubuntu:24.04',
+    'ubuntu2204': 'ubuntu:22.04', 'ubuntu2404': 'ubuntu:24.04', 'ubuntu2604': 'ubuntu:26.04',
 }
 def infer(name):
     n = name.lower()
@@ -700,6 +709,8 @@ for fam, name in selected:
               ;;
             supautils)
               run_pytest_with_tracking "component-test/test_pep_supautils.py" "$env" "rpm" "supautils"
+            ai_kb)
+              run_pytest_with_tracking "component-test/test_pep_ai_kb.py" "$env" "rpm" "ai_kb"
               ;;
             *)
               echo "⚠️ Unknown test type: $test_type"
@@ -795,6 +806,8 @@ for fam, name in selected:
               ;;
             supautils)
               run_pytest_with_tracking "component-test/test_pep_supautils.py" "$env" "deb" "supautils"
+            ai_kb)
+              run_pytest_with_tracking "component-test/test_pep_ai_kb.py" "$env" "deb" "ai_kb"
               ;;
             *)
               echo "⚠️ Unknown test type: $test_type"
@@ -1462,7 +1475,7 @@ cat > "test-logs/index.html" <<EOF
 EOF
 
 # Add card for each component that has reports
-for test_type in server snowflake pgbouncer pgbackrest postgrest lolor postgis system_stats vectorizer zerodowntime mcp rag ace repo_health docloader anonymizer pg_vectorize pg_tokenizer vchord_bm25 pgaudit pgadmin4 patroni pg_stat_monitor ai_db_workbench radar spock_patroni_failover llvmjit spock supautils; do
+for test_type in server snowflake pgbouncer pgbackrest postgrest lolor postgis system_stats vectorizer zerodowntime mcp rag ace repo_health docloader anonymizer pg_vectorize pg_tokenizer vchord_bm25 pgaudit pgadmin4 patroni pg_stat_monitor ai_db_workbench radar spock_patroni_failover llvmjit ai_kb spock supautils; do
   component_dir="test-logs/${test_type}"
   if [[ -d "$component_dir" ]]; then
     # Check for any HTML reports

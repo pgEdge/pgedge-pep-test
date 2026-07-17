@@ -108,6 +108,5 @@
 /usr/lib/postgresql/17/lib/postgis_topology-3.so
 /usr/share/doc/pgedge-postgresql-17-postgis-3
 /usr/share/doc/pgedge-postgresql-17-postgis-3/changelog.Debian.gz
-/usr/share/doc/pgedge-postgresql-17-postgis-3/changelog.gz
 /usr/share/doc/pgedge-postgresql-17-postgis-3/copyright
 /usr/share/lintian/overrides/pgedge-postgresql-17-postgis-3

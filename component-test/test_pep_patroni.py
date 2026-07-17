@@ -1,4 +1,5 @@
 import os
+import re
 import sys
 from pathlib import Path
 
@@ -323,11 +324,16 @@ def test_patroni_binary_version(container_name, container_type):
     version_output = output.decode().strip()
     print(f"   Output: {version_output}")
 
-    assert patroni_version in version_output, (
-        f"Expected version '{patroni_version}' not found in 'patroni --version' output:\n"
+    # 'patroni --version' reports the upstream version (e.g. 4.1.3) while the
+    # package version may carry a distro release suffix (e.g. 4.1.3-2). Strip a
+    # trailing -<digits> release before comparing.
+    expected_binary_version = re.sub(r'-\d+$', '', patroni_version)
+    assert expected_binary_version in version_output, (
+        f"Expected version '{expected_binary_version}' (from package version "
+        f"'{patroni_version}') not found in 'patroni --version' output:\n"
         f"  {version_output}"
     )
-    print(f"✅ patroni --version reports {patroni_version}")
+    print(f"✅ patroni --version reports {expected_binary_version}")
 
 
 @pytest.mark.parametrize("container_name,container_type", all_containers)

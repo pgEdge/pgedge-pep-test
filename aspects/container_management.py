@@ -28,6 +28,7 @@ CONTAINER_IMAGES = {
     "debian13": "debian:13",
     "ubuntu2204": "ubuntu:22.04",
     "ubuntu2404": "ubuntu:24.04",
+    "ubuntu2604": "ubuntu:26.04",
 }
 
 

@@ -248,6 +248,7 @@ pgedge-pep-test/
 │   ├── test_pep_pgadmin4.py
 │   ├── test_pep_ace.py
 │   ├── test_pep_ai_db_workbench.py
+│   ├── test_pep_ai_kb.py
 │   ├── test_pep_system_stats.py
 │   ├── test_pep_vectorizer.py
 │   ├── test_pep_mcp.py
@@ -346,3 +347,4 @@ pgedge-pep-test/
 | `llvmjit` | LLVM JIT compilation support for PostgreSQL |
 | `spock` | Spock 2-node multi-master replication (spock50/spock60 via `SPOCK_MAJOR`, cross-wired with 2node_crosswire.py) |
 | `supautils` | Supautils PostgreSQL security/utility preload library (supautils.so) |
+| `ai_kb` | AI knowledge-base embedding-model packages (gemini, ollama, openai, voyage) |

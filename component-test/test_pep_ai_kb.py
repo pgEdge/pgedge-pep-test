@@ -1,82 +1,68 @@
 import os
 import sys
-import subprocess
 from pathlib import Path
-from datetime import datetime
 
 import pytest
 import docker
 from dotenv import load_dotenv
 
-# Add the parent directory to sys.path to import from aspects
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
-from aspects import configure_repository, package_management, pg_server_management, machine_cleanup, machine_prereq_setup, file_management, container_management
+from aspects import configure_repository, package_management, machine_cleanup, machine_prereq_setup, file_management, container_management
 
 load_dotenv()
 client = docker.from_env()
 
-# Load values from env
+# Container configuration
 rhel_containers = [c.strip() for c in os.getenv("CONTAINERS", "").split(",") if c.strip()]
 deb_containers = [c.strip() for c in os.getenv("DEB_CONTAINERS", "").split(",") if c.strip()]
-
-# Combine all containers with their type
 all_containers = [(c, "rhel") for c in rhel_containers] + [(c, "deb") for c in deb_containers]
 
-# Filter containers based on platform filter (if set)
 platform_filter = os.getenv("PLATFORM_FILTER", "").lower()
 if platform_filter == "rpm":
     all_containers = [(c, t) for c, t in all_containers if t == "rhel"]
 elif platform_filter == "deb":
     all_containers = [(c, t) for c, t in all_containers if t == "deb"]
-# If platform_filter is empty or "all", use all containers
 
 # Common configuration
 repo = os.getenv("REPO", "release")
 upgrade_repo = os.getenv("UPGRADE_REPO", "staging")
 skip_cleanup = os.getenv("SKIP_CLEANUP", "false").lower() == "true"
-pgport = os.getenv("PG_PORT", "5432")
-pgdata = os.getenv("PG_DATA_DIR", "/tmp/n1")
-pg_major_version = os.getenv("PG_MAJOR_VERSION", "16")
-docloader_version = os.getenv("PGEDGE_DOCLOADER_VERSION", "")
 
-# User configuration
-rhel_pguser = os.getenv("PG_USER", "postgres")
-deb_pguser = os.getenv("DEB_PG_USER", "postgres")
+# AI KB package configuration (same names for RHEL and DEB — decoupled).
+# Each package ships one embedding-model knowledge-base database; there is no
+# standalone binary, no PostgreSQL extension, and no systemd service.
+ai_kb_gemini_package = os.getenv("AI_KB_GEMINI_PACKAGE", "pgedge-ai-kb-gemini-gemini-embedding-001")
+ai_kb_ollama_package = os.getenv("AI_KB_OLLAMA_PACKAGE", "pgedge-ai-kb-ollama-nomic-embed-text")
+ai_kb_openai_package = os.getenv("AI_KB_OPENAI_PACKAGE", "pgedge-ai-kb-openai-text-embedding-3-small")
+ai_kb_voyage_package = os.getenv("AI_KB_VOYAGE_PACKAGE", "pgedge-ai-kb-voyage-voyage-3")
 
-# RHEL-specific configuration
-rhel_pgbin = os.getenv("PG_BIN_PATH", f"/usr/pgsql-{pg_major_version}/bin")
-rhel_pg_path = os.getenv("RHEL_PG_PATH", f"/usr/pgsql-{pg_major_version}")
-# Docloader is a standalone/decoupled package (no PG version suffix)
-rhel_docloader_package = os.getenv("DOCLOADER_PACKAGE", "pgedge-docloader")
+# Full component list — env override (AI_KB_COMPONENTS) wins, else the four defaults
+_default_components = ",".join([
+    ai_kb_gemini_package,
+    ai_kb_ollama_package,
+    ai_kb_openai_package,
+    ai_kb_voyage_package,
+])
+ai_kb_packages = [c.strip() for c in os.getenv("AI_KB_COMPONENTS", _default_components).split(",") if c.strip()]
 
-# Debian-specific configuration
-deb_pgbin = os.getenv("DEB_PG_BIN_PATH", f"/usr/lib/postgresql/{pg_major_version}/bin")
-deb_pg_path = os.getenv("DEB_PG_PATH", f"/usr/lib/postgresql/{pg_major_version}")
-deb_pg_share_path = os.getenv("DEB_PG_SHARE_PATH", f"/usr/share/postgresql/{pg_major_version}")
-deb_docloader_package = os.getenv("DEB_DOCLOADER_PACKAGE", "pgedge-docloader")
+# Version shared across all packages
+ai_kb_version = os.getenv("PGEDGE_AI_KB_VERSION", "1.0.0")
+ai_kb_version_map = {pkg: ai_kb_version for pkg in ai_kb_packages}
 
-# Decoupled components SBOM path
-decoupled_sbom_path = os.getenv("DECOUPLED_COMPONENTS_SBOM", "")
-
-# Additional configuration for extension tests
-check_extensions = os.getenv("CHECK_EXTENSIONS", "false").lower() == "true"
-base_extensions = [ext.strip() for ext in os.getenv("BASE_EXTENSIONS", "").split(",") if ext.strip()]
+# Decoupled components SBOM location — SBOM files live flat under this directory
+# as <package>-sbom.json / <package>-sbom.json.asc
+decoupled_sbom_path = os.getenv("DECOUPLED_COMPONENTS_SBOM", "/usr/share")
 
 
-def get_container_config(container_type):
-    """Get configuration based on container type (rhel or deb)"""
-    if container_type == "rhel":
-        return {
-            "pgbin": rhel_pgbin.rstrip('/'),
-            "pguser": rhel_pguser,
-            "docloader_package": rhel_docloader_package,
-        }
-    else:  # deb
-        return {
-            "pgbin": deb_pgbin.rstrip('/'),
-            "pguser": deb_pguser,
-            "docloader_package": deb_docloader_package,
-        }
+def generate_container_package_combinations():
+    combinations = []
+    for container_name, container_type in all_containers:
+        for package in ai_kb_packages:
+            combinations.append((container_name, container_type, package))
+    return combinations
+
+
+all_container_package_combinations = generate_container_package_combinations()
 
 
 # ============================================================================
@@ -90,7 +76,6 @@ def test_install_prerequisites(container_name, container_type):
     if not container_name:
         pytest.skip("No container defined in env")
 
-    # Ensure container exists and is running - create if not available
     container, created, message = container_management.ensure_container_running(
         client, container_name, container_type
     )
@@ -111,7 +96,7 @@ def test_install_prerequisites(container_name, container_type):
 
 @pytest.mark.parametrize("container_name,container_type", all_containers)
 def test_configure_repository(container_name, container_type):
-    """Step 1: Configure the repository file using configure_repository module"""
+    """Step 1: Configure the pgEdge repository using configure_repository module"""
     container_name = container_name.strip()
     if not container_name:
         pytest.skip("No container defined in env")
@@ -134,15 +119,14 @@ def test_configure_repository(container_name, container_type):
         pytest.fail(f"Failed to configure repository: {str(e)}")
 
 
-@pytest.mark.parametrize("container_name,container_type", all_containers)
-def test_component_install(container_name, container_type):
-    """Step 2: Install pgedge-docloader using package_management module"""
+@pytest.mark.parametrize("container_name,container_type,package", all_container_package_combinations)
+def test_ai_kb_install(container_name, container_type, package):
+    """Step 2: Install AI KB package using package_management module"""
     container_name = container_name.strip()
-    if not container_name:
-        pytest.skip("No container defined in env")
+    package = package.strip()
 
-    config = get_container_config(container_type)
-    docloader_package = config["docloader_package"]
+    if not container_name or not package:
+        pytest.skip("No container or package defined")
 
     try:
         container = client.containers.get(container_name)
@@ -151,29 +135,28 @@ def test_component_install(container_name, container_type):
 
     assert container.status == "running"
 
-    print(f"\n--- Installing {docloader_package} on {container_name} ({container_type}) ---")
+    print(f"\n--- Installing {package} on {container_name} ({container_type}) ---")
 
     try:
-        success, platform, message = package_management.install_package(container, docloader_package)
+        success, platform, message = package_management.install_package(container, package)
         assert success, f"Package installation failed: {message}"
         print(f"✅ {message}")
         print(f"✅ Platform detected: {platform}")
     except Exception as e:
-        pytest.fail(f"Failed to install {docloader_package}: {str(e)}")
+        pytest.fail(f"Failed to install {package}: {str(e)}")
 
 
-@pytest.mark.parametrize("container_name,container_type", all_containers)
-def test_component_upgrade(container_name, container_type):
-    """Upgrade component package if UPGRADE=true"""
+@pytest.mark.parametrize("container_name,container_type,package", all_container_package_combinations)
+def test_ai_kb_upgrade(container_name, container_type, package):
+    """Upgrade AI KB package if UPGRADE=true"""
     if os.getenv("UPGRADE", "false").lower() != "true":
         pytest.skip("Skipping upgrade tests because UPGRADE=false in env")
 
     container_name = container_name.strip()
-    if not container_name:
-        pytest.skip("No container defined in env")
+    package = package.strip()
 
-    config = get_container_config(container_type)
-    docloader_package = config["docloader_package"]
+    if not container_name or not package:
+        pytest.skip("No container or package defined")
 
     try:
         container = client.containers.get(container_name)
@@ -182,9 +165,8 @@ def test_component_upgrade(container_name, container_type):
 
     assert container.status == "running"
 
-    print(f"\n--- Upgrading {docloader_package} on {container_name} ({container_type}) ---")
+    print(f"\n--- Upgrading {package} on {container_name} ({container_type}) ---")
 
-    # Switch to upgrade repo if needed
     if upgrade_repo in ["staging", "daily"]:
         try:
             configure_repository.configure_pgedge_repository(container, upgrade_repo)
@@ -192,29 +174,29 @@ def test_component_upgrade(container_name, container_type):
             print(f"Warning: Could not switch to upgrade repo: {e}")
 
     try:
-        success, platform, message = package_management.upgrade_package(container, docloader_package)
+        success, platform, message = package_management.upgrade_package(container, package)
         if not success:
             if "already" in message.lower() or "newest" in message.lower():
-                pytest.skip(f"{docloader_package} is already at newest version")
+                pytest.skip(f"{package} is already at newest version")
         assert success, f"Package upgrade failed: {message}"
         print(f"✅ {message}")
         print(f"✅ Platform detected: {platform}")
     except Exception as e:
-        pytest.fail(f"Failed to upgrade {docloader_package}: {str(e)}")
+        pytest.fail(f"Failed to upgrade {package}: {str(e)}")
 
 
-@pytest.mark.parametrize("container_name,container_type", all_containers)
-def test_component_package_version(container_name, container_type):
-    """Step 3: Check the package version using package_management module"""
+@pytest.mark.parametrize("container_name,container_type,package", all_container_package_combinations)
+def test_ai_kb_package_version(container_name, container_type, package):
+    """Step 3: Verify AI KB package version"""
     container_name = container_name.strip()
-    if not container_name:
-        pytest.skip("No container defined in env")
+    package = package.strip()
 
-    if not docloader_version:
-        pytest.skip("No PGEDGE_DOCLOADER_VERSION defined in env, skipping version check")
+    if not container_name or not package:
+        pytest.skip("No container or package defined")
 
-    config = get_container_config(container_type)
-    docloader_package = config["docloader_package"]
+    expected_version = ai_kb_version_map.get(package, "")
+    if not expected_version:
+        pytest.skip(f"No version defined for {package}, skipping version check")
 
     try:
         container = client.containers.get(container_name)
@@ -223,26 +205,30 @@ def test_component_package_version(container_name, container_type):
 
     assert container.status == "running"
 
-    print(f"\n--- Verifying {docloader_package} version on {container_name} ({container_type}) ---")
+    print(f"\n--- Verifying {package} version on {container_name} ({container_type}) ---")
 
     try:
         success, platform, installed_version, message = package_management.verify_package_version(
-            container, docloader_package, docloader_version
+            container, package, expected_version
         )
         assert success, f"Version verification failed: {message}"
         print(f"✅ {message}")
         print(f"✅ Platform detected: {platform}")
     except Exception as e:
-        pytest.fail(f"Failed to verify {docloader_package} version: {str(e)}")
+        pytest.fail(f"Failed to verify {package} version: {str(e)}")
 
 
-@pytest.mark.parametrize("container_name,container_type", all_containers)
-def test_verify_bundled_files(container_name, container_type):
-    """Verify bundled files for each component match expected files"""
+@pytest.mark.parametrize("container_name,container_type,package", all_container_package_combinations)
+def test_verify_bundled_files(container_name, container_type, package):
+    """Verify bundled files for each AI KB package match expected files
+
+    Compares installed files from rpm/deb against expected-output/rpm/ or expected-output/deb/.
+    """
     container_name = container_name.strip()
+    package = package.strip()
 
-    if not container_name:
-        pytest.skip("Invalid container")
+    if not container_name or not package:
+        pytest.skip("Invalid container or package")
 
     try:
         container = client.containers.get(container_name)
@@ -250,9 +236,6 @@ def test_verify_bundled_files(container_name, container_type):
         pytest.skip(f"Container {container_name} not found or not running.")
 
     assert container.status == "running"
-
-    config = get_container_config(container_type)
-    actual_package = config["docloader_package"]
 
     project_root = Path(__file__).parent.parent
 
@@ -261,8 +244,8 @@ def test_verify_bundled_files(container_name, container_type):
             container=container,
             container_name=container_name,
             container_type=container_type,
-            component=actual_package,
-            package_name=actual_package,
+            component=package,
+            package_name=package,
             project_root=project_root
         )
 
@@ -286,12 +269,18 @@ def test_verify_bundled_files(container_name, container_type):
             pytest.fail(f"Failed to verify bundled files: {str(e)}")
 
 
-@pytest.mark.parametrize("container_name,container_type", all_containers)
-def test_verify_sbom(container_name, container_type):
-    """Verify SBOM signature files located under the decoupled components SBOM directory"""
+@pytest.mark.parametrize("container_name,container_type,package", all_container_package_combinations)
+def test_verify_sbom(container_name, container_type, package):
+    """Verify SBOM signature files for each AI KB package
+
+    SBOM files live flat under DECOUPLED_COMPONENTS_SBOM (e.g. /usr/share) as
+    <package>-sbom.json and <package>-sbom.json.asc.
+    """
     container_name = container_name.strip()
-    if not container_name:
-        pytest.skip("No container defined in env")
+    package = package.strip()
+
+    if not container_name or not package:
+        pytest.skip("No container or package defined")
 
     if not decoupled_sbom_path:
         pytest.skip("DECOUPLED_COMPONENTS_SBOM not defined in env, skipping SBOM verification")
@@ -303,17 +292,12 @@ def test_verify_sbom(container_name, container_type):
 
     assert container.status == "running"
 
-    config = get_container_config(container_type)
-    docloader_package = config["docloader_package"]
-    # The SBOM file keeps the full package name (pgedge-docloader-sbom.json) on
-    # both platforms, but the directory differs:
-    #   RHEL: {decoupled_sbom_path}/pgedge-docloader-sbom.json          (no subdir)
-    #   Deb:  {decoupled_sbom_path}/pgedge-docloader/pgedge-docloader-sbom.json
-    sbom_name = docloader_package
+    sbom_dir = decoupled_sbom_path
+    json_file = f"{package}-sbom.json"
+    asc_file = f"{package}-sbom.json.asc"
 
     if container_type == "rhel":
-        sbom_dir = decoupled_sbom_path
-        print(f"\n--- Verifying SBOM on {container_name} (RHEL) in {sbom_dir} ---")
+        print(f"\n--- Verifying SBOM for {package} on {container_name} (RHEL) in {sbom_dir} ---")
 
         exit_code, output = container.exec_run(
             f"wget -q -O {sbom_dir}/pgedge-rsa.pub https://dnf.pgedge.com/keys/pgedge-rsa.pub",
@@ -324,21 +308,20 @@ def test_verify_sbom(container_name, container_type):
 
         exit_code, output = container.exec_run(
             f"sh -c 'cd {sbom_dir} && sq verify "
-            f"--signature-file {sbom_name}-sbom.json.asc "
+            f"--signature-file {asc_file} "
             f"--signer-file pgedge-rsa.pub "
-            f"{sbom_name}-sbom.json'",
+            f"{json_file}'",
             user="root",
         )
         output_str = output.decode().replace('\xa0', ' ')
-        assert exit_code == 0, f"SBOM verification failed: {output_str}"
+        assert exit_code == 0, f"SBOM verification failed for {package}: {output_str}"
         assert "1 authenticated signature." in output_str, \
             f"Expected '1 authenticated signature.' not found in output:\n{output_str}"
-        print(f"✅ SBOM signature verified on {container_name} (RHEL)")
+        print(f"✅ SBOM signature verified for {package} on {container_name} (RHEL)")
         print(f"   {output_str.strip()}")
 
     else:  # deb
-        sbom_dir = f"{decoupled_sbom_path}/{docloader_package}"
-        print(f"\n--- Verifying SBOM on {container_name} (Deb) in {sbom_dir} ---")
+        print(f"\n--- Verifying SBOM for {package} on {container_name} (Deb) in {sbom_dir} ---")
 
         machine_prereq_setup.ensure_sq_installed(container)
         _sq_rc, _sq_help = container.exec_run("sq verify --help 2>&1", user="root")
@@ -347,30 +330,26 @@ def test_verify_sbom(container_name, container_type):
         exit_code, output = container.exec_run(
             f"sh -c 'cd {sbom_dir} && sq verify "
             f"{_sq_signer_flag} /etc/apt/keyrings/pgedge-rsa.gpg "
-            f"{_sq_sig_flag} {sbom_name}-sbom.json.asc "
-            f"{sbom_name}-sbom.json'",
+            f"{_sq_sig_flag} {asc_file} "
+            f"{json_file}'",
             user="root",
         )
         output_str = output.decode().replace('\xa0', ' ')
-        assert exit_code == 0, f"SBOM verification failed: {output_str}"
+        assert exit_code == 0, f"SBOM verification failed for {package}: {output_str}"
         assert "1 good signature." in output_str or "1 authenticated signature." in output_str, \
-            f"Expected '1 good signature.' or '1 authenticated signature.' not found in output:\n{output_str}"
-        print(f"✅ SBOM signature verified on {container_name} (Deb)")
+            f"Expected '1 good/authenticated signature.' not found in output:\n{output_str}"
+        print(f"✅ SBOM signature verified for {package} on {container_name} (Deb)")
         print(f"   {output_str.strip()}")
 
 
-@pytest.mark.parametrize("container_name,container_type", all_containers)
-def test_package_uninstall(container_name, container_type):
-    """Uninstall docloader package using package_management module"""
-    if skip_cleanup:
-        pytest.skip("Skipping uninstall: SKIP_CLEANUP=true")
-
+@pytest.mark.parametrize("container_name,container_type,package", all_container_package_combinations)
+def test_verify_license_file(container_name, container_type, package):
+    """Verify LICENSE file is present at /usr/share/doc/<package>/LICENSE.md"""
     container_name = container_name.strip()
-    if not container_name:
-        pytest.skip("No container defined in env")
+    package = package.strip()
 
-    config = get_container_config(container_type)
-    docloader_package = config["docloader_package"]
+    if not container_name or not package:
+        pytest.skip("No container or package defined")
 
     try:
         container = client.containers.get(container_name)
@@ -379,15 +358,79 @@ def test_package_uninstall(container_name, container_type):
 
     assert container.status == "running"
 
-    print(f"\n--- Uninstalling {docloader_package} on {container_name} ({container_type}) ---")
+    license_path = f"/usr/share/doc/{package}/LICENSE.md"
+    print(f"\n--- Verifying license file for {package} on {container_name} ---")
+
+    exit_code, output = container.exec_run(
+        ["bash", "-c", f"test -f {license_path} && echo EXISTS || echo MISSING"],
+        user="root",
+    )
+    result = output.decode().strip()
+    assert result == "EXISTS", f"LICENSE file not found at {license_path} for {package}"
+    print(f"✅ LICENSE file found at {license_path}")
+
+
+@pytest.mark.parametrize("container_name,container_type,package", all_container_package_combinations)
+def test_verify_readme_file(container_name, container_type, package):
+    """Verify README file is present at /usr/share/doc/<package>/README.md (RPM) or README.md.gz (DEB)"""
+    container_name = container_name.strip()
+    package = package.strip()
+
+    if not container_name or not package:
+        pytest.skip("No container or package defined")
 
     try:
-        success, platform, message = package_management.uninstall_package(container, docloader_package)
+        container = client.containers.get(container_name)
+    except docker.errors.NotFound:
+        pytest.skip(f"Container {container_name} not found or not running.")
+
+    assert container.status == "running"
+
+    # RPM installs README.md; DEB compresses it as README.md.gz
+    readme_path = (
+        f"/usr/share/doc/{package}/README.md"
+        if container_type == "rhel"
+        else f"/usr/share/doc/{package}/README.md.gz"
+    )
+    print(f"\n--- Verifying README for {package} on {container_name} ({container_type}) ---")
+
+    exit_code, output = container.exec_run(
+        ["bash", "-c", f"test -f {readme_path} && echo EXISTS || echo MISSING"],
+        user="root",
+    )
+    result = output.decode().strip()
+    assert result == "EXISTS", f"README not found at {readme_path} for {package}"
+    print(f"✅ README found at {readme_path}")
+
+
+@pytest.mark.parametrize("container_name,container_type,package", all_container_package_combinations)
+def test_ai_kb_uninstall(container_name, container_type, package):
+    """Uninstall AI KB package using package_management module"""
+    if skip_cleanup:
+        pytest.skip("Skipping uninstall: SKIP_CLEANUP=true")
+
+    container_name = container_name.strip()
+    package = package.strip()
+
+    if not container_name or not package:
+        pytest.skip("No container or package defined")
+
+    try:
+        container = client.containers.get(container_name)
+    except docker.errors.NotFound:
+        pytest.skip(f"Container {container_name} not found or not running.")
+
+    assert container.status == "running"
+
+    print(f"\n--- Uninstalling {package} on {container_name} ({container_type}) ---")
+
+    try:
+        success, platform, message = package_management.uninstall_package(container, package)
         assert success, f"Package uninstallation failed: {message}"
         print(f"✅ {message}")
         print(f"✅ Platform detected: {platform}")
     except Exception as e:
-        pytest.fail(f"Failed to uninstall {docloader_package}: {str(e)}")
+        pytest.fail(f"Failed to uninstall {package}: {str(e)}")
 
 
 @pytest.mark.parametrize("container_name,container_type", all_containers)
@@ -407,14 +450,11 @@ def test_pgedge_cleanup(container_name, container_type):
 
     assert container.status == "running"
 
-    config = get_container_config(container_type)
-    pguser = config["pguser"]
-
     print(f"\n--- Full pgEdge cleanup on {container_name} ---")
 
     try:
         success, cleanup_summary, message = machine_cleanup.cleanup_pgedge_environment(
-            container, pgdata=None, pguser=None
+            container, pgdata=None, pguser=None  # AI KB packages don't use pgdata/pguser
         )
         assert success, f"Cleanup failed: {message}"
         print(f"✅ {message}")

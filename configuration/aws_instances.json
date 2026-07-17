@@ -46,7 +46,7 @@
       "username":    "admin",
       "key_file":    "",
       "description": "Debian 13 / ap-south-1",
-      "enabled":     false
+      "enabled":     true
     },
     {
       "name":        "z_Debian12_AMD",
@@ -99,6 +99,14 @@
     {
       "name":        "z_Ubuntu2404_ARM",
       "host":        "ec2-3-110-79-34.ap-south-1.compute.amazonaws.com",
+      "username":    "ubuntu",
+      "key_file":    "",
+      "description": "Ubuntu 24.04 ARM / ap-south-1",
+      "enabled":     false
+    },
+    {
+      "name":        "z_Ubuntu2604_AMD",
+      "host":        "ec2-52-66-228-248.ap-south-1.compute.amazonaws.com",
       "username":    "ubuntu",
       "key_file":    "",
       "description": "Ubuntu 24.04 ARM / ap-south-1",

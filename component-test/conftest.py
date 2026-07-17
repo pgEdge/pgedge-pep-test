@@ -228,6 +228,15 @@ def detect_component_from_test_file(config):
             'deb_package_env': 'AI_DBA_COMPONENTS',
             'deb_package_default': 'pgedge-ai-dba-server,pgedge-ai-dba-alerter,pgedge-ai-dba-collector,pgedge-ai-dba-client'
         },
+        'test_pep_ai_kb': {
+            'name': 'AI KB',
+            'version_env': 'PGEDGE_AI_KB_VERSION',
+            'version_default': '1.0.0',
+            'rhel_package_env': 'AI_KB_COMPONENTS',
+            'rhel_package_default': 'pgedge-ai-kb-gemini-gemini-embedding-001,pgedge-ai-kb-ollama-nomic-embed-text,pgedge-ai-kb-openai-text-embedding-3-small,pgedge-ai-kb-voyage-voyage-3',
+            'deb_package_env': 'AI_KB_COMPONENTS',
+            'deb_package_default': 'pgedge-ai-kb-gemini-gemini-embedding-001,pgedge-ai-kb-ollama-nomic-embed-text,pgedge-ai-kb-openai-text-embedding-3-small,pgedge-ai-kb-voyage-voyage-3'
+        },
         'test_pep_radar': {
             'name': 'Radar',
             'version_env': 'PGEDGE_RADAR_VERSION',

@@ -1466,7 +1466,7 @@ BEGIN
         -- real commit at LSN > _slot_lsn, which gives the catchup wait below
         -- a reachable target even when rec is otherwise idle (the slot's
         -- consistent_point typically lands on a RUNNING_XACTS record, not on
-        -- a commit, so remote_commit_lsn alone may never reach _slot_lsn).
+        -- a commit, so remote_lsn alone may never reach _slot_lsn).
         -- The same LSN is reused by Phase 8 wait_for_sync_event on new.
         BEGIN
             SELECT t.sync_lsn::pg_lsn INTO _catchup_lsn
@@ -1489,7 +1489,7 @@ BEGIN
         -- proves every rec commit with commit_lsn <= _slot_lsn is committed
         -- on src and visible to the Phase 5 src->new COPY snapshot.
         --
-        -- We must use remote_commit_lsn (apply progress at last applied
+        -- We must use remote_lsn (apply progress at last applied
         -- commit). received_lsn is unsafe here: it advances on keepalive
         -- messages reporting the remote walsender position even when no rec
         -- changes have been applied on src yet.
@@ -1501,7 +1501,7 @@ BEGIN
             v_prev_statement_timeout text;
         BEGIN
             progress_sql := format(
-                'SELECT p.remote_commit_lsn '
+                'SELECT p.remote_lsn '
                 'FROM spock.progress p '
                 'JOIN spock.node n ON n.node_id = p.remote_node_id '
                 'WHERE p.node_id = (SELECT node_id FROM spock.node_info()) '
@@ -1817,9 +1817,6 @@ BEGIN
                 verb                                          -- verbose
             );
             RAISE NOTICE '    ✓ %', rpad('Creating subscription ' || sub_name || ' on node ' || rec.node_name || '...', 120, ' ');
-            -- Allow the apply worker on rec.node time to come up and
-            -- create its slot on new_node before the next iteration
-            -- (and before subsequent zodan phases poke this state).
             PERFORM pg_sleep(5);
             subscription_count := subscription_count + 1;
         EXCEPTION
@@ -2085,7 +2082,7 @@ BEGIN
                     -- Slot exists but is not active (unusual).  Advance defensively.
                     RAISE NOTICE '    Slot % found at LSN % (inactive)', src_slot_name, current_lsn;
 
-                    SELECT p.remote_commit_lsn INTO target_lsn
+                    SELECT p.remote_lsn INTO target_lsn
                     FROM spock.progress p
                     JOIN spock.node n ON n.node_id = p.remote_node_id
                     WHERE n.node_name = src_node_name;
@@ -2181,7 +2178,7 @@ BEGIN
 
                 -- Advance the slot to resume_lsn: the last commit from this node
                 -- that N1 had applied at snapshot time (stored in N3's spock.progress).
-                SELECT p.remote_commit_lsn INTO target_lsn
+                SELECT p.remote_lsn INTO target_lsn
                 FROM spock.progress p
                 JOIN spock.node n ON n.node_id = p.remote_node_id
                 WHERE n.node_name = rec.node_name;

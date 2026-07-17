@@ -1,0 +1,10 @@
+/usr/lib/postgresql/16/lib/supautils.so
+/usr/lib/postgresql/16/sbom
+/usr/lib/postgresql/16/sbom/supautils-sbom.json
+/usr/lib/postgresql/16/sbom/supautils-sbom.json.asc
+/usr/share
+/usr/share/doc
+/usr/share/doc/pgedge-postgresql-16-supautils
+/usr/share/doc/pgedge-postgresql-16-supautils/README.md.gz
+/usr/share/doc/pgedge-postgresql-16-supautils/changelog.Debian.gz
+/usr/share/doc/pgedge-postgresql-16-supautils/copyright

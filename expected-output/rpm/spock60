@@ -1,0 +1,17 @@
+/usr/pgsql-17/lib/spock.so
+/usr/pgsql-17/lib/spock_output.so
+/usr/pgsql-17/sbom/spock60-sbom.json
+/usr/pgsql-17/sbom/spock60-sbom.json.asc
+/usr/pgsql-17/share/extension/spock--5.0.0--5.0.1.sql
+/usr/pgsql-17/share/extension/spock--5.0.1--5.0.2.sql
+/usr/pgsql-17/share/extension/spock--5.0.2--5.0.3.sql
+/usr/pgsql-17/share/extension/spock--5.0.3--5.0.4.sql
+/usr/pgsql-17/share/extension/spock--5.0.4--5.0.5.sql
+/usr/pgsql-17/share/extension/spock--5.0.5--5.0.6.sql
+/usr/pgsql-17/share/extension/spock--5.0.6--5.0.7.sql
+/usr/pgsql-17/share/extension/spock--5.0.7--5.0.8.sql
+/usr/pgsql-17/share/extension/spock--5.0.8--6.0.0.sql
+/usr/pgsql-17/share/extension/spock--6.0.0.sql
+/usr/pgsql-17/share/extension/spock.control
+/usr/share/doc/pgedge-spock60_17/README.md
+/usr/share/licenses/pgedge-spock60_17/LICENSE.md

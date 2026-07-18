@@ -87,12 +87,12 @@ In Docker mode (default), the test runner reads **`configuration/containers_list
 ```json
 {
   "rhel": [
-    { "name": "auto-rocky9-arm",  "description": "Rocky Linux 9 / ARM64",  "enabled": true  },
-    { "name": "auto-alma10-arm",  "description": "AlmaLinux 10 / ARM64",   "enabled": false }
+    { "name": "auto-rocky9-arm", "alias": "rocky9-arm64", "description": "Rocky Linux 9 / ARM64", "enabled": true  },
+    { "name": "my-rocky9-amd",   "alias": "rocky9-amd64", "description": "Rocky Linux 9 / AMD64", "enabled": false }
   ],
   "deb": [
-    { "name": "auto-debian13-amd", "description": "Debian 13 / AMD64",     "enabled": true  },
-    { "name": "auto-ubuntu2204-arm","description": "Ubuntu 22.04 / ARM64", "enabled": false }
+    { "name": "auto-ubuntu2604-arm", "alias": "ubuntu2604-arm64", "description": "Ubuntu 26.04 LTS / ARM64", "enabled": true  },
+    { "name": "auto-ubuntu2604-amd", "alias": "ubuntu2604-amd64", "description": "Ubuntu 26.04 LTS / AMD64", "enabled": true  }
   ]
 }
 ```
@@ -100,8 +100,11 @@ In Docker mode (default), the test runner reads **`configuration/containers_list
 - Set `"enabled": true` to include a container in the test run.
 - Set `"enabled": false` to skip it without removing the entry.
 - Container names must match existing Docker containers on the host.
+- `"alias"` is the short user-facing name (e.g. `rocky9-arm64`) accepted by the `--containers` override.
 
 At runtime, only `enabled: true` entries are loaded into `CONTAINERS` (RPM) and `DEB_CONTAINERS` (DEB).
+
+To pick a custom set for a single run without editing the catalog, pass `--containers` (a CSV of aliases or canonical names; `all` selects the entire catalog). A listed platform's opposite architecture is also selectable even if only one arch is listed. Run `./run_pep_tf.sh --list-containers` to print the catalog. See [docs/CI.md](docs/CI.md#selecting-container-targets-at-runtime) for full behavior.
 
 ---
 
@@ -194,6 +197,9 @@ Run without arguments to enter interactive menu mode:
 | `--components` | Components to test | `server`, `snowflake`, `pgbouncer`, `pgbackrest`, `postgrest`, `lolor`, `postgis`, `system_stats`, `vectorizer`, `zerodowntime`, `mcp`, `rag`, `ace`, `repo_health`, `docloader`, `anonymizer`, `pg_vectorize`, `pg_tokenizer`, `vchord_bm25`, `pgaudit`, `pgadmin4`, `patroni`, `pg_stat_monitor`, `ai_db_workbench`, `radar`, `spock_patroni_failover`, `llvmjit`, `spock`, `supautils`, `all` |
 | `--repo` | Repository to use | `release`, `staging`, `daily` |
 | `--target` | Execution target | `docker` (default), `aws` |
+| `--arch` | Filter enabled containers by architecture | `arm64`, `amd64` |
+| `--containers` | Runtime container override (CSV of aliases/names; `all` = whole catalog) | see [CI.md](docs/CI.md) |
+| `--list-containers` | Print the container catalog and exit | - |
 | `--help`, `-h` | Show help message | - |
 
 ### Examples
@@ -222,7 +228,7 @@ Run without arguments to enter interactive menu mode:
 Test execution reports are saved in the `test-logs/` directory:
 
 - HTML reports with detailed test results
-- Consolidated reports organized by timestamp
+- Consolidated reports organized by timestamp (header lists the run's inputs and the OS / containers in scope)
 - Component-specific logs
 
 ### Actual Output Files
@@ -310,6 +316,7 @@ pgedge-pep-test/
 |--------------|------------------------|---------------|
 | Ubuntu       | 22.04 LTS (Jammy)      | AMD64, ARM64  |
 | Ubuntu       | 24.04 LTS (Noble)      | AMD64, ARM64  |
+| Ubuntu       | 26.04 LTS              | AMD64, ARM64  |
 | Debian       | 11 (Bullseye)          | AMD64, ARM64  |
 | Debian       | 12 (Bookworm)          | AMD64, ARM64  |
 | Debian       | 13 (Trixie)            | AMD64, ARM64  |

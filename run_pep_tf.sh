@@ -1,5 +1,8 @@
 #!/bin/bash
 
+# Version of this test runner
+VERSION="1.1.0"
+
 # Directory containing your env files
 ENV_DIR="./configuration"
 
@@ -70,6 +73,10 @@ while [[ $# -gt 0 ]]; do
       CLI_MODE=true
       shift 1
       ;;
+    --version|-V)
+      echo "$(basename "$0") version ${VERSION}"
+      exit 0
+      ;;
     --help|-h)
       cat <<HELPTEXT
 Usage: $(basename "$0") [OPTIONS]
@@ -129,6 +136,8 @@ OPTIONS:
                           (no pytest, no Docker pulls, no package installs, no repo setup)
 
   --help, -h              Show this help message and exit
+
+  --version, -V           Show the test runner version and exit
 
 EXAMPLES:
   # Interactive mode (no arguments)

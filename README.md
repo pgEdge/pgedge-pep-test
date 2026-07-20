@@ -58,6 +58,7 @@ Edit the configuration files located in the `configuration/` directory based on 
 | `configuration/config16.env` | PostgreSQL 16 |
 | `configuration/config17.env` | PostgreSQL 17 |
 | `configuration/config18.env` | PostgreSQL 18 |
+| `configuration/config19.env` | PostgreSQL 19 |
 
 ### Key Variables
 
@@ -192,7 +193,7 @@ Run without arguments to enter interactive menu mode:
 
 | Option | Description | Values |
 |--------|-------------|--------|
-| `--pgver` | PostgreSQL versions to test | `16`, `17`, `18`, `all` |
+| `--pgver` | PostgreSQL versions to test | `16`, `17`, `18`, `19`, `all` |
 | `--platforms` | Target platforms | `rpm`, `deb`, `all` |
 | `--components` | Components to test | `server`, `snowflake`, `pgbouncer`, `pgbackrest`, `postgrest`, `lolor`, `postgis`, `system_stats`, `vectorizer`, `zerodowntime`, `mcp`, `rag`, `ace`, `repo_health`, `docloader`, `anonymizer`, `pg_vectorize`, `pg_tokenizer`, `vchord_bm25`, `pgaudit`, `pgadmin4`, `patroni`, `pg_stat_monitor`, `ai_db_workbench`, `radar`, `spock_patroni_failover`, `llvmjit`, `spock`, `supautils`, `all` |
 | `--repo` | Repository to use | `release`, `staging`, `daily` |
@@ -278,6 +279,7 @@ pgedge-pep-test/
 │   ├── config16.env
 │   ├── config17.env
 │   ├── config18.env
+│   ├── config19.env
 │   ├── containers_list.json # Docker container registry (enable/disable per container)
 │   └── aws_instances.json   # AWS EC2 instance registry (enable/disable per instance)
 ├── aspects/                 # Test aspects and utilities

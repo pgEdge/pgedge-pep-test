@@ -195,7 +195,7 @@ Run without arguments to enter interactive menu mode:
 |--------|-------------|--------|
 | `--pgver` | PostgreSQL versions to test | `16`, `17`, `18`, `19`, `all` |
 | `--platforms` | Target platforms | `rpm`, `deb`, `all` |
-| `--components` | Components to test | `server`, `snowflake`, `pgbouncer`, `pgbackrest`, `postgrest`, `lolor`, `postgis`, `system_stats`, `vectorizer`, `zerodowntime`, `mcp`, `rag`, `ace`, `repo_health`, `docloader`, `anonymizer`, `pg_vectorize`, `pg_tokenizer`, `vchord_bm25`, `pgaudit`, `pgadmin4`, `patroni`, `pg_stat_monitor`, `ai_db_workbench`, `radar`, `spock_patroni_failover`, `llvmjit`, `spock`, `supautils`, `all` |
+| `--components` | Components to test | `server`, `snowflake`, `pgbouncer`, `pgbackrest`, `postgrest`, `lolor`, `postgis`, `system_stats`, `vectorizer`, `zerodowntime`, `mcp`, `rag`, `ace`, `repo_health`, `docloader`, `anonymizer`, `pg_vectorize`, `pg_tokenizer`, `vchord_bm25`, `pgaudit`, `pgadmin4`, `patroni`, `pg_stat_monitor`, `ai_db_workbench`, `radar`, `spock_patroni_failover`, `llvmjit`, `spock`, `supautils`, `ai_kb`, `all` |
 | `--repo` | Repository to use | `release`, `staging`, `daily` |
 | `--target` | Execution target | `docker` (default), `aws` |
 | `--arch` | Filter enabled containers by architecture | `arm64`, `amd64` |

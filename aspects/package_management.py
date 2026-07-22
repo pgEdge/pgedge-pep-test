@@ -37,6 +37,11 @@ def install_package(container, package_name, pg_major_version=None, install_pg_s
     if exit_code == 0:
         pkg_mgr = "dnf install -y"
         platform = "rhel"
+        # Expire cached repo metadata so newly-published packages are resolvable.
+        # Without this, dnf resolves against stale cache and reports "No match"
+        # for RPMs added to the repo after the cache was last refreshed.
+        # (Mirrors the `apt-get update` refresh on the Debian path below.)
+        container.exec_run(["/bin/sh", "-c", "dnf clean expire-cache"], user="root")
     else:
         exit_code, _ = container.exec_run(["/bin/sh", "-c", "command -v apt-get"], user="root")
         if exit_code == 0:
@@ -110,6 +115,9 @@ def upgrade_package(container, package_name):
     if exit_code == 0:
         pkg_mgr = "dnf upgrade -y"
         platform = "rhel"
+        # Expire cached repo metadata so a newly-published version is resolvable
+        # (mirrors the `apt-get update` refresh on the Debian path below).
+        container.exec_run(["/bin/sh", "-c", "dnf clean expire-cache"], user="root")
     else:
         exit_code, _ = container.exec_run(["/bin/sh", "-c", "command -v apt-get"], user="root")
         if exit_code == 0:

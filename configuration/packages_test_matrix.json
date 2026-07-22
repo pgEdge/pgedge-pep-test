@@ -26,7 +26,7 @@
     {"category": "tool",      "name": "pgadmin4",            "description": "pgAdmin 4 web UI",                     "enabled": false,  "rhel": "pgedge-pgadmin4",                "deb": "pgedge-pgadmin4"},
     {"category": "tool",      "name": "postgrest",           "description": "RESTful API for PostgreSQL",           "enabled": false,  "rhel": "pgedge-postgrest",               "deb": "pgedge-postgrest"},
     {"category": "tool",      "name": "etcd",                "description": "Distributed key-value store",          "enabled": false,  "rhel": "pgedge-etcd",                    "deb": "pgedge-etcd"},
-    {"category": "tool",      "name": "ace",                 "description": "ACE platform component",               "enabled": false,  "rhel": "pgedge-ace",                     "deb": "pgedge-ace"},
+    {"category": "tool",      "name": "ace",                 "description": "ACE platform component",               "enabled": true,  "rhel": "pgedge-ace",                     "deb": "pgedge-ace"},
     {"category": "tool",      "name": "radar",               "description": "Radar monitoring component",           "enabled": false,  "rhel": "pgedge-radar",                   "deb": "pgedge-radar"},
 
     {"category": "ha",        "name": "patroni-consul",      "description": "Patroni with Consul DCS",              "enabled": false,  "rhel": "pgedge-patroni-consul",          "deb": null,                              "_deb_note": "Covered by pgedge-patroni"},
@@ -52,7 +52,7 @@
     {"category": "ai_dba",    "name": "ai-dba-collector",    "description": "AI DBA metrics collector",             "enabled": false,  "rhel": "pgedge-ai-dba-collector",        "deb": "pgedge-ai-dba-collector"},
     {"category": "ai_dba",    "name": "ai-dba-client",       "description": "AI DBA CLI client",                    "enabled": false,  "rhel": "pgedge-ai-dba-client",           "deb": "pgedge-ai-dba-client"},
 
-    {"category": "enterprise","name": "enterprise-all",      "description": "Enterprise all-in-one meta-package",   "enabled": false, "rhel": "pgedge-enterprise-all_{PG}",     "deb": "pgedge-enterprise-all-{PG}"},
+    {"category": "enterprise","name": "enterprise-all",      "description": "Enterprise all-in-one meta-package",   "enabled": true, "rhel": "pgedge-enterprise-all_{PG}",     "deb": "pgedge-enterprise-all-{PG}"},
     {"category": "enterprise","name": "enterprise-postgres", "description": "Enterprise PostgreSQL meta-package",   "enabled": false, "rhel": "pgedge-enterprise-postgres_{PG}","deb": "pgedge-enterprise-postgres-{PG}"}
 
   ]

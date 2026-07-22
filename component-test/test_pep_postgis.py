@@ -1,4 +1,5 @@
 import os
+import re
 import sys
 import subprocess
 from pathlib import Path
@@ -38,7 +39,15 @@ pgport = os.getenv("PG_PORT", "5432")
 pgdata = os.getenv("PG_DATA_DIR", "/tmp/n1")
 pg_major_version = os.getenv("PG_MAJOR_VERSION", "16")
 postgis_major_version = os.getenv("POSTGIS_MAJOR_VERSION", "3")
-postgis_version = os.getenv(f"PGEDGE_POSTGIS35_{pg_major_version}_VERSION", "3.5.4")
+
+# PostGIS versions. On RHEL each series is a distinct package (postgis35 / postgis36);
+# POSTGIS_TARGET_VERSION (35 or 36) selects which single series to test. Debian is
+# unaffected (one package, a new minor arrives as an in-place upgrade).
+postgis35_version = os.getenv(f"PGEDGE_POSTGIS35_{pg_major_version}_VERSION", "3.5.7")
+postgis36_version = os.getenv(f"PGEDGE_POSTGIS36_{pg_major_version}_VERSION", "3.6.4")
+
+# RHEL-only: which PostGIS series to test. Valid values: "35", "36".
+postgis_target_version = os.getenv("POSTGIS_TARGET_VERSION", "35").strip()
 
 # User configuration
 rhel_pguser = os.getenv("PG_USER", "postgres")
@@ -47,7 +56,15 @@ deb_pguser = os.getenv("DEB_PG_USER", "postgres")
 # RHEL-specific configuration
 rhel_pgbin = os.getenv("PG_BIN_PATH", f"/usr/pgsql-{pg_major_version}/bin")
 rhel_pg_path = os.getenv("RHEL_PG_PATH", f"/usr/pgsql-{pg_major_version}")
-rhel_package = os.getenv("POSTGIS_PACKAGE", f"pgedge-postgis35_{pg_major_version}")
+# RHEL PostGIS package + expected version, selected by POSTGIS_TARGET_VERSION.
+rhel_postgis35_package = os.getenv("POSTGIS_PACKAGE", f"pgedge-postgis35_{pg_major_version}")
+rhel_postgis36_package = os.getenv("POSTGIS36_PACKAGE", f"pgedge-postgis36_{pg_major_version}")
+if postgis_target_version == "36":
+    rhel_package = rhel_postgis36_package
+    rhel_postgis_version = postgis36_version
+else:
+    rhel_package = rhel_postgis35_package
+    rhel_postgis_version = postgis35_version
 rhel_postgis_lib = os.getenv("RHEL_POSTGIS_LIB", f"/usr/pgsql-{pg_major_version}/lib")
 
 # Debian-specific configuration
@@ -56,6 +73,21 @@ deb_pg_path = os.getenv("DEB_PG_PATH", f"/usr/lib/postgresql/{pg_major_version}"
 deb_pg_share_path = os.getenv("DEB_PG_SHARE_PATH", f"/usr/share/postgresql/{pg_major_version}")
 deb_package = os.getenv("DEB_POSTGIS_PACKAGE", f"pgedge-postgresql-{pg_major_version}-postgis-{postgis_major_version}")
 deb_postgis_lib = os.getenv("DEB_POSTGIS_LIB", f"/usr/lib/postgresql/{pg_major_version}/lib")
+
+# Debian ships a single postgis-3 package that always upgrades in place to the newest
+# minor, so its expected version is the HIGHEST of the configured PostGIS versions
+# (e.g. 3.6 > 3.5), regardless of the RHEL target. Override via DEB_POSTGIS_VERSION.
+def _highest_version(*versions):
+    """Return the highest version string by numeric components (e.g. '3.6.4' > '3.5.7')."""
+    return max(
+        (v for v in versions if v),
+        key=lambda v: [int(n) for n in re.findall(r"\d+", v)],
+        default="",
+    )
+
+deb_postgis_version = os.getenv(
+    "DEB_POSTGIS_VERSION", _highest_version(postgis35_version, postgis36_version)
+)
 
 # PostGIS stripped library names (comma-separated list)
 postgis_stripped_lib = os.getenv("POSTGIS_STRIPPED_LIB", "postgis-3.so,address_standardizer-3.so,address_standardizer_data_us-3.so,postgis_raster-3.so,postgis_topology-3.so,postgis_tiger_geocoder-3.so")
@@ -150,7 +182,10 @@ def test_configure_repository(container_name, container_type):
 
 @pytest.mark.parametrize("container_name,container_type", all_containers)
 def test_component_install(container_name, container_type):
-    """Step 2: Install PostGIS package using package_management module"""
+    """Step 2: Install the selected PostGIS package using package_management module
+
+    On RHEL the package is the series chosen by POSTGIS_TARGET_VERSION (35 or 36).
+    """
     container_name = container_name.strip()
     if not container_name:
         pytest.skip("No container defined in env")
@@ -228,12 +263,14 @@ def test_component_package_version(container_name, container_type):
     if not container_name:
         pytest.skip("No container defined in env")
 
-    if not postgis_version:
-        pytest.skip("No POSTGIS_VERSION defined in env, skipping version check")
-
     # Get container-specific configuration
     config = get_container_config(container_type)
     postgis_package = config["postgis_package"]
+
+    # RHEL expected version follows POSTGIS_TARGET_VERSION; Debian uses its own.
+    expected_version = rhel_postgis_version if container_type == "rhel" else deb_postgis_version
+    if not expected_version:
+        pytest.skip("No PostGIS version defined in env, skipping version check")
 
     try:
         container = client.containers.get(container_name)
@@ -247,7 +284,7 @@ def test_component_package_version(container_name, container_type):
     # Use the package_management module to verify the package version
     try:
         success, platform, installed_version, message = package_management.verify_package_version(
-            container, postgis_package, postgis_version
+            container, postgis_package, expected_version
         )
         assert success, f"Version verification failed: {message}"
         print(f"✅ {message}")

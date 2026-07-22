@@ -60,7 +60,7 @@ def detect_component_from_test_file(config):
         'test_pep_postgis': {
             'name': 'PostGIS',
             'version_env': 'PGEDGE_POSTGIS35_16_VERSION',
-            'version_default': '3.5.4',
+            'version_default': '3.5.7',
             'rhel_package_env': 'POSTGIS_PACKAGE',
             'rhel_package_default': 'pgedge-postgis35_16',
             'deb_package_env': 'DEB_POSTGIS_PACKAGE',

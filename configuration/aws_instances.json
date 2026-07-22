@@ -46,7 +46,7 @@
       "username":    "admin",
       "key_file":    "",
       "description": "Debian 13 / ap-south-1",
-      "enabled":     true
+      "enabled":     false
     },
     {
       "name":        "z_Debian12_AMD",
@@ -110,7 +110,7 @@
       "username":    "ubuntu",
       "key_file":    "",
       "description": "Ubuntu 24.04 ARM / ap-south-1",
-      "enabled":     false
+      "enabled":     true
     }
   ]
 }

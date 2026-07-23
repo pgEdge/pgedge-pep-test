@@ -76,13 +76,19 @@ def merge_evidence(evidences: list) -> dict:
     """Combine a list of {l2a,l2b,l1} evidence dicts, per rung, safely.
 
     For each rung the merged value is the highest-ranked contribution:
-    not_proven > proven > not_attempted. Missing keys are treated as
-    'not_attempted'.
+    not_proven > proven > not_attempted. A MISSING rung key means 'not_attempted';
+    a SUPPLIED value outside {proven, not_proven, not_attempted} is a contract
+    error and raises ValueError (never silently downgraded to 'not_attempted').
     """
     out = {}
     for rung in _RUNGS:
         best = 0
         for ev in evidences:
-            best = max(best, _RANK.get((ev or {}).get(rung, "not_attempted"), 0))
+            val = (ev or {}).get(rung, "not_attempted")
+            if val not in _RANK:
+                raise ValueError(
+                    f"unknown evidence value {val!r} for rung {rung!r}; "
+                    f"expected one of {sorted(_RANK)}")
+            best = max(best, _RANK[val])
         out[rung] = _UNRANK[best]
     return out

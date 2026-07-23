@@ -126,7 +126,7 @@ def test_only_malformed_is_incomplete_and_flagged(tmp_path):
     _dir_with(tmp_path, "report-bad.xml", "<not-xml")
     summary, code = prs.build_summary(tmp_path, mode="observe")
     assert summary["execution_status"] == "incomplete"
-    assert summary["reason"] == "reports present but unparseable"
+    assert summary["reason"] == "reports listed but unreadable or unparseable"
     assert summary["malformed_reports"] == 1
 
 
@@ -203,4 +203,53 @@ def test_garbage_numeric_attr_is_malformed_not_crash(tmp_path):
     summary, code = prs.build_summary(tmp_path, mode="observe")
     assert summary["execution_status"] == "incomplete"
     assert summary["malformed_reports"] == 1
+    assert code == 0
+
+
+def test_missing_report_path_is_incomplete_not_crash(tmp_path):
+    # run_pep_tf.sh can record an expected JUnit path even when pytest died before
+    # writing it. An explicitly-listed missing path must be handled, not crash.
+    missing = tmp_path / "never-written.xml"
+    summary, code = prs.build_summary(reports=[str(missing)], mode="observe")
+    assert summary["execution_status"] == "incomplete"
+    assert summary["test_verdict"] == "not_run"
+    assert summary["malformed_reports"] == 1
+    assert code == 0                      # observe never fails the job
+    # gate: incomplete (not completed&pass, not fail/infra) -> exit 2
+    _, gcode = prs.build_summary(reports=[str(missing)], mode="gate")
+    assert gcode == 2
+
+
+def test_empty_manifest_is_incomplete_and_does_not_fall_back(tmp_path):
+    # An empty current-run manifest is VALID and yields incomplete/not_run; it must
+    # NOT fall back to a historical/stale report even if one is present via xml_dir.
+    stale = tmp_path / "consolidated-old"; stale.mkdir()
+    (stale / "report-rpm-rag-17.xml").write_text(_FAIL_XML)
+    manifest = tmp_path / "current-run.json"
+    manifest.write_text(json.dumps({"reports": []}))
+    summary, code = prs.build_summary(
+        tmp_path, mode="observe", report_manifest=str(manifest))
+    assert summary["execution_status"] == "incomplete"
+    assert summary["test_verdict"] == "not_run"
+    assert summary["counts"]["tests"] == 0      # stale FAIL NOT counted
+    assert code == 0
+
+
+def test_missing_manifest_file_is_infra_failure(tmp_path):
+    # A manifest explicitly requested but absent is a plumbing/handoff failure.
+    missing_manifest = tmp_path / "nope.json"
+    summary, code = prs.build_summary(mode="observe", report_manifest=str(missing_manifest))
+    assert summary["execution_status"] == "infra_failure"
+    assert summary["test_verdict"] == "not_run"
+    assert code == 0                      # observe still exits 0
+    _, gcode = prs.build_summary(mode="gate", report_manifest=str(missing_manifest))
+    assert gcode == 1                     # gate: infra_failure -> exit 1
+
+
+def test_malformed_manifest_json_is_infra_failure(tmp_path):
+    manifest = tmp_path / "current-run.json"
+    manifest.write_text("{ this is not valid json")
+    summary, code = prs.build_summary(mode="observe", report_manifest=str(manifest))
+    assert summary["execution_status"] == "infra_failure"
+    assert summary["test_verdict"] == "not_run"
     assert code == 0

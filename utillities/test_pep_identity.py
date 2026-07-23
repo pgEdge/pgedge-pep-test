@@ -3,6 +3,8 @@ import importlib.util
 import sys
 from pathlib import Path
 
+import pytest
+
 _spec = importlib.util.spec_from_file_location(
     "pep_identity", str(Path(__file__).parent / "pep_identity.py")
 )
@@ -76,3 +78,10 @@ def test_merge_evidence_not_proven_dominates():
 def test_merge_evidence_all_not_attempted():
     merged = pid.merge_evidence([{"l1": "not_attempted"}, {}])
     assert merged == {"l2a": "not_attempted", "l2b": "not_attempted", "l1": "not_attempted"}
+
+
+def test_merge_evidence_rejects_unknown_value():
+    # A supplied value outside the vocabulary is a contract error — it must raise,
+    # not be silently downgraded to 'not_attempted' (a missing key still means that).
+    with pytest.raises(ValueError):
+        pid.merge_evidence([{"l2a": "definitely", "l2b": "proven", "l1": "proven"}])

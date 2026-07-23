@@ -43,9 +43,12 @@ def _resolve_report_paths(xml_dir=None, reports=None, report_manifest=None):
 def _aggregate_junit(paths):
     """Sum testcase counts across the given report files (this run only).
 
-    Returns (totals, parsed_any, malformed_count). A file that fails to parse OR
-    carries a non-numeric count attribute is counted as malformed (not partially
-    summed and not silently dropped), so a single bad report never crashes the run.
+    Returns (totals, parsed_any, malformed_count). A file that is missing/unreadable
+    (OSError), fails to parse (ParseError), OR carries a non-numeric count attribute
+    (ValueError) is counted as malformed (not partially summed and not silently
+    dropped), so a single bad/absent report never crashes the run. A missing path is
+    reachable in practice: run_pep_tf.sh can record an expected JUnit path even when
+    pytest died before writing the file.
     """
     totals = {"tests": 0, "failures": 0, "errors": 0, "skipped": 0}
     parsed_any = False
@@ -64,7 +67,7 @@ def _aggregate_junit(paths):
             for s in suites:
                 for k in file_totals:
                     file_totals[k] += int(s.get(k, 0))
-        except (ET.ParseError, ValueError):
+        except (OSError, ET.ParseError, ValueError):   # missing/unreadable, bad XML, or bad count
             malformed += 1
             continue
         if suites:                       # valid XML with >=1 <testsuite>
@@ -87,7 +90,11 @@ def build_summary(xml_dir=None, *, mode="observe", preview=False, identity_evide
       * tests == 0        -> incomplete / not_run ("no tests collected")
       * ANY malformed report present -> incomplete (we cannot claim a complete,
         trustworthy result even if some reports parsed); verdict still reflects
-        what parsed, and malformed_reports is flagged.
+        what parsed, and malformed_reports is flagged. "Malformed" here also covers
+        an explicitly-listed path that is missing/unreadable (test run failed to
+        emit it) -> incomplete, never a crash.
+      * missing/malformed report_manifest FILE -> infra_failure (the reporting
+        handoff/plumbing is broken, distinct from "tests produced no reports").
       * failures+errors>0 -> completed / fail
       * some executed     -> completed / pass   (executed = tests - skipped)
       * all skipped       -> completed / not_run ("all tests skipped") — NOT pass
@@ -129,12 +136,20 @@ def build_summary(xml_dir=None, *, mode="observe", preview=False, identity_evide
     if infra_error is not None:
         return _finish("infra_failure", "not_run", zero, reason=infra_error)
 
-    paths = _resolve_report_paths(
-        xml_dir=(Path(xml_dir) if xml_dir is not None else None),
-        reports=reports, report_manifest=report_manifest)
+    # A missing/malformed manifest FILE is a plumbing failure (we cannot even
+    # learn which reports to read) -> infra_failure, not a partial test result.
+    # An EMPTY manifest ({"reports": []}) is valid and yields [] (no fallback glob).
+    try:
+        paths = _resolve_report_paths(
+            xml_dir=(Path(xml_dir) if xml_dir is not None else None),
+            reports=reports, report_manifest=report_manifest)
+    except (OSError, json.JSONDecodeError) as e:
+        return _finish("infra_failure", "not_run", zero,
+                       reason=f"report manifest unreadable ({e.__class__.__name__})")
     totals, parsed_any, malformed = _aggregate_junit(paths)
     if not parsed_any:
-        reason = "reports present but unparseable" if malformed else "no JUnit reports found"
+        reason = ("reports listed but unreadable or unparseable" if malformed
+                  else "no JUnit reports found")
         return _finish("incomplete", "not_run", totals, reason=reason, malformed=malformed)
     if totals["tests"] == 0:
         return _finish("incomplete", "not_run", totals,
@@ -151,7 +166,7 @@ def build_summary(xml_dir=None, *, mode="observe", preview=False, identity_evide
     # Any unparseable report means we cannot truthfully claim 'completed'.
     status = "completed" if malformed == 0 else "incomplete"
     if malformed and reason is None:
-        reason = "some reports unparseable; result may be partial"
+        reason = "some reports unreadable or unparseable; result may be partial"
     return _finish(status, verdict, totals, reason=reason, malformed=malformed)
 
 

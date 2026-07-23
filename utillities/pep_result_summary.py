@@ -65,7 +65,9 @@ def _validate_identity_evidence(data):
             f"identity-evidence has unexpected key(s): {', '.join(extra)}")
     for rung in _EVIDENCE_RUNGS:
         val = data[rung]
-        if val not in _EVIDENCE_VALUES:
+        # Guard membership: a JSON array/object value is unhashable and `in` on a
+        # set would raise TypeError, bypassing observe-mode handling.
+        if not isinstance(val, str) or val not in _EVIDENCE_VALUES:
             raise SideFileError(
                 f"identity-evidence rung {rung!r} must be one of "
                 f"{sorted(_EVIDENCE_VALUES)}, got {val!r}")

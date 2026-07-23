@@ -383,6 +383,32 @@ def test_main_identity_extra_key_is_infra_failure(tmp_path):
     assert code == 1
 
 
+def test_main_identity_array_value_is_infra_failure(tmp_path):
+    # A JSON array value is unhashable; membership must be guarded, not crash.
+    data, code = _identity_main(tmp_path, json.dumps(
+        {"l2a": ["proven"], "l2b": "proven", "l1": "proven"}), mode="observe")
+    assert data["execution_status"] == "infra_failure"
+    assert data["test_verdict"] == "not_run"
+    assert code == 0                                  # observe still exits 0
+    gdata, gcode = _identity_main(tmp_path, json.dumps(
+        {"l2a": ["proven"], "l2b": "proven", "l1": "proven"}), mode="gate")
+    assert gdata["execution_status"] == "infra_failure"   # summary JSON written
+    assert gcode == 1
+
+
+def test_main_identity_object_value_is_infra_failure(tmp_path):
+    # A JSON object value is likewise unhashable.
+    data, code = _identity_main(tmp_path, json.dumps(
+        {"l2a": {"nested": True}, "l2b": "proven", "l1": "proven"}), mode="observe")
+    assert data["execution_status"] == "infra_failure"
+    assert data["test_verdict"] == "not_run"
+    assert code == 0
+    gdata, gcode = _identity_main(tmp_path, json.dumps(
+        {"l2a": {"nested": True}, "l2b": "proven", "l1": "proven"}), mode="gate")
+    assert gdata["execution_status"] == "infra_failure"
+    assert gcode == 1
+
+
 def test_main_valid_identity_reaches_completed_result(tmp_path):
     # A well-formed identity object is accepted and emitted in a completed result.
     data, code = _identity_main(tmp_path, json.dumps(

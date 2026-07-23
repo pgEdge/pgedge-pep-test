@@ -19,6 +19,33 @@ from pathlib import Path
 _NOT_ATTEMPTED = {"l2a": "not_attempted", "l2b": "not_attempted", "l1": "not_attempted"}
 
 
+class ManifestSchemaError(ValueError):
+    """The report_manifest JSON parsed but has the wrong shape (not a plumbing
+    read error, but still an unusable manifest -> treated as infra_failure)."""
+
+
+class SideFileError(Exception):
+    """An optional CLI side file (identity/provenance JSON) is missing, unreadable,
+    malformed, or the wrong shape -> treated as infra_failure by main()."""
+
+
+def _load_optional_json_object(path, label):
+    """Load an optional JSON-object side file. Returns None if `path` is falsy.
+
+    Raises SideFileError (never a raw OSError/JSONDecodeError/shape crash) on a
+    missing/unreadable/malformed file or a top level that is not a JSON object.
+    """
+    if not path:
+        return None
+    try:
+        data = json.loads(Path(path).read_text())
+    except (OSError, json.JSONDecodeError) as e:
+        raise SideFileError(f"{label} file unreadable or invalid JSON ({e.__class__.__name__})")
+    if not isinstance(data, dict):
+        raise SideFileError(f"{label} file must contain a JSON object, got {type(data).__name__}")
+    return data
+
+
 def _resolve_report_paths(xml_dir=None, reports=None, report_manifest=None):
     """Decide WHICH report files belong to THIS execution.
 
@@ -33,8 +60,24 @@ def _resolve_report_paths(xml_dir=None, reports=None, report_manifest=None):
         a single run (e.g. a fresh CI runner). Documented as ad-hoc.
     """
     if report_manifest is not None:
-        data = json.loads(Path(report_manifest).read_text())
-        return [Path(p) for p in data.get("reports", [])]
+        # An explicitly-supplied manifest is authoritative: validate its schema and,
+        # on any violation, raise (caller classifies as infra_failure). NEVER fall
+        # back to glob discovery here. An empty `reports` list is valid (-> []).
+        data = json.loads(Path(report_manifest).read_text())   # JSONDecodeError -> caller
+        if not isinstance(data, dict):
+            raise ManifestSchemaError(
+                f"manifest top level must be a JSON object, got {type(data).__name__}")
+        raw = data.get("reports", [])
+        if not isinstance(raw, list):
+            raise ManifestSchemaError(
+                f"manifest 'reports' must be a list, got {type(raw).__name__}")
+        out = []
+        for entry in raw:
+            if not isinstance(entry, str):
+                raise ManifestSchemaError(
+                    f"manifest 'reports' entries must be strings, got {type(entry).__name__}")
+            out.append(Path(entry))
+        return out
     if reports is not None:
         return [Path(p) for p in reports]
     return sorted(Path(xml_dir).glob("**/*.xml")) if xml_dir is not None else []
@@ -143,9 +186,9 @@ def build_summary(xml_dir=None, *, mode="observe", preview=False, identity_evide
         paths = _resolve_report_paths(
             xml_dir=(Path(xml_dir) if xml_dir is not None else None),
             reports=reports, report_manifest=report_manifest)
-    except (OSError, json.JSONDecodeError) as e:
+    except (OSError, json.JSONDecodeError, ManifestSchemaError) as e:
         return _finish("infra_failure", "not_run", zero,
-                       reason=f"report manifest unreadable ({e.__class__.__name__})")
+                       reason=f"report manifest unreadable or invalid ({e.__class__.__name__})")
     totals, parsed_any, malformed = _aggregate_junit(paths)
     if not parsed_any:
         reason = ("reports listed but unreadable or unparseable" if malformed
@@ -188,15 +231,21 @@ def main(argv=None):
     ap.add_argument("--provenance-json", default=None, help="path to provenance JSON")
     args = ap.parse_args(argv)
 
-    identity = json.loads(Path(args.identity_json).read_text()) if args.identity_json else None
-    provenance = json.loads(Path(args.provenance_json).read_text()) if args.provenance_json else None
+    # Guard the optional side files: a missing/unreadable/malformed/wrong-shape
+    # identity or provenance file is a plumbing fault -> infra_failure, never a
+    # crash. The summary JSON is still written below so the outcome is recorded.
+    try:
+        identity = _load_optional_json_object(args.identity_json, "identity-evidence")
+        provenance = _load_optional_json_object(args.provenance_json, "provenance")
+        summary, exit_code = build_summary(
+            args.xml_dir, mode=args.mode, preview=args.preview,
+            identity_evidence=identity, provenance=provenance,
+            validation_error=args.validation_error, infra_error=args.infra_error,
+            reports=args.reports, report_manifest=args.reports_manifest,
+        )
+    except SideFileError as e:
+        summary, exit_code = build_summary(mode=args.mode, infra_error=str(e))
 
-    summary, exit_code = build_summary(
-        args.xml_dir, mode=args.mode, preview=args.preview,
-        identity_evidence=identity, provenance=provenance,
-        validation_error=args.validation_error, infra_error=args.infra_error,
-        reports=args.reports, report_manifest=args.reports_manifest,
-    )
     Path(args.out).write_text(json.dumps(summary, indent=2))
     print(f"[pep-summary] execution={summary['execution_status']} "
           f"verdict={summary['test_verdict']} mode={args.mode} exit={exit_code}")

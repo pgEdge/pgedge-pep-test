@@ -253,3 +253,67 @@ def test_malformed_manifest_json_is_infra_failure(tmp_path):
     assert summary["execution_status"] == "infra_failure"
     assert summary["test_verdict"] == "not_run"
     assert code == 0
+
+
+# --- manifest SCHEMA validation (valid JSON, wrong shape -> infra_failure) ---
+
+def test_manifest_top_level_array_is_infra_failure(tmp_path):
+    m = tmp_path / "current-run.json"; m.write_text("[]")   # valid JSON, not an object
+    summary, code = prs.build_summary(mode="observe", report_manifest=str(m))
+    assert summary["execution_status"] == "infra_failure"
+    assert summary["test_verdict"] == "not_run"
+    assert code == 0
+    _, gcode = prs.build_summary(mode="gate", report_manifest=str(m))
+    assert gcode == 1
+
+
+def test_manifest_reports_null_is_infra_failure(tmp_path):
+    m = tmp_path / "current-run.json"; m.write_text(json.dumps({"reports": None}))
+    summary, code = prs.build_summary(mode="observe", report_manifest=str(m))
+    assert summary["execution_status"] == "infra_failure"
+    assert code == 0
+
+
+def test_manifest_non_string_entry_is_infra_failure(tmp_path):
+    m = tmp_path / "current-run.json"; m.write_text(json.dumps({"reports": [123]}))
+    summary, code = prs.build_summary(mode="observe", report_manifest=str(m))
+    assert summary["execution_status"] == "infra_failure"
+    assert code == 0
+
+
+# --- CLI (main) side-file guards: identity/provenance JSON -> infra_failure ---
+
+def test_main_missing_identity_file_is_infra_failure(tmp_path):
+    _dir_with(tmp_path, "report-rpm-rag-17.xml", _PASS_XML)
+    out = tmp_path / "summary.json"
+    code = prs.main(["--xml-dir", str(tmp_path), "--out", str(out),
+                     "--mode", "observe", "--identity-json", str(tmp_path / "nope.json")])
+    data = json.loads(out.read_text())          # summary still written
+    assert data["execution_status"] == "infra_failure"
+    assert data["test_verdict"] == "not_run"
+    assert code == 0
+    gcode = prs.main(["--xml-dir", str(tmp_path), "--out", str(out),
+                      "--mode", "gate", "--identity-json", str(tmp_path / "nope.json")])
+    assert gcode == 1
+
+
+def test_main_malformed_provenance_file_is_infra_failure(tmp_path):
+    _dir_with(tmp_path, "report-rpm-rag-17.xml", _PASS_XML)
+    (tmp_path / "prov.json").write_text("{bad json")
+    out = tmp_path / "summary.json"
+    code = prs.main(["--xml-dir", str(tmp_path), "--out", str(out),
+                     "--mode", "observe", "--provenance-json", str(tmp_path / "prov.json")])
+    data = json.loads(out.read_text())
+    assert data["execution_status"] == "infra_failure"
+    assert code == 0
+
+
+def test_main_invalid_shape_identity_is_infra_failure(tmp_path):
+    _dir_with(tmp_path, "report-rpm-rag-17.xml", _PASS_XML)
+    (tmp_path / "id.json").write_text("[]")     # valid JSON, wrong shape (not an object)
+    out = tmp_path / "summary.json"
+    gcode = prs.main(["--xml-dir", str(tmp_path), "--out", str(out),
+                      "--mode", "gate", "--identity-json", str(tmp_path / "id.json")])
+    data = json.loads(out.read_text())
+    assert data["execution_status"] == "infra_failure"
+    assert gcode == 1

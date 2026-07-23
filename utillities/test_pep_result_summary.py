@@ -317,3 +317,78 @@ def test_main_invalid_shape_identity_is_infra_failure(tmp_path):
     data = json.loads(out.read_text())
     assert data["execution_status"] == "infra_failure"
     assert gcode == 1
+
+
+# --- manifest MUST contain a 'reports' key; empty-string entries invalid ---
+
+def test_manifest_missing_reports_key_is_infra_failure(tmp_path):
+    # {} is a valid JSON object but carries no run scope -> infra_failure, NOT an
+    # empty (valid) manifest and NOT a fall-back to glob.
+    m = tmp_path / "current-run.json"; m.write_text(json.dumps({}))
+    summary, code = prs.build_summary(mode="observe", report_manifest=str(m))
+    assert summary["execution_status"] == "infra_failure"
+    assert summary["test_verdict"] == "not_run"
+    assert code == 0
+    _, gcode = prs.build_summary(mode="gate", report_manifest=str(m))
+    assert gcode == 1
+
+
+def test_manifest_empty_reports_list_remains_valid(tmp_path):
+    # {"reports": []} is still a VALID empty manifest -> incomplete/not_run, not infra.
+    m = tmp_path / "current-run.json"; m.write_text(json.dumps({"reports": []}))
+    summary, code = prs.build_summary(mode="observe", report_manifest=str(m))
+    assert summary["execution_status"] == "incomplete"
+    assert summary["test_verdict"] == "not_run"
+    assert code == 0
+
+
+def test_manifest_empty_string_entry_is_infra_failure(tmp_path):
+    m = tmp_path / "current-run.json"; m.write_text(json.dumps({"reports": [""]}))
+    summary, code = prs.build_summary(mode="observe", report_manifest=str(m))
+    assert summary["execution_status"] == "infra_failure"
+    assert summary["test_verdict"] == "not_run"
+    assert code == 0
+
+
+# --- identity-evidence SEMANTIC schema (via main): rungs + values, strict keys ---
+
+def _identity_main(tmp_path, id_body, mode="gate"):
+    _dir_with(tmp_path, "report-rpm-rag-17.xml", _PASS_XML)
+    (tmp_path / "id.json").write_text(id_body)
+    out = tmp_path / "summary.json"
+    code = prs.main(["--xml-dir", str(tmp_path), "--out", str(out),
+                     "--mode", mode, "--identity-json", str(tmp_path / "id.json")])
+    return json.loads(out.read_text()), code
+
+
+def test_main_identity_missing_rung_is_infra_failure(tmp_path):
+    data, code = _identity_main(tmp_path, json.dumps({"l2a": "proven", "l1": "not_attempted"}))
+    assert data["execution_status"] == "infra_failure"    # l2b missing
+    assert data["test_verdict"] == "not_run"
+    assert code == 1
+
+
+def test_main_identity_unknown_value_is_infra_failure(tmp_path):
+    data, code = _identity_main(
+        tmp_path, json.dumps({"l2a": "maybe", "l2b": "not_proven", "l1": "proven"}))
+    assert data["execution_status"] == "infra_failure"    # "maybe" not a valid value
+    assert code == 1
+
+
+def test_main_identity_extra_key_is_infra_failure(tmp_path):
+    # STRICT extra-key handling: an unexpected key -> infra_failure (not emitted).
+    data, code = _identity_main(tmp_path, json.dumps(
+        {"l2a": "proven", "l2b": "proven", "l1": "proven", "l3": "proven"}))
+    assert data["execution_status"] == "infra_failure"
+    assert code == 1
+
+
+def test_main_valid_identity_reaches_completed_result(tmp_path):
+    # A well-formed identity object is accepted and emitted in a completed result.
+    data, code = _identity_main(tmp_path, json.dumps(
+        {"l2a": "proven", "l2b": "not_proven", "l1": "proven"}), mode="observe")
+    assert data["execution_status"] == "completed"
+    assert data["test_verdict"] == "pass"
+    assert data["identity_evidence"] == {
+        "l2a": "proven", "l2b": "not_proven", "l1": "proven"}
+    assert code == 0

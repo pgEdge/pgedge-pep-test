@@ -17,6 +17,8 @@ import xml.etree.ElementTree as ET
 from pathlib import Path
 
 _NOT_ATTEMPTED = {"l2a": "not_attempted", "l2b": "not_attempted", "l1": "not_attempted"}
+_EVIDENCE_RUNGS = ("l2a", "l2b", "l1")
+_EVIDENCE_VALUES = {"proven", "not_proven", "not_attempted"}
 
 
 class ManifestSchemaError(ValueError):
@@ -46,6 +48,30 @@ def _load_optional_json_object(path, label):
     return data
 
 
+def _validate_identity_evidence(data):
+    """Semantically validate a supplied identity-evidence object before it can be
+    emitted in a result. Requires EXACTLY the rungs l2a/l2b/l1, each holding one of
+    proven|not_proven|not_attempted. Extra keys are rejected (STRICT) so no
+    unexpected structure leaks into a 'completed' summary. Raises SideFileError on
+    any violation -> main() classifies it as infra_failure.
+    """
+    missing = [k for k in _EVIDENCE_RUNGS if k not in data]
+    if missing:
+        raise SideFileError(
+            f"identity-evidence missing required rung(s): {', '.join(missing)}")
+    extra = sorted(k for k in data if k not in _EVIDENCE_RUNGS)
+    if extra:
+        raise SideFileError(
+            f"identity-evidence has unexpected key(s): {', '.join(extra)}")
+    for rung in _EVIDENCE_RUNGS:
+        val = data[rung]
+        if val not in _EVIDENCE_VALUES:
+            raise SideFileError(
+                f"identity-evidence rung {rung!r} must be one of "
+                f"{sorted(_EVIDENCE_VALUES)}, got {val!r}")
+    return data
+
+
 def _resolve_report_paths(xml_dir=None, reports=None, report_manifest=None):
     """Decide WHICH report files belong to THIS execution.
 
@@ -62,12 +88,15 @@ def _resolve_report_paths(xml_dir=None, reports=None, report_manifest=None):
     if report_manifest is not None:
         # An explicitly-supplied manifest is authoritative: validate its schema and,
         # on any violation, raise (caller classifies as infra_failure). NEVER fall
-        # back to glob discovery here. An empty `reports` list is valid (-> []).
+        # back to glob discovery here. The `reports` key is REQUIRED ({} is invalid),
+        # but an empty `reports` list is valid (-> []).
         data = json.loads(Path(report_manifest).read_text())   # JSONDecodeError -> caller
         if not isinstance(data, dict):
             raise ManifestSchemaError(
                 f"manifest top level must be a JSON object, got {type(data).__name__}")
-        raw = data.get("reports", [])
+        if "reports" not in data:
+            raise ManifestSchemaError("manifest must contain a 'reports' key")
+        raw = data["reports"]
         if not isinstance(raw, list):
             raise ManifestSchemaError(
                 f"manifest 'reports' must be a list, got {type(raw).__name__}")
@@ -76,6 +105,8 @@ def _resolve_report_paths(xml_dir=None, reports=None, report_manifest=None):
             if not isinstance(entry, str):
                 raise ManifestSchemaError(
                     f"manifest 'reports' entries must be strings, got {type(entry).__name__}")
+            if not entry.strip():
+                raise ManifestSchemaError("manifest 'reports' entries must be non-empty strings")
             out.append(Path(entry))
         return out
     if reports is not None:
@@ -236,6 +267,8 @@ def main(argv=None):
     # crash. The summary JSON is still written below so the outcome is recorded.
     try:
         identity = _load_optional_json_object(args.identity_json, "identity-evidence")
+        if identity is not None:
+            _validate_identity_evidence(identity)
         provenance = _load_optional_json_object(args.provenance_json, "provenance")
         summary, exit_code = build_summary(
             args.xml_dir, mode=args.mode, preview=args.preview,

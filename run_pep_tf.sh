@@ -21,6 +21,29 @@ LIST_CONTAINERS=false
 ARCH=""
 DRY_RUN="false"
 
+# ── Integration bridge (Task 3) ─────────────────────────────────────────────
+# All of the following default empty so a standalone/manual/current-CI run
+# (no integration flags) behaves byte-for-byte as before. Integration mode is
+# only activated when --integration or --expected-version is supplied.
+PEP_RC_VALIDATION=3          # exit code reserved for a KNOWN request-validation rejection
+INTEGRATION_FLAG=""
+EXPECTED_VERSION=""
+EXPECTED_BUILDNUM=""
+EFFECTIVE_TAG=""
+EXPECTED_RPM=""
+EXPECTED_DEB=""
+EXPECTED_BINARY=""
+SCENARIO=""
+PACKAGE_NAME=""
+
+# Exit with $1, but if it equals PEP_RC_VALIDATION preserve that exact code so
+# the caller can distinguish a request rejection from an infra failure.
+_pep_die_by_rc() {
+  local rc="$1"
+  [[ "$rc" == "$PEP_RC_VALIDATION" ]] && exit "$PEP_RC_VALIDATION"
+  exit "$rc"
+}
+
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --pgver)
@@ -72,6 +95,51 @@ while [[ $# -gt 0 ]]; do
       DRY_RUN="true"
       CLI_MODE=true
       shift 1
+      ;;
+    --integration)
+      INTEGRATION_FLAG="true"
+      CLI_MODE=true
+      shift 1
+      ;;
+    --expected-version)
+      EXPECTED_VERSION="$2"
+      CLI_MODE=true
+      shift 2
+      ;;
+    --expected-buildnum)
+      EXPECTED_BUILDNUM="$2"
+      CLI_MODE=true
+      shift 2
+      ;;
+    --effective-tag)
+      EFFECTIVE_TAG="$2"
+      CLI_MODE=true
+      shift 2
+      ;;
+    --expected-rpm)
+      EXPECTED_RPM="$2"
+      CLI_MODE=true
+      shift 2
+      ;;
+    --expected-deb)
+      EXPECTED_DEB="$2"
+      CLI_MODE=true
+      shift 2
+      ;;
+    --expected-binary)
+      EXPECTED_BINARY="$2"
+      CLI_MODE=true
+      shift 2
+      ;;
+    --scenario)
+      SCENARIO="$2"
+      CLI_MODE=true
+      shift 2
+      ;;
+    --package-name)
+      PACKAGE_NAME="$2"
+      CLI_MODE=true
+      shift 2
       ;;
     --version|-V)
       echo "$(basename "$0") version ${VERSION}"
@@ -135,6 +203,17 @@ OPTIONS:
   --dry-run               Resolve containers and print what would run, then exit
                           (no pytest, no Docker pulls, no package installs, no repo setup)
 
+  Integration bridge (Task 3 — for pgEdge build pipelines; ignored otherwise):
+  --integration           Activate integration mode (also implied by --expected-version)
+  --expected-version <v>  Build-authoritative expected package version (REQUIRED in integration)
+  --package-name <name>   Canonical package name for the component (e.g. pgedge-rag-server)
+  --scenario <name>       certification (default) or upgrade
+  --expected-buildnum <n> Expected build number (identity input)
+  --effective-tag <tag>   Effective git tag (must start with 'v')
+  --expected-rpm <str>    Expected rpm identity string (rpm family only)
+  --expected-deb <str>    Expected deb identity string (deb family only)
+  --expected-binary <str> Expected binary identity string
+
   --help, -h              Show this help message and exit
 
   --version, -V           Show the test runner version and exit
@@ -182,6 +261,28 @@ if [[ -n "$ARCH" ]]; then
   esac
 fi
 export PEP_ARCH_FILTER="$ARCH"
+
+# ── Integration marker (Task 3) ─────────────────────────────────────────────
+# Activate integration mode when the caller passes --integration or supplies a
+# build-authoritative --expected-version. Nothing below the marker runs unless
+# PEP_INTEGRATION_MODE=1, keeping standalone behavior unchanged.
+if [[ -n "${EXPECTED_VERSION:-}" || "${INTEGRATION_FLAG:-}" == "true" ]]; then
+  export PEP_INTEGRATION_MODE=1
+fi
+
+# Integration-only --repo allowlist validation. Standalone runs keep their
+# permissive behavior (no rejection was present before); in integration mode a
+# repo override outside {release,staging,daily} is a request-validation error.
+# (The resolver CLI also validates repo -> exit 3 as defense-in-depth.)
+if [[ "${PEP_INTEGRATION_MODE:-}" == "1" && -n "$REPO_OVERRIDE" ]]; then
+  case "$REPO_OVERRIDE" in
+    release|staging|daily) ;;
+    *)
+      echo "[integration] ERROR: --repo must be one of release, staging, daily (got '$REPO_OVERRIDE')" >&2
+      exit "$PEP_RC_VALIDATION"
+      ;;
+  esac
+fi
 
 # Discovery shortcut: print the catalog and exit.
 if [[ "$LIST_CONTAINERS" == "true" ]]; then
@@ -443,11 +544,70 @@ for env in "${env_list[@]}"; do
   source "$envfile"
   set +a
 
+  # Snapshot the config's REPO BEFORE the --repo override clobbers it, so the
+  # resolver can record truthful provenance (config layer vs caller layer).
+  CONFIG_REPO="${REPO:-}"
+
   # Apply repo override BEFORE the JSON loader and --dry-run block so that the
   # dry-run output reflects the effective REPO (not the envfile's default).
   if [[ -n "$REPO_OVERRIDE" ]]; then
     export REPO="$REPO_OVERRIDE"
     echo "   Overriding REPO to: $REPO_OVERRIDE"
+  fi
+
+  # ── Integration bridge block (Task 3) ─────────────────────────────────────
+  # Runs only in integration mode; entirely skipped otherwise so standalone,
+  # manual and current-CI runs are unaffected. Must run BEFORE the --dry-run
+  # block so preview rejects an invalid/upgrade request and the dry-run REPO
+  # reflects the resolver-decided channel.
+  if [[ "${PEP_INTEGRATION_MODE:-}" == "1" ]]; then
+    # (a) Resolver control + read-back (no eval of caller strings; the resolver
+    #     validates repo/scenario against the allowlists and exits 3 on a bad one).
+    rm -f test-logs/resolved-config.json
+    PEP_CALLER_REPO="${REPO_OVERRIDE:-}" PEP_CONFIG_REPO="${CONFIG_REPO:-}" \
+    PEP_CALLER_SCENARIO="${SCENARIO:-}" PEP_CFG_UPGRADE="${UPGRADE:-}" \
+      python3 utillities/pep_resolve_cli.py
+    rc=$?; [[ "$rc" != "0" ]] && _pep_die_by_rc "$rc"
+    PEP_CHANNEL="$(python3 utillities/pep_resolve_cli.py --get repo)"
+    rc=$?; [[ "$rc" != "0" ]] && _pep_die_by_rc "$rc"
+    PEP_SCENARIO="$(python3 utillities/pep_resolve_cli.py --get scenario)"
+    rc=$?; [[ "$rc" != "0" ]] && _pep_die_by_rc "$rc"
+    export PEP_CHANNEL PEP_SCENARIO
+    export REPO="$PEP_CHANNEL"
+
+    # (b) Complete the request env BEFORE the preflight. PG major comes from the
+    #     loop variable; family from --platforms scope; the rest from CLI flags.
+    export PG_MAJOR_VERSION="$env"
+    export PEP_COMPONENT="${COMPONENTS:-}"           # single component token, e.g. rag
+    export PEP_PACKAGE_NAME="${PACKAGE_NAME:-}"
+    _pep_family="$(echo "${PLATFORMS:-}" | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]')"
+    export PEP_FAMILY="$_pep_family"                 # rpm|deb (single-target integration)
+    export PEP_CONTAINER_ALIAS="${CONTAINERS_OVERRIDE:-}"
+    export PEP_EXPECTED_VERSION="${EXPECTED_VERSION:-}"
+    # Optional identity inputs: export ONLY when non-empty. The adapter treats an
+    # absent var as "not provided" (None -> dropped), but pep_request rejects a
+    # provided-but-empty optional, so an unset flag must not surface as "".
+    [[ -n "${EXPECTED_BUILDNUM:-}" ]] && export PEP_EXPECTED_BUILDNUM="$EXPECTED_BUILDNUM"
+    [[ -n "${EFFECTIVE_TAG:-}"     ]] && export PEP_EFFECTIVE_TAG="$EFFECTIVE_TAG"
+    [[ -n "${EXPECTED_RPM:-}"      ]] && export PEP_EXPECTED_RPM="$EXPECTED_RPM"
+    [[ -n "${EXPECTED_DEB:-}"      ]] && export PEP_EXPECTED_DEB="$EXPECTED_DEB"
+    [[ -n "${EXPECTED_BINARY:-}"   ]] && export PEP_EXPECTED_BINARY="$EXPECTED_BINARY"
+    # PEP_ARCH_FILTER is already exported from --arch during arg validation.
+
+    # (c) Scenario enforcement.
+    if [[ "$PEP_SCENARIO" == "certification" ]]; then
+      export UPGRADE=false
+    elif [[ "$PEP_SCENARIO" == "upgrade" ]]; then
+      echo "[integration] scenario=upgrade is not implemented in this POC" >&2
+      exit "$PEP_RC_VALIDATION"
+    fi
+
+    # (d) Request preflight on the COMPLETE env (rejects an incomplete/invalid
+    #     request with exit 3 before any dry-run/real work happens).
+    python3 utillities/pep_request_env.py
+    rc=$?; [[ "$rc" != "0" ]] && _pep_die_by_rc "$rc"
+
+    unset _pep_family
   fi
 
   # Load target instances — Docker containers or AWS EC2 instances
@@ -831,6 +991,19 @@ for fam, name in selected:
     done
   done
 done
+
+# ── Integration run manifest (Task 3) ───────────────────────────────────────
+# In integration mode (and only for a real run, not --dry-run) write a small
+# machine-readable manifest pointing the caller at the consolidated report dir
+# and every JUnit XML produced. Guarded so standalone/dry-run runs never emit it.
+if [[ "${PEP_INTEGRATION_MODE:-}" == "1" && "$DRY_RUN" != "true" ]]; then
+  python3 -c 'import json, sys
+from pathlib import Path
+Path("test-logs").mkdir(exist_ok=True)
+Path("test-logs/current-run.json").write_text(
+    json.dumps({"report_dir": sys.argv[1], "reports": sys.argv[2:]}, indent=2))
+' "$CONSOLIDATED_REPORT_DIR" ${ALL_JUNIT_XMLS[@]+"${ALL_JUNIT_XMLS[@]}"}
+fi
 
 # --dry-run: env loop is the only place that produces results; nothing real
 # happened, so skip the report/index/consolidated generation entirely.

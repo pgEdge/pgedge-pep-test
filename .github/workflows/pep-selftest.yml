@@ -1,0 +1,83 @@
+name: PEP Self-Test
+on: {pull_request: {}, workflow_dispatch: {}}
+jobs:
+  unit:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803  # v6.1.0
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1  # v6.3.0
+        with: {python-version: "3.11"}
+      - run: pip install -r requirements.txt
+      - name: Lint workflows (before anything relies on them)
+        # Container image pinned by immutable DIGEST (not a mutable tag): rhysd/actionlint:1.7.7.
+        # Scoped to the two PEP workflows this self-test introduces/depends on (integration +
+        # selftest) rather than the whole .github/workflows/ dir, so this self-test isn't
+        # coupled to the unrelated pre-existing pep-regression.yml breaking independently.
+        run: docker run --rm -v "$PWD:/repo" -w /repo rhysd/actionlint@sha256:887a259a5a534f3c4f36cb02dca341673c6089431057242cdc931e9f133147e9 -color .github/workflows/pep-integration.yml .github/workflows/pep-selftest.yml
+      - name: Unit layer (globs so later modules are picked up automatically)
+        run: pytest utillities/test_pep_*.py -v
+        # Phase 2a: test_pep_{identity,request,result_summary,version_normalize,
+        # version_normalize_characterization,resolve,request_env,bridge}.py.
+        # Phase 2b adds test_pep_{verify,install_pinned}.py. Docker/CLI-dependent
+        # tests (e.g. test_pep_bridge) skip cleanly when preconditions are absent
+        # (but the dry-run bridge test does NOT skip on Docker absence — Task 3 Step 6).
+
+  preview-call:                     # caller job — no steps allowed
+    uses: ./.github/workflows/pep-integration.yml
+    with:
+      component: rag
+      package_name: pgedge-rag-server
+      channel: daily
+      expected_version: "0.0.0-selftest"
+      container_alias: rocky9-amd64
+      pg_major: "17"
+      family: rpm
+      arch: amd64
+      execution_mode: preview
+      pep_implementation_ref: ${{ github.sha }}
+    secrets:
+      pep_read_token: ${{ secrets.GITHUB_TOKEN }}   # same-repo: default token suffices
+
+  assert-preview:                   # SEPARATE downstream job reads the outputs
+    needs: preview-call
+    runs-on: ubuntu-24.04
+    steps:
+      - run: |
+          test "${{ needs.preview-call.outputs.execution_status }}" = "preview" \
+            || { echo "expected preview, got '${{ needs.preview-call.outputs.execution_status }}'"; exit 1; }
+          test "${{ needs.preview-call.outputs.test_verdict }}" = "not_run" || exit 1
+
+  # issue #12: prove an EXPECTED request/policy rejection is classified as VALIDATION
+  # (incomplete/not_run) — NOT preview, NOT infra_failure. scenario=upgrade is rejected
+  # by the bridge (exit 3) before dry-run, so this exercises the FW_CODE==3 branch.
+  validation-call:                  # caller job — scenario=upgrade in preview/observe
+    uses: ./.github/workflows/pep-integration.yml
+    with:
+      component: rag
+      package_name: pgedge-rag-server
+      channel: daily
+      expected_version: "0.0.0-selftest"
+      container_alias: rocky9-amd64
+      pg_major: "17"
+      family: rpm
+      arch: amd64
+      execution_mode: preview
+      mode: observe                 # observe -> summarizer exit 0, job still succeeds
+      scenario: upgrade             # unsupported in the POC -> expected rejection
+      pep_implementation_ref: ${{ github.sha }}
+    secrets:
+      pep_read_token: ${{ secrets.GITHUB_TOKEN }}
+
+  assert-validation:                # SEPARATE downstream job asserts the classification
+    needs: validation-call
+    runs-on: ubuntu-24.04
+    steps:
+      - run: |
+          st="${{ needs.validation-call.outputs.execution_status }}"
+          tv="${{ needs.validation-call.outputs.test_verdict }}"
+          test "$st" = "incomplete" \
+            || { echo "expected incomplete (validation), got '$st'"; exit 1; }
+          test "$tv" = "not_run" || { echo "expected not_run, got '$tv'"; exit 1; }
+          # explicit negative assertions: rejection must NOT masquerade as preview or infra
+          test "$st" != "preview"      || { echo "validation wrongly reported as preview"; exit 1; }
+          test "$st" != "infra_failure" || { echo "validation wrongly reported as infra_failure"; exit 1; }

@@ -4,6 +4,15 @@ Generic package management module for installing packages on containers.
 Supports both RHEL-based and Debian-based distributions.
 """
 
+import importlib.util as _ilu
+from pathlib import Path as _Path
+
+_nz_spec = _ilu.spec_from_file_location(
+    "pep_version_normalize",
+    str(_Path(__file__).resolve().parent.parent / "utillities" / "pep_version_normalize.py"))
+_nz = _ilu.module_from_spec(_nz_spec)
+_nz_spec.loader.exec_module(_nz)
+
 
 def install_package(container, package_name, pg_major_version=None, install_pg_server=False):
     """
@@ -220,49 +229,7 @@ def normalize_version(version_string, package_name=""):
     Returns:
         str: Normalized version string in format "1.0.0.beta2" (dots as separators) or "1.0.0" for non-beta
     """
-    import re
-
-    # Convert to lowercase for case-insensitive comparison
-    version = version_string.lower().strip()
-    package_lower = package_name.lower()
-
-    # Strip RPM dist suffixes (e.g., .el9, .el8, .rocky9, .alma9, .fc39, .oel9)
-    # These appear at the end of RPM VERSION-RELEASE strings
-    version = re.sub(r'\.(?:el|rhel|centos|rocky|alma|fc|oel)\w*$', '', version)
-
-    # Strip Debian/Ubuntu packaging suffixes like -1.bullseye, -2.jammy, etc.
-    # Pattern: -<digit>[.<distro>] at the end of version string
-    version = re.sub(r'-\d+\.[a-z]+$', '', version)
-    version = re.sub(r'-\d+$', '', version)
-
-    # Check if this is a beta package
-    beta_package_keywords = ['vectorizer', 'anonymizer', 'rag', 'mcp', 'nla']
-    is_beta_package = any(keyword in package_lower for keyword in beta_package_keywords)
-    has_beta_in_version = 'beta' in version
-
-    # Only apply beta normalization if it's a beta package or version contains 'beta'
-    beta_suffix = ""
-    if is_beta_package or has_beta_in_version:
-        # Handle beta versions with hyphen separator: 1.0-beta2 -> 1.0.beta2
-        version = re.sub(r'-beta', '.beta', version)
-
-        # Split into version parts and beta suffix
-        beta_match = re.search(r'\.?beta(\d*)', version)
-        if beta_match:
-            beta_suffix = f".beta{beta_match.group(1)}"
-            version = version[:beta_match.start()]
-
-    # Split version by dots
-    version_parts = version.split('.')
-
-    # Pad to 3 parts (major.minor.patch)
-    while len(version_parts) < 3:
-        version_parts.append('0')
-
-    # Reconstruct normalized version
-    normalized = '.'.join(version_parts[:3]) + beta_suffix
-
-    return normalized
+    return _nz.normalize_version(version_string, package_name)
 
 
 def verify_package_version(container, package_name, expected_version):

@@ -3,18 +3,29 @@
 Compare an OBSERVED installed identity against an EXPECTED identity supplied by
 the caller. These perform strict (L2) comparison: L2a = package-manager version
 (RPM version-release / DEB version), L2b = binary self-reported version. The
-coarser L1 component-version match reuses aspects.package_management.normalize_version
-and is wired in Plan 2 alongside install/verify, so it is intentionally absent here.
+coarser L1 component-version match (`component_version_matches`) reuses the
+shared `pep_version_normalize.normalize_version` (itself extracted from
+aspects.package_management.normalize_version, which now delegates to it).
 
 Stdlib only -> unit-testable in isolation via `pytest utillities/test_pep_identity.py`.
 """
 from __future__ import annotations
 
+import importlib.util
 import re
+import sys
+from pathlib import Path
 
 # Architecture tokens that may trail an RPM NVRA (e.g. ...-1.el9.x86_64).
 _RPM_ARCH_RE = re.compile(r"\.(x86_64|aarch64|arm64|noarch|i686|ppc64le|s390x)$")
 _BINARY_VERSION_RE = re.compile(r"^\s*version\s*:\s*(\S+)", re.IGNORECASE | re.MULTILINE)
+
+_nz_spec = importlib.util.spec_from_file_location(
+    "pep_version_normalize", str(Path(__file__).parent / "pep_version_normalize.py")
+)
+_nz = importlib.util.module_from_spec(_nz_spec)
+sys.modules.setdefault("pep_version_normalize", _nz)
+_nz_spec.loader.exec_module(_nz)
 
 
 def canonical_rpm(identity: str, package_name: str | None = None) -> str:
@@ -61,6 +72,27 @@ def binary_version_matches(expected: str, output: str) -> bool:
     """True iff the binary's self-reported version equals expected (exact, L2b)."""
     parsed = parse_binary_version(output)
     return parsed is not None and parsed.strip() == expected.strip()
+
+
+def component_version_matches(expected: str, observed: str) -> bool:
+    """True iff the normalized expected version is a substring of the normalized
+    observed version (coarse, L1).
+
+    Argument order matches the sibling comparators in this module
+    (`rpm_identity_matches(expected, observed, ...)`,
+    `binary_version_matches(expected, output)`).
+
+    The substring/containment check is DELIBERATE, not an approximation: it
+    mirrors the framework's existing standalone check in
+    aspects.package_management.verify_package_version, which does
+    `normalized_expected not in normalized_installed`. This is intentionally
+    coarse (L1/degraded) — e.g. a shorter expected can substring-match a
+    longer observed (`"1.0"` matching within `"1.0.12"`) — and that coarseness
+    is inherited from the shipping behavior this comparator preserves, not
+    introduced here. Uses the shared `normalize_version` so this stays
+    consistent with aspects.package_management's own normalization.
+    """
+    return _nz.normalize_version(expected) in _nz.normalize_version(observed)
 
 
 # Per-rung merge precedence: a failure anywhere dominates a success, which

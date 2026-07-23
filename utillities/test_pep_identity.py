@@ -85,3 +85,14 @@ def test_merge_evidence_rejects_unknown_value():
     # not be silently downgraded to 'not_attempted' (a missing key still means that).
     with pytest.raises(ValueError):
         pid.merge_evidence([{"l2a": "definitely", "l2b": "proven", "l1": "proven"}])
+
+
+def test_component_version_matches_beta_substring():
+    # observed carries a beta suffix; expected is the bare beta version. Both
+    # normalize to "1.0.0.beta2", so expected is a substring of observed.
+    assert pid.component_version_matches("1.0.0-beta2", "1.0.0-beta2-1.el9") is True
+
+
+def test_component_version_matches_padding_mismatch():
+    # "16.11" normalizes to "16.11.0"; "16.12" normalizes to "16.12.0" — not a substring.
+    assert pid.component_version_matches("16.12", "16.11-1.bullseye") is False

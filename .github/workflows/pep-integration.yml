@@ -18,12 +18,23 @@ on:
       scenario:          {required: false, type: string, default: "certification"}
       mode:              {required: false, type: string, default: "observe"}
       execution_mode:    {required: false, type: string, default: "preview"}
-      # Follow-up item 1: a validated, caller-provided discriminator folded into
-      # the upload-artifact name so two calls in ONE run that differ only by a
-      # dimension NOT in the name (e.g. enforcement `mode`) cannot collide. The
-      # caller owns uniqueness; charset is validated in the preflight (below) so
-      # this is a robust id, not arbitrary concatenated input. Default "" keeps
-      # single-call callers working (name falls back to the dimensions).
+      # A validated, caller-provided discriminator folded into the upload-artifact
+      # name so two calls in ONE caller run that differ only by a dimension NOT in
+      # the name (e.g. enforcement `mode`) cannot collide. Charset is validated in
+      # the preflight and the safe value is the SINGLE source of the artifact name.
+      #
+      # DECISION: kept OPTIONAL (default ""), NOT required — a single-call caller,
+      # or a matrix whose legs already differ in a named dimension, needs no id, and
+      # forcing one on every caller would be a gratuitous contract break.
+      #
+      # CALLER UNIQUENESS OBLIGATION (precise): actions/upload-artifact forbids two
+      # artifacts sharing a name within one run. The name already includes
+      # component, family, arch, pg_major, channel, container_alias, scenario and
+      # execution_mode. IF two concurrent calls in the same caller run would share
+      # ALL of those AND differ only in a field that is NOT in the name (today only
+      # enforcement `mode`), THEN each such call MUST pass a distinct invocation_id;
+      # otherwise it may be omitted. An invalid invocation_id is rejected (validation)
+      # and dropped from the name, so it never breaks the upload.
       invocation_id:     {required: false, type: string, default: ""}
       pep_implementation_ref: {required: true, type: string}
     secrets:
@@ -55,28 +66,58 @@ jobs:
       # (exit-3 semantics); the fw step is gated on rc==0 so the framework never
       # runs for an invalid mode. (Enforcement `mode` observe|gate is validated
       # separately by the bridge/normalize_request, finding 4.)
-      - name: Validate workflow inputs (execution_mode, invocation_id)
+      - name: Validate inputs + build safe artifact name (preflight)
         id: preflight
         continue-on-error: true
+        # Runs BEFORE checkout (fail-fast on caller input), so the name is built
+        # inline in bash — it cannot depend on a checked-out repo script. This step
+        # is the SINGLE SOURCE of the artifact name: Emit's summary_artifact output
+        # and the Upload step both consume steps.preflight.outputs.artifact_name and
+        # neither re-interpolates a raw, later-validated input (follow-up item 1b).
         env:
           IN_EXEC: ${{ inputs.execution_mode }}
           IN_INVOCATION_ID: ${{ inputs.invocation_id }}
+          IN_COMPONENT: ${{ inputs.component }}
+          IN_FAMILY: ${{ inputs.family }}
+          IN_ARCH: ${{ inputs.arch }}
+          IN_PG: ${{ inputs.pg_major }}
+          IN_CHANNEL: ${{ inputs.channel }}
+          IN_ALIAS: ${{ inputs.container_alias }}
+          IN_SCENARIO: ${{ inputs.scenario }}
+          IN_EXECMODE: ${{ inputs.execution_mode }}
+          RUN_NUMBER: ${{ github.run_number }}
+          RUN_ATTEMPT: ${{ github.run_attempt }}
         run: |
           rc=0
           case "$IN_EXEC" in
             preview|full) ;;
             *) echo "invalid execution_mode: '$IN_EXEC' (must be preview|full)" >&2; rc=3 ;;
           esac
-          # Follow-up item 1: invocation_id is concatenated into the artifact
-          # name, so validate its charset BEFORE it reaches the name (reject
-          # path/format-breaking input) — a robust discriminator, not arbitrary
-          # concatenation. Empty is allowed (single-call callers). Both checks
-          # share the exit-3 validation-rejection semantics (finding 2/4).
-          if [ -n "$IN_INVOCATION_ID" ] && ! printf '%s' "$IN_INVOCATION_ID" | grep -qE '^[A-Za-z0-9._-]{1,64}$'; then
-            echo "invalid invocation_id: '$IN_INVOCATION_ID' (allowed: [A-Za-z0-9._-], 1-64 chars)" >&2
-            rc=3
+          # invocation_id is a caller-provided discriminator folded into the
+          # artifact name. An unsafe value is BOTH a validation rejection (rc=3)
+          # AND is DROPPED from the name below — so a bad value like `bad/id` can
+          # never reach upload-artifact.name and fail the report-only job under
+          # always(). Empty is allowed (optional input; see the input's doc for the
+          # caller's uniqueness obligation). Charset kept in lockstep with the drop.
+          safe_inv=""
+          if [ -n "$IN_INVOCATION_ID" ]; then
+            if printf '%s' "$IN_INVOCATION_ID" | grep -qE '^[A-Za-z0-9._-]{1,64}$'; then
+              safe_inv="-$IN_INVOCATION_ID"
+            else
+              echo "invalid invocation_id: '$IN_INVOCATION_ID' (allowed: [A-Za-z0-9._-], 1-64 chars)" >&2
+              rc=3
+            fi
           fi
-          echo "rc=$rc" >> "$GITHUB_OUTPUT"
+          # Build the artifact name from the validated execution_mode + the safe
+          # (validated-or-dropped) invocation_id. The final `tr` is a belt-and-
+          # suspenders guarantee that the emitted name is upload-safe regardless of
+          # any dimension value — the name output is ALWAYS safe even when rc=3.
+          name="pep-summary-${IN_COMPONENT}-${IN_FAMILY}-${IN_ARCH}-pg${IN_PG}-${IN_CHANNEL}-${IN_ALIAS}-${IN_SCENARIO}-${IN_EXECMODE}${safe_inv}-r${RUN_NUMBER}-a${RUN_ATTEMPT}"
+          name="$(printf '%s' "$name" | tr -c 'A-Za-z0-9._-' '_')"
+          {
+            echo "rc=$rc"
+            echo "artifact_name=$name"
+          } >> "$GITHUB_OUTPUT"
           [ "$rc" = "0" ] || exit "$rc"
       - name: Checkout PEP implementation (self, pinned)
         uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803  # v6.1.0
@@ -307,15 +348,10 @@ jobs:
         id: emit
         if: always()
         env:
-          IN_COMPONENT: ${{ inputs.component }}
-          IN_FAMILY: ${{ inputs.family }}
-          IN_ARCH: ${{ inputs.arch }}
-          IN_PG: ${{ inputs.pg_major }}
-          IN_CHANNEL: ${{ inputs.channel }}
-          IN_ALIAS: ${{ inputs.container_alias }}
-          IN_SCENARIO: ${{ inputs.scenario }}
-          IN_EXECMODE: ${{ inputs.execution_mode }}
-          IN_INVOCATION_ID: ${{ inputs.invocation_id }}
+          # The artifact name is NOT rebuilt here from raw inputs -- it comes only
+          # from the safe value the preflight step produced (item 1b). Routed via
+          # env for the same injection-safety discipline as the rest of the file.
+          ARTIFACT_NAME: ${{ steps.preflight.outputs.artifact_name }}
         run: |
           python3 - <<'PY' >> "$GITHUB_OUTPUT"
           import json
@@ -329,26 +365,18 @@ jobs:
           rc = json.loads(Path('test-logs/resolved-config.json').read_text()) if Path('test-logs/resolved-config.json').exists() else {}
           print(f"resolved_channel={json.dumps(rc.get('repo', {}))}")   # {value, source}
           PY
-          # Artifact name from stable request dimensions (via env, not a raw inline
-          # expression) -- injection-safe, matching the fw step. upload-artifact (v4+, we pin v7)
-          # forbids duplicate artifact names in a run. Finding 6: two concurrent
-          # calls can differ ONLY by channel and/or container target, so channel and
-          # container_alias are part of the name (alongside scenario/execution_mode)
-          # to keep it unique. The Upload step's name: uses the SAME values (safe
-          # there as a YAML with: value) so the output and the uploaded name match.
-          # Follow-up item 1: append the validated invocation_id (when the caller
-          # set one) as the authoritative discriminator for calls that differ only
-          # by a dimension NOT in the name above. Appended ONLY when non-empty; the
-          # Upload step's YAML expression below produces the identical suffix.
-          inv=""; [ -n "$IN_INVOCATION_ID" ] && inv="-${IN_INVOCATION_ID}"
-          echo "summary_artifact=pep-summary-${IN_COMPONENT}-${IN_FAMILY}-${IN_ARCH}-pg${IN_PG}-${IN_CHANNEL}-${IN_ALIAS}-${IN_SCENARIO}-${IN_EXECMODE}${inv}-r${{ github.run_number }}-a${{ github.run_attempt }}" >> "$GITHUB_OUTPUT"
+          # summary_artifact output = the SAME preflight-produced value the Upload
+          # step below uses for name:. No raw, later-validated input is interpolated
+          # here, so a rejected invocation_id can never yield an unsafe name.
+          echo "summary_artifact=$ARTIFACT_NAME" >> "$GITHUB_OUTPUT"
       - name: Upload artifacts (ALWAYS, unique-per-call + rerun-safe name)
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
         with:
-          # EXACT same value as summary_artifact above (identical expression -> no
-          # runtime coupling to the Emit step, and identical name guaranteed). The
-          # invocation_id suffix uses format() so it is appended ONLY when non-empty,
-          # byte-matching the Emit step's `${inv}` (item 1).
-          name: pep-summary-${{ inputs.component }}-${{ inputs.family }}-${{ inputs.arch }}-pg${{ inputs.pg_major }}-${{ inputs.channel }}-${{ inputs.container_alias }}-${{ inputs.scenario }}-${{ inputs.execution_mode }}${{ inputs.invocation_id != '' && format('-{0}', inputs.invocation_id) || '' }}-r${{ github.run_number }}-a${{ github.run_attempt }}
+          # name: is the preflight-produced, upload-safe value -- the EXACT same
+          # step output the Emit step publishes as summary_artifact. Deliberately
+          # NOT built from raw inputs.* (item 1b): under always() a raw, later-
+          # rejected invocation_id would otherwise make this upload fail and turn a
+          # truthfully-classified validation/incomplete job red.
+          name: ${{ steps.preflight.outputs.artifact_name }}
           path: test-logs/

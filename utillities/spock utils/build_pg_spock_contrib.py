@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 """
 Spock Build Automation Script
-Automates the process of building PostgreSQL (15/16/17/18) with Spock extension from source.
+Automates the process of building PostgreSQL (15/16/17/18/19) with Spock extension from source.
 
 Supports both automated download and local source paths.
 Supports building from different branches (main, v5_STABLE, etc.)
-Supports PostgreSQL major versions: 15, 16, 17, 18
+Supports PostgreSQL major versions: 15, 16, 17, 18, 19
 
 Usage:
     # Build PG 17 (default) from main branch
@@ -34,15 +34,17 @@ from typing import List, Tuple, Optional
 
 
 class SpockBuilder:
-    # Default minor versions for each major PG version
+    # Default minor versions for each major PG version.
+    # PG 19 is still pre-release; default to the current beta.
     DEFAULT_PG_VERSIONS = {
         15: "15.10",
         16: "16.6",
         17: "17.7",
-        18: "18.0"
+        18: "18.0",
+        19: "19beta2"
     }
 
-    SUPPORTED_MAJOR_VERSIONS = [15, 16, 17, 18]
+    SUPPORTED_MAJOR_VERSIONS = [15, 16, 17, 18, 19]
 
     def __init__(self, install_dir: str, work_dir: str = None, verbose: bool = False,
                  pg_source_dir: str = None, patches_dir: str = None,
@@ -87,13 +89,16 @@ class SpockBuilder:
         self.pg_config_path = self.pg_install_dir / "bin" / "pg_config"
 
     def _parse_major_version(self, version: str) -> int:
-        """Parse major version number from version string (e.g., '17.7' -> 17)"""
-        try:
-            major = int(version.split('.')[0])
-            return major
-        except (ValueError, IndexError):
+        """Parse the major version from a version string.
+
+        Handles release ('17.7' -> 17) and pre-release ('19beta2' -> 19, '16rc1' -> 16) formats.
+        """
+        match = re.match(r'\s*(\d+)', version)
+        if not match:
             raise ValueError(
-                f"Invalid PostgreSQL version format: '{version}'. Expected format: 'MAJOR.MINOR' (e.g., '17.7')")
+                f"Invalid PostgreSQL version format: '{version}'. "
+                f"Expected a leading major number, e.g. '17', '17.7', or '19beta2'")
+        return int(match.group(1))
 
     def _validate_pg_version(self):
         """Validate that the PostgreSQL major version is supported"""
@@ -920,12 +925,13 @@ Examples:
   # Use local sources with contrib
   python build_spock.py --install-dir /opt/pgedge --pg-source /path/to/pg --contrib dblink,hstore --verbose
 
-Supported PostgreSQL major versions: 15, 16, 17, 18
+Supported PostgreSQL major versions: 15, 16, 17, 18, 19
 Default minor versions:
   PG 15 -> 15.10
   PG 16 -> 16.6
   PG 17 -> 17.7
   PG 18 -> 18.0
+  PG 19 -> 19beta2  (pre-release; pass --pg-source or --pg-version 19.x once GA)
 
 Common contrib modules for Spock:
   dblink              - Cross-database connections (REQUIRED for ZODAN/ZODREMOVE)
@@ -945,7 +951,7 @@ Common contrib modules for Spock:
     parser.add_argument(
         '--pg-version',
         default='17.7',
-        help='PostgreSQL version to build. Can be major only (15, 16, 17, 18) or full (15.10, 16.6, 17.7, 18.0). Default: 17.7'
+        help='PostgreSQL version to build. Can be major only (15, 16, 17, 18, 19) or full (15.10, 16.6, 17.7, 18.0, 19beta2). Default: 17.7'
     )
 
     parser.add_argument(
@@ -998,21 +1004,18 @@ Common contrib modules for Spock:
         print("ERROR: Cannot use both --contrib and --all-contrib")
         return 1
 
-    # Resolve PG version - if user provided major only, use default minor
+    # Resolve PG version. A bare major (e.g. "19") is expanded to its default minor;
+    # full versions ("18.0") and pre-releases ("19beta2") pass through untouched and
+    # are parsed/validated by SpockBuilder.
     pg_version = args.pg_version
-    if '.' not in pg_version:
-        try:
-            major = int(pg_version)
-            if major in SpockBuilder.DEFAULT_PG_VERSIONS:
-                pg_version = SpockBuilder.DEFAULT_PG_VERSIONS[major]
-                print(f"Resolved PG major version {major} to {pg_version}")
-            else:
-                print(f"ERROR: PostgreSQL major version {major} is not supported.")
-                print(f"Supported versions: {SpockBuilder.SUPPORTED_MAJOR_VERSIONS}")
-                return 1
-        except ValueError:
-            print(f"ERROR: Invalid PostgreSQL version: '{pg_version}'")
-            print("Expected format: '17' or '17.7'")
+    if re.fullmatch(r'\d+', pg_version):
+        major = int(pg_version)
+        if major in SpockBuilder.DEFAULT_PG_VERSIONS:
+            pg_version = SpockBuilder.DEFAULT_PG_VERSIONS[major]
+            print(f"Resolved PG major version {major} to {pg_version}")
+        else:
+            print(f"ERROR: PostgreSQL major version {major} is not supported.")
+            print(f"Supported versions: {SpockBuilder.SUPPORTED_MAJOR_VERSIONS}")
             return 1
 
     # Check for required tools

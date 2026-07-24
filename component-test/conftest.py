@@ -254,6 +254,15 @@ def detect_component_from_test_file(config):
             'rhel_package_default': f'pgedge-postgresql{os.getenv("PG_MAJOR_VERSION", "16")}-llvmjit',
             'deb_package_env': 'DEB_LLVMJIT_PACKAGE',
             'deb_package_default': f'pgedge-postgresql{os.getenv("PG_MAJOR_VERSION", "16")}-llvmjit'
+        },
+        'test_pep_pgvector': {
+            'name': 'Pgvector',
+            'version_env': f'PGEDGE_PGVECTOR_{os.getenv("PG_MAJOR_VERSION", "16")}_VERSION',
+            'version_default': '0.8.5',
+            'rhel_package_env': 'PGVECTOR_PACKAGE',
+            'rhel_package_default': f'pgedge-pgvector_{os.getenv("PG_MAJOR_VERSION", "16")}',
+            'deb_package_env': 'DEB_PGVECTOR_PACKAGE',
+            'deb_package_default': f'pgedge-postgresql-{os.getenv("PG_MAJOR_VERSION", "16")}-pgvector'
         }
     }
 

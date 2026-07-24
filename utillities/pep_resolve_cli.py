@@ -31,20 +31,28 @@ def _resolve():
     # override (issue #4); PEP_CALLER_REPO = the --repo override. Both layers are
     # recorded so provenance stays truthful.
     #
-    # Finding 7 — the root-.env discrepancy, resolved by documentation (NOT by
-    # broadening config behavior):
-    #   The resolver's "config" layer is DELIBERATELY sourced only from
+    # Finding 7 / follow-up item 3 — the root-.env discrepancy, reconciled by
+    # documentation (NOT by broadening runtime behavior):
+    #
+    #   VERIFIED TODAY: the resolver's "config" layer is sourced only from
     #   configuration/config{PG}.env — the file run_pep_tf.sh actually `source`s
     #   and then EXPORTS (REPO/UPGRADE) before invoking pytest. The repo-root
     #   `.env` (which also defines REPO) is a pytest-RUNTIME convenience loaded by
     #   component-test/conftest.py via python-dotenv `load_dotenv()`, whose default
     #   does NOT override an already-exported variable. So in a bridge-driven run
     #   the config{PG}.env value (or the caller override) is authoritative and the
-    #   root .env never overrides it — meaning the config layer recorded here MATCHES
-    #   what actually drives the run. Reading the root .env into the resolver would
-    #   be speculative scope-broadening (and could record a REPO the run never uses),
-    #   so it is intentionally NOT done. If the sourcing contract in run_pep_tf.sh
-    #   ever changes to consult root .env, update PEP_CONFIG_REPO's capture there.
+    #   root .env cannot override it — the config layer recorded here MATCHES what
+    #   actually drives the run. That is the state we assert and test today.
+    #
+    #   OPEN DECISION (not "never"): whether the resolver should itself consult the
+    #   root `.env` as a lower-precedence layer (the spec's documented precedence
+    #   caller > config{PG}.env > root .env > code defaults) is deliberately LEFT
+    #   OPEN, not foreclosed. It is not wired today because doing so speculatively
+    #   could record a REPO the run never uses, and no current caller needs it. If a
+    #   future run genuinely needs root-.env precedence, this is the seam to add it:
+    #   capture the root-.env value into a new layer here and thread it through
+    #   rz.resolve() below (and update PEP_CONFIG_REPO's capture in run_pep_tf.sh if
+    #   the sourcing contract changes). Until then the layer is intentionally absent.
     return rz.resolve(
         ["repo", "scenario", "upgrade"],
         caller={"repo": os.environ.get("PEP_CALLER_REPO") or None,

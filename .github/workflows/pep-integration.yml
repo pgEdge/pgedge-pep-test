@@ -223,6 +223,13 @@ jobs:
           # turn that clean validation outcome into a summarizer crash /
           # infra_failure (this step has NO continue-on-error). Enforcement for a
           # valid gate run is unaffected.
+          #
+          # DEFERRED DECISION (item 3) — this coercion is FAIL-OPEN: an invalid
+          # enforcement mode degrades to observe (job stays green) rather than
+          # fail-closed (fail the job). That is safe while gate is not yet
+          # production-enabled, but the fail-open vs fail-closed choice for an
+          # invalid/unknown enforcement mode MUST be revisited before mode=gate is
+          # turned on in production. Tracked in the living plan (Deferred decisions).
           case "$IN_MODE" in observe|gate) ;; *) IN_MODE=observe ;; esac
           args=( --out test-logs/summary.json --mode "$IN_MODE" )
           # issue #8 + carry-forward #1: read ONLY this run's reports (manifest),

@@ -35,6 +35,7 @@ EXPECTED_DEB=""
 EXPECTED_BINARY=""
 SCENARIO=""
 PACKAGE_NAME=""
+ENFORCE_MODE=""             # integration enforcement mode (observe|gate); reaches the request
 
 # Exit with $1, but if it equals PEP_RC_VALIDATION preserve that exact code so
 # the caller can distinguish a request rejection from an infra failure.
@@ -136,6 +137,11 @@ while [[ $# -gt 0 ]]; do
       CLI_MODE=true
       shift 2
       ;;
+    --mode)
+      ENFORCE_MODE="$2"
+      CLI_MODE=true
+      shift 2
+      ;;
     --package-name)
       PACKAGE_NAME="$2"
       CLI_MODE=true
@@ -208,6 +214,7 @@ OPTIONS:
   --expected-version <v>  Build-authoritative expected package version (REQUIRED in integration)
   --package-name <name>   Canonical package name for the component (e.g. pgedge-rag-server)
   --scenario <name>       certification (default) or upgrade
+  --mode <name>           Enforcement mode reaching the request: observe (default) or gate
   --expected-buildnum <n> Expected build number (identity input)
   --effective-tag <tag>   Effective git tag (must start with 'v')
   --expected-rpm <str>    Expected rpm identity string (rpm family only)
@@ -250,25 +257,31 @@ HELPTEXT
   esac
 done
 
+# ── Integration marker (Task 3) ─────────────────────────────────────────────
+# Activate integration mode when the caller passes --integration or supplies a
+# build-authoritative --expected-version. Computed BEFORE --arch validation so a
+# malformed --arch is classified as a request-validation rejection (exit 3) in
+# integration mode, while standalone keeps its legacy exit 2. Nothing below the
+# marker's gated blocks runs unless PEP_INTEGRATION_MODE=1, keeping standalone
+# behavior unchanged.
+if [[ -n "${EXPECTED_VERSION:-}" || "${INTEGRATION_FLAG:-}" == "true" ]]; then
+  export PEP_INTEGRATION_MODE=1
+fi
+
 # Validate --arch (empty == absent == no filter)
 if [[ -n "$ARCH" ]]; then
   case "$ARCH" in
     arm64|amd64) ;;
     *)
-      echo "[arch-filter] ERROR: --arch must be 'arm64' or 'amd64' (got '$ARCH')"
+      echo "[arch-filter] ERROR: --arch must be 'arm64' or 'amd64' (got '$ARCH')" >&2
+      # Finding 4: in integration mode an invalid arch is a KNOWN request
+      # validation rejection (exit 3); standalone preserves the legacy exit 2.
+      [[ "${PEP_INTEGRATION_MODE:-}" == "1" ]] && exit "$PEP_RC_VALIDATION"
       exit 2
       ;;
   esac
 fi
 export PEP_ARCH_FILTER="$ARCH"
-
-# ── Integration marker (Task 3) ─────────────────────────────────────────────
-# Activate integration mode when the caller passes --integration or supplies a
-# build-authoritative --expected-version. Nothing below the marker runs unless
-# PEP_INTEGRATION_MODE=1, keeping standalone behavior unchanged.
-if [[ -n "${EXPECTED_VERSION:-}" || "${INTEGRATION_FLAG:-}" == "true" ]]; then
-  export PEP_INTEGRATION_MODE=1
-fi
 
 # Integration-only --repo allowlist validation. Standalone runs keep their
 # permissive behavior (no rejection was present before); in integration mode a
@@ -533,6 +546,13 @@ for env in "${env_list[@]}"; do
   envfile="${ENV_DIR}/config${env}.env"
 
   if [[ ! -f "$envfile" ]]; then
+    # Finding 1: in integration mode a requested PG major with no config file is a
+    # request-validation rejection (exit 3) — NEVER a silent skip that would let a
+    # preview dry-run report a false-green. Standalone keeps skipping (exit 0).
+    if [[ "${PEP_INTEGRATION_MODE:-}" == "1" ]]; then
+      echo "[integration] ERROR: no configuration for PG major ${env} (missing ${envfile}); rejecting request" >&2
+      exit "$PEP_RC_VALIDATION"
+    fi
     echo "⚠️  Skipping missing environment file: $envfile"
     continue
   fi
@@ -584,14 +604,21 @@ for env in "${env_list[@]}"; do
     export PEP_FAMILY="$_pep_family"                 # rpm|deb (single-target integration)
     export PEP_CONTAINER_ALIAS="${CONTAINERS_OVERRIDE:-}"
     export PEP_EXPECTED_VERSION="${EXPECTED_VERSION:-}"
-    # Optional identity inputs: export ONLY when non-empty. The adapter treats an
-    # absent var as "not provided" (None -> dropped), but pep_request rejects a
-    # provided-but-empty optional, so an unset flag must not surface as "".
-    [[ -n "${EXPECTED_BUILDNUM:-}" ]] && export PEP_EXPECTED_BUILDNUM="$EXPECTED_BUILDNUM"
-    [[ -n "${EFFECTIVE_TAG:-}"     ]] && export PEP_EFFECTIVE_TAG="$EFFECTIVE_TAG"
-    [[ -n "${EXPECTED_RPM:-}"      ]] && export PEP_EXPECTED_RPM="$EXPECTED_RPM"
-    [[ -n "${EXPECTED_DEB:-}"      ]] && export PEP_EXPECTED_DEB="$EXPECTED_DEB"
-    [[ -n "${EXPECTED_BINARY:-}"   ]] && export PEP_EXPECTED_BINARY="$EXPECTED_BINARY"
+    # Optional identity inputs: export when the caller supplied the flag, and
+    # UNSET otherwise. The unset is REQUIRED (finding 3): a value INHERITED from
+    # the parent environment must never contaminate an input the caller omitted.
+    # The adapter treats an absent var as "not provided" (None -> dropped), while
+    # pep_request rejects a provided-but-empty optional, so an unset flag must
+    # surface as absent — never as "" and never as a stale inherited value.
+    if [[ -n "${EXPECTED_BUILDNUM:-}" ]]; then export PEP_EXPECTED_BUILDNUM="$EXPECTED_BUILDNUM"; else unset PEP_EXPECTED_BUILDNUM; fi
+    if [[ -n "${EFFECTIVE_TAG:-}"     ]]; then export PEP_EFFECTIVE_TAG="$EFFECTIVE_TAG";       else unset PEP_EFFECTIVE_TAG;     fi
+    if [[ -n "${EXPECTED_RPM:-}"      ]]; then export PEP_EXPECTED_RPM="$EXPECTED_RPM";         else unset PEP_EXPECTED_RPM;      fi
+    if [[ -n "${EXPECTED_DEB:-}"      ]]; then export PEP_EXPECTED_DEB="$EXPECTED_DEB";         else unset PEP_EXPECTED_DEB;      fi
+    if [[ -n "${EXPECTED_BINARY:-}"   ]]; then export PEP_EXPECTED_BINARY="$EXPECTED_BINARY";   else unset PEP_EXPECTED_BINARY;   fi
+    # Enforcement mode (finding 4): the workflow's mode must reach the normalized
+    # request (validated observe|gate), not silently default. Same unset-on-absent
+    # discipline so an inherited PEP_MODE cannot leak.
+    if [[ -n "${ENFORCE_MODE:-}"      ]]; then export PEP_MODE="$ENFORCE_MODE";                 else unset PEP_MODE;              fi
     # PEP_ARCH_FILTER is already exported from --arch during arg validation.
 
     # (c) Scenario enforcement.

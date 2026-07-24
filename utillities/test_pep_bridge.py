@@ -38,10 +38,13 @@ _needs_tools = pytest.mark.skipif(
 )
 
 
-def _run(args):
+def _run(args, extra_env=None):
+    env = None
+    if extra_env is not None:
+        env = {**os.environ, **extra_env}
     return subprocess.run(
         ["bash", str(_SCRIPT), *args],
-        cwd=str(_REPO_ROOT), capture_output=True, text=True,
+        cwd=str(_REPO_ROOT), capture_output=True, text=True, env=env,
     )
 
 
@@ -104,6 +107,76 @@ def test_standalone_run_triggers_no_integration_behavior():
     assert "[integration]" not in (proc.stdout + proc.stderr)
     # PEP_INTEGRATION_MODE must not appear as set in the standalone dry-run output
     assert "PEP_INTEGRATION_MODE" not in (proc.stdout + proc.stderr)
+
+
+# ── Correction pass: negative bridge cases (findings 1, 3, 4) ────────────────
+
+@_needs_tools
+def test_integration_missing_config_pg_rejected_exit_3():
+    # Finding 1: in integration mode a requested PG major with no
+    # configuration/config{PG}.env must be a VALIDATION rejection (exit 3), not a
+    # silent skip that dry-runs to a false-green preview.
+    args = [a for a in _BASE_ARGS]
+    i = args.index("17")
+    args[i] = "99"                       # config99.env does not exist
+    proc = _run(args)
+    assert proc.returncode == 3, f"stdout:\n{proc.stdout}\nstderr:\n{proc.stderr}"
+    assert "config99.env" in (proc.stdout + proc.stderr)
+
+
+@_needs_tools
+def test_standalone_missing_config_pg_still_skips_exit_0():
+    # Finding 1 guard: standalone (non-integration) behavior is UNCHANGED — a
+    # missing config file is skipped and the run exits 0.
+    proc = _run(["--pgver", "99", "--platforms", "rpm", "--components", "rag", "--dry-run"])
+    assert proc.returncode == 0, f"stdout:\n{proc.stdout}\nstderr:\n{proc.stderr}"
+    assert "Skipping missing environment file" in proc.stdout
+
+
+@_needs_tools
+def test_inherited_optional_identity_var_does_not_contaminate():
+    # Finding 3: an inherited PEP_EXPECTED_DEB in the parent environment must NOT
+    # leak into a request that omitted --expected-deb. If it leaked, the adapter
+    # would see expected_deb on an rpm-family target -> RequestError -> exit 3.
+    # Correct behavior unsets it, so the clean rpm request still previews (exit 0).
+    proc = _run(_BASE_ARGS, extra_env={"PEP_EXPECTED_DEB": "9.9.9-1.noble"})
+    assert proc.returncode == 0, (
+        "inherited PEP_EXPECTED_DEB contaminated the request\n"
+        f"stdout:\n{proc.stdout}\nstderr:\n{proc.stderr}")
+
+
+@_needs_tools
+def test_integration_bad_arch_rejected_exit_3():
+    # Finding 4: an invalid --arch is a request-validation rejection in
+    # integration mode (exit 3), not the legacy infra exit 2.
+    args = [a for a in _BASE_ARGS]
+    i = args.index("amd64")
+    args[i] = "sparc"
+    proc = _run(args)
+    assert proc.returncode == 3, f"stdout:\n{proc.stdout}\nstderr:\n{proc.stderr}"
+
+
+@_needs_tools
+def test_standalone_bad_arch_still_exit_2():
+    # Finding 4 guard: standalone invalid --arch keeps the legacy exit 2.
+    proc = _run(["--pgver", "17", "--platforms", "rpm", "--components", "rag",
+                 "--arch", "sparc", "--dry-run"])
+    assert proc.returncode == 2, f"stdout:\n{proc.stdout}\nstderr:\n{proc.stderr}"
+
+
+@_needs_tools
+def test_enforcement_mode_gate_accepted_exit_0():
+    # Finding 4: the workflow's enforcement mode reaches the normalized request.
+    # A valid --mode gate is accepted and previews cleanly.
+    proc = _run(_BASE_ARGS + ["--mode", "gate"])
+    assert proc.returncode == 0, f"stdout:\n{proc.stdout}\nstderr:\n{proc.stderr}"
+
+
+@_needs_tools
+def test_enforcement_mode_invalid_rejected_exit_3():
+    # Finding 4: an invalid --mode is rejected by normalize_request (exit 3).
+    proc = _run(_BASE_ARGS + ["--mode", "bogus"])
+    assert proc.returncode == 3, f"stdout:\n{proc.stdout}\nstderr:\n{proc.stderr}"
 
 
 # ── Manifest-writer snippet (Step 5 boundary coverage) ───────────────────────

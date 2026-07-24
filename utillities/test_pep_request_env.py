@@ -67,6 +67,23 @@ def test_raises_on_invalid_enum():
         _env_mod.build_request_from_env(env)
 
 
+def test_enforcement_mode_reaches_request():
+    # Finding 4: PEP_MODE (the workflow enforcement mode) must flow into the
+    # normalized request, not silently default to observe.
+    env = _full_env()
+    env["PEP_MODE"] = "gate"
+    req = _env_mod.build_request_from_env(env)
+    assert req["mode"] == "gate"
+
+
+def test_invalid_enforcement_mode_raises():
+    # Finding 4: an invalid PEP_MODE is a validation error (not silently coerced).
+    env = _full_env()
+    env["PEP_MODE"] = "bogus"
+    with pytest.raises(_pr.RequestError):
+        _env_mod.build_request_from_env(env)
+
+
 # ── CLI-level tests via subprocess (exit-code contract) ──────────────────────
 
 def _run_cli(env):

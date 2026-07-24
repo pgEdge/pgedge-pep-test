@@ -41,6 +41,27 @@ jobs:
       resolved_channel:  ${{ steps.emit.outputs.resolved_channel }}
       summary_artifact:  ${{ steps.emit.outputs.summary_artifact }}
     steps:
+      # Finding 2/4: validate execution_mode STRICTLY as preview|full up front.
+      # An unknown value must NOT silently fall through the `== 'full'` guards and
+      # be treated as preview (a false-green). continue-on-error keeps the job
+      # alive so Summarize (if: always()) can classify it as a validation rejection
+      # (exit-3 semantics); the fw step is gated on rc==0 so the framework never
+      # runs for an invalid mode. (Enforcement `mode` observe|gate is validated
+      # separately by the bridge/normalize_request, finding 4.)
+      - name: Validate workflow inputs (execution_mode)
+        id: preflight
+        continue-on-error: true
+        env:
+          IN_EXEC: ${{ inputs.execution_mode }}
+        run: |
+          case "$IN_EXEC" in
+            preview|full)
+              echo "rc=0" >> "$GITHUB_OUTPUT" ;;
+            *)
+              echo "invalid execution_mode: '$IN_EXEC' (must be preview|full)" >&2
+              echo "rc=3" >> "$GITHUB_OUTPUT"
+              exit 3 ;;
+          esac
       - name: Checkout PEP implementation (self, pinned)
         uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803  # v6.1.0
         with:
@@ -114,6 +135,7 @@ jobs:
         # A failed preflight is classified as setup/infra in the Summarize step.
       - name: Run framework (preview or full)
         id: fw
+        if: ${{ steps.preflight.outputs.rc == '0' }}   # skip when execution_mode is invalid
         continue-on-error: true          # handle framework failure -> summarize anyway
         env:                             # pass inputs via env + build a Bash array (injection-safe)
           IN_PG: ${{ inputs.pg_major }}
@@ -165,6 +187,7 @@ jobs:
         env:
           IN_MODE: ${{ inputs.mode }}
           IN_EXEC: ${{ inputs.execution_mode }}
+          IN_PREFLIGHT: ${{ steps.preflight.outputs.rc }}   # execution_mode validity (finding 2)
           FW_CODE: ${{ steps.fw.outputs.exit_code }}   # real script exit code (issue #10/#12)
           DOCKER_OUTCOME: ${{ steps.docker.outcome }}
           SETUP_OUTCOME: ${{ steps.setup_python.outcome }}
@@ -206,7 +229,12 @@ jobs:
           # validation code 3, ANY missing-or-nonzero FW_CODE is infra_failure in BOTH
           # preview and full modes, and is NOT conditioned on whether report files
           # happen to exist.
-          if [ "$SETUP_OUTCOME" = "failure" ] || [ "$PIP_OUTCOME" = "failure" ]; then
+          if [ "$IN_PREFLIGHT" = "3" ]; then
+            # Finding 2: an unknown execution_mode is a caller-input validation
+            # rejection (exit-3 semantics), classified BEFORE the preview branch so
+            # it can never masquerade as a green preview.
+            args+=( --validation-error "invalid execution_mode input (must be preview|full) (validation)" )
+          elif [ "$SETUP_OUTCOME" = "failure" ] || [ "$PIP_OUTCOME" = "failure" ]; then
             args+=( --infra-error "python/dependency setup failed (setup)" )
           elif [ "$LOGIN_OUTCOME" = "failure" ]; then
             args+=( --infra-error "dockerhub login failed (setup)" )
@@ -245,6 +273,8 @@ jobs:
           IN_FAMILY: ${{ inputs.family }}
           IN_ARCH: ${{ inputs.arch }}
           IN_PG: ${{ inputs.pg_major }}
+          IN_CHANNEL: ${{ inputs.channel }}
+          IN_ALIAS: ${{ inputs.container_alias }}
           IN_SCENARIO: ${{ inputs.scenario }}
           IN_EXECMODE: ${{ inputs.execution_mode }}
         run: |
@@ -262,15 +292,17 @@ jobs:
           PY
           # Artifact name from stable request dimensions (via env, not a raw inline
           # expression) -- injection-safe, matching the fw step. upload-artifact (v4+, we pin v7)
-          # forbids duplicate artifact names in a run; two concurrent calls differ by
-          # scenario/execution_mode. The Upload step's name: uses the SAME values (safe
+          # forbids duplicate artifact names in a run. Finding 6: two concurrent
+          # calls can differ ONLY by channel and/or container target, so channel and
+          # container_alias are part of the name (alongside scenario/execution_mode)
+          # to keep it unique. The Upload step's name: uses the SAME values (safe
           # there as a YAML with: value) so the output and the uploaded name match.
-          echo "summary_artifact=pep-summary-${IN_COMPONENT}-${IN_FAMILY}-${IN_ARCH}-pg${IN_PG}-${IN_SCENARIO}-${IN_EXECMODE}-r${{ github.run_number }}-a${{ github.run_attempt }}" >> "$GITHUB_OUTPUT"
+          echo "summary_artifact=pep-summary-${IN_COMPONENT}-${IN_FAMILY}-${IN_ARCH}-pg${IN_PG}-${IN_CHANNEL}-${IN_ALIAS}-${IN_SCENARIO}-${IN_EXECMODE}-r${{ github.run_number }}-a${{ github.run_attempt }}" >> "$GITHUB_OUTPUT"
       - name: Upload artifacts (ALWAYS, unique-per-call + rerun-safe name)
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
         with:
           # EXACT same value as summary_artifact above (identical expression -> no
           # runtime coupling to the Emit step, and identical name guaranteed).
-          name: pep-summary-${{ inputs.component }}-${{ inputs.family }}-${{ inputs.arch }}-pg${{ inputs.pg_major }}-${{ inputs.scenario }}-${{ inputs.execution_mode }}-r${{ github.run_number }}-a${{ github.run_attempt }}
+          name: pep-summary-${{ inputs.component }}-${{ inputs.family }}-${{ inputs.arch }}-pg${{ inputs.pg_major }}-${{ inputs.channel }}-${{ inputs.container_alias }}-${{ inputs.scenario }}-${{ inputs.execution_mode }}-r${{ github.run_number }}-a${{ github.run_attempt }}
           path: test-logs/

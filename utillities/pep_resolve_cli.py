@@ -30,6 +30,21 @@ def _resolve():
     # PEP_CONFIG_REPO = the config{PG}.env REPO captured BEFORE the --repo
     # override (issue #4); PEP_CALLER_REPO = the --repo override. Both layers are
     # recorded so provenance stays truthful.
+    #
+    # Finding 7 — the root-.env discrepancy, resolved by documentation (NOT by
+    # broadening config behavior):
+    #   The resolver's "config" layer is DELIBERATELY sourced only from
+    #   configuration/config{PG}.env — the file run_pep_tf.sh actually `source`s
+    #   and then EXPORTS (REPO/UPGRADE) before invoking pytest. The repo-root
+    #   `.env` (which also defines REPO) is a pytest-RUNTIME convenience loaded by
+    #   component-test/conftest.py via python-dotenv `load_dotenv()`, whose default
+    #   does NOT override an already-exported variable. So in a bridge-driven run
+    #   the config{PG}.env value (or the caller override) is authoritative and the
+    #   root .env never overrides it — meaning the config layer recorded here MATCHES
+    #   what actually drives the run. Reading the root .env into the resolver would
+    #   be speculative scope-broadening (and could record a REPO the run never uses),
+    #   so it is intentionally NOT done. If the sourcing contract in run_pep_tf.sh
+    #   ever changes to consult root .env, update PEP_CONFIG_REPO's capture there.
     return rz.resolve(
         ["repo", "scenario", "upgrade"],
         caller={"repo": os.environ.get("PEP_CALLER_REPO") or None,

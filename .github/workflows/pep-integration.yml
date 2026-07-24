@@ -153,6 +153,7 @@ jobs:
           IN_EXP_BIN: ${{ inputs.expected_binary }}
           IN_SCENARIO: ${{ inputs.scenario }}
           IN_MODE: ${{ inputs.execution_mode }}
+          IN_ENFORCE_MODE: ${{ inputs.mode }}   # enforcement mode -> must reach the request (finding 4)
         run: |
           set -o pipefail
           args=( --integration
@@ -160,6 +161,11 @@ jobs:
                  --components "$IN_COMPONENT" --repo "$IN_CHANNEL"
                  --containers "$IN_ALIAS" --package-name "$IN_PKG"
                  --expected-version "$IN_EXP_VERSION" --scenario "$IN_SCENARIO" )
+          # Finding 4: forward the enforcement mode so it reaches the normalized
+          # request (run_pep_tf.sh --mode -> PEP_MODE -> normalize_request). An
+          # invalid mode is then rejected by the bridge preflight with exit 3
+          # (FW_CODE==3 -> validation), not silently defaulted to observe.
+          [ -n "$IN_ENFORCE_MODE" ] && args+=( --mode "$IN_ENFORCE_MODE" )
           [ -n "$IN_EXP_BUILDNUM" ] && args+=( --expected-buildnum "$IN_EXP_BUILDNUM" )
           [ -n "$IN_EFF_TAG" ]      && args+=( --effective-tag "$IN_EFF_TAG" )
           [ -n "$IN_EXP_RPM" ]      && args+=( --expected-rpm "$IN_EXP_RPM" )
@@ -194,6 +200,14 @@ jobs:
           PIP_OUTCOME: ${{ steps.pip.outcome }}
           LOGIN_OUTCOME: ${{ steps.dockerhub_login.outcome }}
         run: |
+          # Finding 4: an invalid enforcement mode is already a validation
+          # rejection — the bridge rejects it with exit 3 (FW_CODE==3 branch
+          # below). Coerce an out-of-range IN_MODE to observe here so the
+          # summarizer's `--mode` choices guard cannot raise SystemExit(2) and
+          # turn that clean validation outcome into a summarizer crash /
+          # infra_failure (this step has NO continue-on-error). Enforcement for a
+          # valid gate run is unaffected.
+          case "$IN_MODE" in observe|gate) ;; *) IN_MODE=observe ;; esac
           args=( --out test-logs/summary.json --mode "$IN_MODE" )
           # issue #8 + carry-forward #1: read ONLY this run's reports (manifest),
           # NEVER a recursive glob over an accumulating test-logs/. In a full

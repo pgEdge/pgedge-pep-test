@@ -179,6 +179,37 @@ def test_enforcement_mode_invalid_rejected_exit_3():
     assert proc.returncode == 3, f"stdout:\n{proc.stdout}\nstderr:\n{proc.stderr}"
 
 
+# ── Follow-up item 2: PEP_INTEGRATION_MODE must be derived, never inherited ──
+
+@_needs_tools
+def test_inherited_integration_mode_does_not_flip_standalone_arch():
+    # Item 2: a poisoned parent environment (PEP_INTEGRATION_MODE=1) must NOT
+    # turn a no-integration-arguments invocation into an integration run. The
+    # script derives its mode from THIS invocation's supported inputs only.
+    # Proof via the arch path: standalone invalid --arch keeps the legacy exit 2;
+    # if the inherited flag leaked, integration mode would reject it with exit 3.
+    proc = _run(["--pgver", "17", "--platforms", "rpm", "--components", "rag",
+                 "--arch", "sparc", "--dry-run"],
+                extra_env={"PEP_INTEGRATION_MODE": "1"})
+    assert proc.returncode == 2, (
+        "inherited PEP_INTEGRATION_MODE flipped a standalone run into integration\n"
+        f"stdout:\n{proc.stdout}\nstderr:\n{proc.stderr}")
+
+
+@_needs_tools
+def test_inherited_integration_mode_does_not_flip_standalone_missing_config():
+    # Item 2 (second angle): with the parent env poisoned, a standalone run
+    # requesting a PG major with no config file must still SKIP + exit 0 (legacy
+    # behavior), not become a finding-1 integration validation rejection (exit 3).
+    proc = _run(["--pgver", "99", "--platforms", "rpm", "--components", "rag", "--dry-run"],
+                extra_env={"PEP_INTEGRATION_MODE": "1"})
+    assert proc.returncode == 0, (
+        "inherited PEP_INTEGRATION_MODE flipped the missing-config skip into a rejection\n"
+        f"stdout:\n{proc.stdout}\nstderr:\n{proc.stderr}")
+    assert "Skipping missing environment file" in proc.stdout
+    assert "[integration]" not in (proc.stdout + proc.stderr)
+
+
 # ── Manifest-writer snippet (Step 5 boundary coverage) ───────────────────────
 
 _MANIFEST_SNIPPET = textwrap.dedent('''\

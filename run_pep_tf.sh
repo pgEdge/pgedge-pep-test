@@ -264,8 +264,17 @@ done
 # integration mode, while standalone keeps its legacy exit 2. Nothing below the
 # marker's gated blocks runs unless PEP_INTEGRATION_MODE=1, keeping standalone
 # behavior unchanged.
+#
+# Item 2: DERIVE the mode from THIS invocation's supported inputs only — the
+# else branch explicitly unsets it so an inherited PEP_INTEGRATION_MODE=1 in the
+# parent environment can NEVER turn a no-integration-arguments run into an
+# integration run. (Setting-only, as before, would let a poisoned parent env
+# silently flip a standalone invocation.) Unsetting in the standalone case is
+# byte-for-byte the standalone contract (the variable is simply absent).
 if [[ -n "${EXPECTED_VERSION:-}" || "${INTEGRATION_FLAG:-}" == "true" ]]; then
   export PEP_INTEGRATION_MODE=1
+else
+  unset PEP_INTEGRATION_MODE
 fi
 
 # Validate --arch (empty == absent == no filter)

@@ -40,6 +40,7 @@ jobs:
       family: rpm
       arch: amd64
       execution_mode: preview
+      invocation_id: preview          # item 1: unique per call so artifact names can't collide
       pep_implementation_ref: ${{ github.sha }}
     secrets:
       pep_read_token: ${{ secrets.GITHUB_TOKEN }}   # same-repo: default token suffices
@@ -70,6 +71,7 @@ jobs:
       execution_mode: preview
       mode: observe                 # observe -> summarizer exit 0, job still succeeds
       scenario: upgrade             # unsupported in the POC -> expected rejection
+      invocation_id: validation-upgrade   # item 1: unique per call
       pep_implementation_ref: ${{ github.sha }}
     secrets:
       pep_read_token: ${{ secrets.GITHUB_TOKEN }}
@@ -105,6 +107,7 @@ jobs:
       arch: amd64
       execution_mode: bogus         # invalid -> must be rejected, not treated as preview
       mode: observe
+      invocation_id: bad-execmode    # item 1: unique per call
       pep_implementation_ref: ${{ github.sha }}
     secrets:
       pep_read_token: ${{ secrets.GITHUB_TOKEN }}
@@ -141,6 +144,7 @@ jobs:
       arch: amd64
       execution_mode: preview       # valid -> fw runs the bridge
       mode: bogus                   # invalid enforcement mode -> must be rejected
+      invocation_id: bad-mode        # item 1: unique per call (else collides with preview-call)
       pep_implementation_ref: ${{ github.sha }}
     secrets:
       pep_read_token: ${{ secrets.GITHUB_TOKEN }}

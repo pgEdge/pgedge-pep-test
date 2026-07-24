@@ -18,6 +18,13 @@ on:
       scenario:          {required: false, type: string, default: "certification"}
       mode:              {required: false, type: string, default: "observe"}
       execution_mode:    {required: false, type: string, default: "preview"}
+      # Follow-up item 1: a validated, caller-provided discriminator folded into
+      # the upload-artifact name so two calls in ONE run that differ only by a
+      # dimension NOT in the name (e.g. enforcement `mode`) cannot collide. The
+      # caller owns uniqueness; charset is validated in the preflight (below) so
+      # this is a robust id, not arbitrary concatenated input. Default "" keeps
+      # single-call callers working (name falls back to the dimensions).
+      invocation_id:     {required: false, type: string, default: ""}
       pep_implementation_ref: {required: true, type: string}
     secrets:
       pep_read_token:     {required: true}
@@ -48,20 +55,29 @@ jobs:
       # (exit-3 semantics); the fw step is gated on rc==0 so the framework never
       # runs for an invalid mode. (Enforcement `mode` observe|gate is validated
       # separately by the bridge/normalize_request, finding 4.)
-      - name: Validate workflow inputs (execution_mode)
+      - name: Validate workflow inputs (execution_mode, invocation_id)
         id: preflight
         continue-on-error: true
         env:
           IN_EXEC: ${{ inputs.execution_mode }}
+          IN_INVOCATION_ID: ${{ inputs.invocation_id }}
         run: |
+          rc=0
           case "$IN_EXEC" in
-            preview|full)
-              echo "rc=0" >> "$GITHUB_OUTPUT" ;;
-            *)
-              echo "invalid execution_mode: '$IN_EXEC' (must be preview|full)" >&2
-              echo "rc=3" >> "$GITHUB_OUTPUT"
-              exit 3 ;;
+            preview|full) ;;
+            *) echo "invalid execution_mode: '$IN_EXEC' (must be preview|full)" >&2; rc=3 ;;
           esac
+          # Follow-up item 1: invocation_id is concatenated into the artifact
+          # name, so validate its charset BEFORE it reaches the name (reject
+          # path/format-breaking input) — a robust discriminator, not arbitrary
+          # concatenation. Empty is allowed (single-call callers). Both checks
+          # share the exit-3 validation-rejection semantics (finding 2/4).
+          if [ -n "$IN_INVOCATION_ID" ] && ! printf '%s' "$IN_INVOCATION_ID" | grep -qE '^[A-Za-z0-9._-]{1,64}$'; then
+            echo "invalid invocation_id: '$IN_INVOCATION_ID' (allowed: [A-Za-z0-9._-], 1-64 chars)" >&2
+            rc=3
+          fi
+          echo "rc=$rc" >> "$GITHUB_OUTPUT"
+          [ "$rc" = "0" ] || exit "$rc"
       - name: Checkout PEP implementation (self, pinned)
         uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803  # v6.1.0
         with:
@@ -244,10 +260,11 @@ jobs:
           # preview and full modes, and is NOT conditioned on whether report files
           # happen to exist.
           if [ "$IN_PREFLIGHT" = "3" ]; then
-            # Finding 2: an unknown execution_mode is a caller-input validation
-            # rejection (exit-3 semantics), classified BEFORE the preview branch so
-            # it can never masquerade as a green preview.
-            args+=( --validation-error "invalid execution_mode input (must be preview|full) (validation)" )
+            # Finding 2 + follow-up item 1: an unknown execution_mode OR an
+            # invalid invocation_id is a caller-input validation rejection
+            # (exit-3 semantics), classified BEFORE the preview branch so it can
+            # never masquerade as a green preview.
+            args+=( --validation-error "invalid workflow input (execution_mode or invocation_id) (validation)" )
           elif [ "$SETUP_OUTCOME" = "failure" ] || [ "$PIP_OUTCOME" = "failure" ]; then
             args+=( --infra-error "python/dependency setup failed (setup)" )
           elif [ "$LOGIN_OUTCOME" = "failure" ]; then
@@ -291,6 +308,7 @@ jobs:
           IN_ALIAS: ${{ inputs.container_alias }}
           IN_SCENARIO: ${{ inputs.scenario }}
           IN_EXECMODE: ${{ inputs.execution_mode }}
+          IN_INVOCATION_ID: ${{ inputs.invocation_id }}
         run: |
           python3 - <<'PY' >> "$GITHUB_OUTPUT"
           import json
@@ -311,12 +329,19 @@ jobs:
           # container_alias are part of the name (alongside scenario/execution_mode)
           # to keep it unique. The Upload step's name: uses the SAME values (safe
           # there as a YAML with: value) so the output and the uploaded name match.
-          echo "summary_artifact=pep-summary-${IN_COMPONENT}-${IN_FAMILY}-${IN_ARCH}-pg${IN_PG}-${IN_CHANNEL}-${IN_ALIAS}-${IN_SCENARIO}-${IN_EXECMODE}-r${{ github.run_number }}-a${{ github.run_attempt }}" >> "$GITHUB_OUTPUT"
+          # Follow-up item 1: append the validated invocation_id (when the caller
+          # set one) as the authoritative discriminator for calls that differ only
+          # by a dimension NOT in the name above. Appended ONLY when non-empty; the
+          # Upload step's YAML expression below produces the identical suffix.
+          inv=""; [ -n "$IN_INVOCATION_ID" ] && inv="-${IN_INVOCATION_ID}"
+          echo "summary_artifact=pep-summary-${IN_COMPONENT}-${IN_FAMILY}-${IN_ARCH}-pg${IN_PG}-${IN_CHANNEL}-${IN_ALIAS}-${IN_SCENARIO}-${IN_EXECMODE}${inv}-r${{ github.run_number }}-a${{ github.run_attempt }}" >> "$GITHUB_OUTPUT"
       - name: Upload artifacts (ALWAYS, unique-per-call + rerun-safe name)
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
         with:
           # EXACT same value as summary_artifact above (identical expression -> no
-          # runtime coupling to the Emit step, and identical name guaranteed).
-          name: pep-summary-${{ inputs.component }}-${{ inputs.family }}-${{ inputs.arch }}-pg${{ inputs.pg_major }}-${{ inputs.channel }}-${{ inputs.container_alias }}-${{ inputs.scenario }}-${{ inputs.execution_mode }}-r${{ github.run_number }}-a${{ github.run_attempt }}
+          # runtime coupling to the Emit step, and identical name guaranteed). The
+          # invocation_id suffix uses format() so it is appended ONLY when non-empty,
+          # byte-matching the Emit step's `${inv}` (item 1).
+          name: pep-summary-${{ inputs.component }}-${{ inputs.family }}-${{ inputs.arch }}-pg${{ inputs.pg_major }}-${{ inputs.channel }}-${{ inputs.container_alias }}-${{ inputs.scenario }}-${{ inputs.execution_mode }}${{ inputs.invocation_id != '' && format('-{0}', inputs.invocation_id) || '' }}-r${{ github.run_number }}-a${{ github.run_attempt }}
           path: test-logs/

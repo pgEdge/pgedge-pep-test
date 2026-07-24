@@ -273,7 +273,9 @@ if [[ -n "$ARCH" ]]; then
   case "$ARCH" in
     arm64|amd64) ;;
     *)
-      echo "[arch-filter] ERROR: --arch must be 'arm64' or 'amd64' (got '$ARCH')" >&2
+      # Message kept on stdout to preserve byte-for-byte standalone behavior
+      # (the exit CODE is what the integration contract keys off, not the stream).
+      echo "[arch-filter] ERROR: --arch must be 'arm64' or 'amd64' (got '$ARCH')"
       # Finding 4: in integration mode an invalid arch is a KNOWN request
       # validation rejection (exit 3); standalone preserves the legacy exit 2.
       [[ "${PEP_INTEGRATION_MODE:-}" == "1" ]] && exit "$PEP_RC_VALIDATION"

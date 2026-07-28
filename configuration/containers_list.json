@@ -9,8 +9,8 @@
     { "name": "auto-alma10-arm",   "alias": "alma10-arm64",  "description": "AlmaLinux 10   / ARM64",  "enabled": true },
     { "name": "auto-oel9-arm",     "alias": "oel9-arm64",    "description": "Oracle Linux 9 / ARM64",  "enabled": false },
     { "name": "auto-oel10-arm",    "alias": "oel10-arm64",   "description": "Oracle Linux 10/ ARM64",  "enabled": false },
-    { "name": "my-rocky9-amd",     "alias": "rocky9-amd64",  "description": "Rocky Linux 9  / AMD64",  "enabled": false },
-    { "name": "auto-alma9-amd",    "alias": "alma9-amd64",   "description": "AlmaLinux 9    / AMD64",  "enabled": true },
+    { "name": "my-rocky9-amd",     "alias": "rocky9-amd64",  "description": "Rocky Linux 9  / AMD64",  "enabled": true },
+    { "name": "auto-alma9-amd",    "alias": "alma9-amd64",   "description": "AlmaLinux 9    / AMD64",  "enabled": false },
     { "name": "auto-oel9-amd",     "alias": "oel9-amd64",    "description": "Oracle Linux 9 / AMD64",  "enabled": false }
   ],
 

@@ -1,0 +1,5 @@
+/etc/pgedge-control-plane/config.json
+/usr/lib/systemd/system/pgedge-control-plane.service
+/usr/sbin/pgedge-control-plane
+/usr/share/pgedge-control-plane/pgedge-control-plane-sbom.json
+/usr/share/pgedge-control-plane/pgedge-control-plane-sbom.json.asc

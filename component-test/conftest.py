@@ -263,6 +263,15 @@ def detect_component_from_test_file(config):
             'rhel_package_default': f'pgedge-pgvector_{os.getenv("PG_MAJOR_VERSION", "16")}',
             'deb_package_env': 'DEB_PGVECTOR_PACKAGE',
             'deb_package_default': f'pgedge-postgresql-{os.getenv("PG_MAJOR_VERSION", "16")}-pgvector'
+        },
+        'test_pep_control_plane': {
+            'name': 'Control Plane',
+            'version_env': 'PGEDGE_CONTROL_PLANE_VERSION',
+            'version_default': '0.10.0~rc2',
+            'rhel_package_env': 'CONTROL_PLANE_PACKAGE',
+            'rhel_package_default': 'pgedge-control-plane',
+            'deb_package_env': 'DEB_CONTROL_PLANE_PACKAGE',
+            'deb_package_default': 'pgedge-control-plane'
         }
     }
 

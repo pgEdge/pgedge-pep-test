@@ -1483,8 +1483,69 @@ def test_cleanup(container_name, container_type):
     pgbin  = config["pgbin"]
     pguser = config["pguser"]
 
-    # Step 1: run reset_patroni.sh — stops Patroni, stops postgres on n2/n3,
-    # and clears etcd state for the Patroni scope.
+    # Cleanup ORDER matters:
+    #   1. Kill Patroni first  — else it respawns Postgres AND rewrites the etcd
+    #      DCS keys that reset_patroni.sh is about to clear.
+    #   2. Run reset_patroni.sh — REQUIRED: it clears the etcd DCS state for the
+    #      Patroni scope; effective only now that Patroni is dead and while etcd
+    #      is still up (etcd is stopped in step 4).
+    #   3. Stop Postgres with the platform-correct pgbin.
+    #   4. Stop etcd.
+    #
+    # We do NOT depend on pkill/pgrep being installed — the helper below uses a
+    # /proc scan needing only coreutils, retries, and verifies, so a silent
+    # "pkill missing/missed" becomes a deterministic teardown.
+    kill_helper = r"""
+kill_by_pattern() {
+  # NOTE: deliberately NOT using `pkill -f "$pat"` — that would also match this
+  # cleanup shell's own `bash -c <script>` command line (which contains the
+  # pattern text) and SIGKILL the teardown mid-run. The /proc scan below skips
+  # our own shell ($self) and its parent ($ppid), so it is self-safe.
+  pat="$1"
+  self=$$
+  ppid=$(awk '{print $4}' /proc/$self/stat 2>/dev/null)
+  for d in /proc/[0-9]*; do
+    pid=${d##*/}
+    [ "$pid" = "$self" ] && continue
+    [ "$pid" = "$ppid" ] && continue
+    cmd=$(tr '\0' ' ' < "$d/cmdline" 2>/dev/null) || continue
+    case "$cmd" in
+      *"$pat"*) kill -9 "$pid" 2>/dev/null || true ;;
+    esac
+  done
+}
+count_by_pattern() {
+  pat="$1"; n=0
+  for d in /proc/[0-9]*; do
+    cmd=$(tr '\0' ' ' < "$d/cmdline" 2>/dev/null) || continue
+    case "$cmd" in *"$pat"*) n=$((n+1)) ;; esac
+  done
+  echo "$n"
+}
+"""
+
+    # Step 1: Kill Patroni FIRST — otherwise it keeps supervising/respawning the
+    #         Postgres it manages (n2/n3) AND rewrites the etcd DCS keys that
+    #         Step 2 clears. Retry until no 'bin/patroni' process remains (matches
+    #         both the `sudo … exec /usr/bin/patroni` wrapper and the python
+    #         patroni process).
+    patroni_kill = kill_helper + r"""
+for i in 1 2 3 4 5; do
+  kill_by_pattern 'bin/patroni'
+  sleep 2
+  [ "$(count_by_pattern 'bin/patroni')" = "0" ] && break
+done
+echo "patroni_remaining=$(count_by_pattern 'bin/patroni')"
+"""
+    _, out = container.exec_run(["bash", "-c", patroni_kill], user="root")
+    print(f"Patroni teardown: {out.decode().strip()}")
+
+    # Step 2: run reset_patroni.sh — REQUIRED. Its key job is clearing the etcd
+    # DCS state for the Patroni scope (etcdctl del --prefix /service/<scope>/).
+    # It runs here — after Patroni is dead (Step 1) so the cleared keys are not
+    # immediately repopulated, and before etcd is stopped (Step 4) so etcdctl can
+    # still reach it. It also best-effort stops Postgres via a hardcoded
+    # /usr/pgsql-18 pg_ctl path, so Step 3 re-stops Postgres with the right pgbin.
     reset_script = (Path(__file__).parent.parent / "utillities" / "reset_patroni.sh").resolve()
     if reset_script.exists():
         with reset_script.open('r') as f:
@@ -1505,17 +1566,8 @@ def test_cleanup(container_name, container_type):
     else:
         print(f"WARNING: reset_patroni.sh not found at {reset_script} — skipping")
 
-    # Step 2: reset_patroni.sh can leave Patroni (and thus Postgres) running on
-    # Debian — it stops Postgres via a hardcoded RHEL pg_ctl path and its `set -e`
-    # can abort on the etcd step. So terminate explicitly and in the right order:
-    #
-    #   (a) Kill Patroni FIRST — otherwise it keeps supervising/respawning the
-    #       Postgres it manages (n2/n3). The '[p]atroni' bracket keeps pkill from
-    #       matching its own command line.
-    container.exec_run(["bash", "-c", "pkill -9 -f '[p]atroni' 2>/dev/null; true"], user="root")
-    time.sleep(3)
-
-    #   (b) Stop every node's Postgres with the platform-correct pgbin.
+    # Step 3: Stop every node's Postgres with the platform-correct pgbin, then
+    #         force-kill any postmaster still bound to a /tmp/n* data dir.
     for node_name, node_port in [("n1", n1_port), ("n2", n2_port), ("n3", n3_port)]:
         node_pgdata = f"/tmp/{node_name}"
         container.exec_run(
@@ -1523,15 +1575,46 @@ def test_cleanup(container_name, container_type):
              f"[ -d {node_pgdata} ] && {pgbin}/pg_ctl -D {node_pgdata} -m immediate stop 2>/dev/null; true"],
             user="root"
         )
+    postgres_kill = kill_helper + r"""
+for i in 1 2 3; do
+  kill_by_pattern 'postgres -D /tmp/n'
+  sleep 2
+  [ "$(count_by_pattern 'postgres -D /tmp/n')" = "0" ] && break
+done
+echo "postgres_remaining=$(count_by_pattern 'postgres -D /tmp/n')"
+"""
+    _, out = container.exec_run(["bash", "-c", postgres_kill], user="root")
+    print(f"Postgres teardown: {out.decode().strip()}")
 
-    #   (c) Fallback: force-kill any Postgres still bound to a /tmp/n* data dir.
-    container.exec_run(["bash", "-c", "pkill -9 -f '[p]ostgres -D /tmp/n' 2>/dev/null; true"], user="root")
-    time.sleep(2)
+    # Step 4: Stop etcd — cover BOTH the systemd unit and a standalone
+    #         (`nohup /usr/bin/etcd …`) launch. 'bin/etcd ' (trailing space)
+    #         matches the binary while sparing etcdctl.
+    etcd_kill = kill_helper + r"""
+systemctl stop etcd 2>/dev/null || true
+systemctl disable etcd 2>/dev/null || true
+systemctl reset-failed etcd 2>/dev/null || true
+for i in 1 2 3; do
+  command -v pkill >/dev/null 2>&1 && pkill -9 -x etcd 2>/dev/null || true
+  kill_by_pattern 'bin/etcd '
+  sleep 2
+  [ "$(count_by_pattern 'bin/etcd ')" = "0" ] && break
+done
+echo "etcd_remaining=$(count_by_pattern 'bin/etcd ')"
+"""
+    _, out = container.exec_run(["bash", "-c", etcd_kill], user="root")
+    print(f"etcd teardown: {out.decode().strip()}")
 
-    # Step 3: stop etcd service
-    container.exec_run(["bash", "-c", "pkill -x etcd 2>/dev/null; systemctl stop etcd 2>/dev/null || true"], user="root")
+    # Step 5: verify nothing survived; surface a clear warning if it did.
+    verify = kill_helper + r"""
+echo "patroni=$(count_by_pattern 'bin/patroni') postgres=$(count_by_pattern 'postgres -D /tmp/n') etcd=$(count_by_pattern 'bin/etcd ')"
+"""
+    _, out = container.exec_run(["bash", "-c", verify], user="root")
+    survivors = out.decode().strip()
+    print(f"Post-teardown process check: {survivors}")
+    if any(f"{name}=0" not in survivors for name in ("patroni", "postgres", "etcd")):
+        print(f"WARNING: some processes survived cleanup on {container_name}: {survivors}")
 
-    # Step 4: remove all files and directories under /tmp/
+    # Step 6: remove all files and directories under /tmp/
     # This covers PG data dirs (n1/n2/n3), Patroni logs, pgpass files,
     # copied scripts (zodan, reset_patroni, northwind, spock_load_test, etc.)
     rc, out = container.exec_run(
@@ -1540,7 +1623,7 @@ def test_cleanup(container_name, container_type):
     )
     print(f"/tmp cleanup: {out.decode().strip()}")
 
-    # Step 5: remove all pgedge-* packages
+    # Step 7: remove all pgedge-* packages
     rc, out = container.exec_run(
         ["bash", "-c",
          "if command -v dnf &>/dev/null; then "

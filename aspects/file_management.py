@@ -355,39 +355,45 @@ def verify_bundled_files(
         installed_files = [line.strip() for line in output.decode().strip().splitlines() if line.strip()]
         print(f"Installed {len(installed_files)} files (initial dpkg -L for {package_name})")
 
-        # If some expected files are missing, it's possible that the files are installed
-        # by another package (e.g., 'postgresql-17' vs 'pgedge-postgresql-16'). As a fallback
-        # try querying the candidate expected package name (derived from expected_file_path)
-        # and, as a last resort, list files under /usr/lib/postgresql and /usr/share/postgresql/.
-        # We'll merge fallback results with the initial list to improve matching.
-        try:
-            expected_pkg_candidate = expected_file_path.name  # e.g., 'postgresql-17'
-            if expected_pkg_candidate and expected_pkg_candidate != package_name:
-                exit_code2, output2 = container.exec_run(f"dpkg -L {expected_pkg_candidate}", user="root")
-                if exit_code2 == 0:
-                    fallback_files = [line.strip() for line in output2.decode().strip().splitlines() if line.strip()]
-                    print(f"Installed {len(fallback_files)} files from fallback dpkg -L {expected_pkg_candidate}")
-                    # Merge unique
-                    merged = list(dict.fromkeys(installed_files + fallback_files))
+        # The fallback dpkg query + broad filesystem scan below are ONLY appropriate for
+        # PostgreSQL core/server packages, whose files can be split across packages or vary
+        # by dpkg layout. For a regular extension package (e.g. pgvector, lolor), `dpkg -L
+        # <package>` already lists exactly the files that package owns, so merging in the
+        # scan would wrongly pull in every server-package file and report them as "extra".
+        if is_pg_core_package:
+            # If some expected files are missing, it's possible that the files are installed
+            # by another package (e.g., 'postgresql-17' vs 'pgedge-postgresql-16'). As a fallback
+            # try querying the candidate expected package name (derived from expected_file_path)
+            # and, as a last resort, list files under /usr/lib/postgresql and /usr/share/postgresql/.
+            # We'll merge fallback results with the initial list to improve matching.
+            try:
+                expected_pkg_candidate = expected_file_path.name  # e.g., 'postgresql-17'
+                if expected_pkg_candidate and expected_pkg_candidate != package_name:
+                    exit_code2, output2 = container.exec_run(f"dpkg -L {expected_pkg_candidate}", user="root")
+                    if exit_code2 == 0:
+                        fallback_files = [line.strip() for line in output2.decode().strip().splitlines() if line.strip()]
+                        print(f"Installed {len(fallback_files)} files from fallback dpkg -L {expected_pkg_candidate}")
+                        # Merge unique
+                        merged = list(dict.fromkeys(installed_files + fallback_files))
+                        installed_files = merged
+
+            except Exception:
+                # ignore fallback failure and try a broader filesystem scan below
+                pass
+
+            # If we still might be missing files (or to be comprehensive), run a filesystem scan
+            # under typical PostgreSQL directories and merge results. This captures files provided
+            # by other packages or differing dpkg layouts.
+            try:
+                exit_code3, output3 = container.exec_run("/bin/sh -c 'find /usr/lib/postgresql /usr/share/postgresql -type f 2>/dev/null || true'", user="root")
+                if exit_code3 == 0 and output3:
+                    fs_files = [line.strip() for line in output3.decode().strip().splitlines() if line.strip()]
+                    print(f"Found {len(fs_files)} files from filesystem scan under /usr/lib/postgresql and /usr/share/postgresql")
+                    merged = list(dict.fromkeys(installed_files + fs_files))
                     installed_files = merged
-
-        except Exception:
-            # ignore fallback failure and try a broader filesystem scan below
-            pass
-
-        # If we still might be missing files (or to be comprehensive), run a filesystem scan
-        # under typical PostgreSQL directories and merge results. This captures files provided
-        # by other packages or differing dpkg layouts.
-        try:
-            exit_code3, output3 = container.exec_run("/bin/sh -c 'find /usr/lib/postgresql /usr/share/postgresql -type f 2>/dev/null || true'", user="root")
-            if exit_code3 == 0 and output3:
-                fs_files = [line.strip() for line in output3.decode().strip().splitlines() if line.strip()]
-                print(f"Found {len(fs_files)} files from filesystem scan under /usr/lib/postgresql and /usr/share/postgresql")
-                merged = list(dict.fromkeys(installed_files + fs_files))
-                installed_files = merged
-        except Exception:
-            # If find fails (older shells), ignore and proceed with installed_files
-            pass
+            except Exception:
+                # If find fails (older shells), ignore and proceed with installed_files
+                pass
 
         print(f"Total installed files considered: {len(installed_files)}")
 
@@ -406,10 +412,10 @@ def verify_bundled_files(
         normalized = path.lower()
 
         # Remove PG major version tokens (e.g., -17, _17)
-        normalized = re.sub(r'[-_](16|17|18)\b', '', normalized)
+        normalized = re.sub(r'[-_](16|17|18|19)\b', '', normalized)
 
         # Replace directory-level version segments like /16/ or /17/ with /VERSION/
-        normalized = re.sub(r'/(16|17|18)/', '/version/', normalized)
+        normalized = re.sub(r'/(16|17|18|19)/', '/version/', normalized)
 
         # Collapse extension numeric ranges like --1.3--1.4 or --1.10--1.11 to a placeholder
         # Also capture trailing pre-release suffixes like dev, alpha, beta, rc

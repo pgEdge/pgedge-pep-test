@@ -84,6 +84,22 @@ deb_pgbin = os.getenv("DEB_PG_BIN_PATH", f"/usr/lib/postgresql/{pg_major_version
 rhel_all_packages = _packages_from_matrix(pg_major_version, "rhel")
 deb_all_packages  = _packages_from_matrix(pg_major_version, "deb")
 
+# PostGIS on RHEL: postgis35 and postgis36 are distinct, mutually-exclusive packages
+# (both own postgis-3.so). repo_health installs everything together, so only one series
+# can be present at a time — POSTGIS_TARGET_VERSION (35|36) selects which. The matrix
+# defaults to postgis35; swap it to postgis36 when requested. Debian is unaffected
+# (single postgis-3 package, upgraded in place).
+postgis_target_version = os.getenv("POSTGIS_TARGET_VERSION", "35").strip()
+postgis35_version = os.getenv(f"PGEDGE_POSTGIS35_{pg_major_version}_VERSION")
+postgis36_version = os.getenv(f"PGEDGE_POSTGIS36_{pg_major_version}_VERSION")
+_rhel_postgis35 = f"pgedge-postgis35_{pg_major_version}"
+_rhel_postgis36 = os.getenv("POSTGIS36_PACKAGE", f"pgedge-postgis36_{pg_major_version}")
+if postgis_target_version == "36":
+    rhel_all_packages = [_rhel_postgis36 if p == _rhel_postgis35 else p for p in rhel_all_packages]
+
+# Debian's single postgis-3 package always tracks the newest minor available.
+deb_postgis_version = postgis36_version or postgis35_version
+
 # All extensions to create
 all_extensions = [
     ext.strip() for ext in os.getenv("All_EXTENSIONS", "").split(",")
@@ -97,7 +113,8 @@ RHEL_PACKAGE_VERSION_MAP = {
     f"pgedge-postgresql{pg_major_version}-server":     os.getenv(f"PGEDGE_POSTGRESQL{pg_major_version}_SERVER_VERSION"),
     f"pgedge-pldebugger_{pg_major_version}":           os.getenv(f"PGEDGE_PLDEBUGGER_{pg_major_version}_VERSION"),
     f"pgedge-snowflake_{pg_major_version}":            os.getenv(f"PGEDGE_SNOWFLAKE_{pg_major_version}_VERSION"),
-    f"pgedge-postgis35_{pg_major_version}":            os.getenv(f"PGEDGE_POSTGIS35_{pg_major_version}_VERSION"),
+    f"pgedge-postgis35_{pg_major_version}":            postgis35_version,
+    f"pgedge-postgis36_{pg_major_version}":            postgis36_version,
     f"pgedge-lolor_{pg_major_version}":                os.getenv(f"PGEDGE_LOLOR_{pg_major_version}_VERSION"),
     f"pgedge-spock50_{pg_major_version}":              os.getenv(f"PGEDGE_SPOCK50_{pg_major_version}_VERSION"),
     f"pgedge-pgaudit_{pg_major_version}":              os.getenv(f"PGEDGE_PGAUDIT_{pg_major_version}_VERSION"),
@@ -126,7 +143,7 @@ DEB_PACKAGE_VERSION_MAP = {
     f"pgedge-postgresql-{pg_major_version}":                  os.getenv(f"PGEDGE_POSTGRESQL{pg_major_version}_SERVER_VERSION"),
     f"pgedge-postgresql-{pg_major_version}-pldebugger":       os.getenv(f"PGEDGE_PLDEBUGGER_{pg_major_version}_VERSION"),
     f"pgedge-postgresql-{pg_major_version}-snowflake":        os.getenv(f"PGEDGE_SNOWFLAKE_{pg_major_version}_VERSION"),
-    f"pgedge-postgresql-{pg_major_version}-postgis-3":        os.getenv(f"PGEDGE_POSTGIS35_{pg_major_version}_VERSION"),
+    f"pgedge-postgresql-{pg_major_version}-postgis-3":        deb_postgis_version,
     f"pgedge-postgresql-{pg_major_version}-lolor":            os.getenv(f"PGEDGE_LOLOR_{pg_major_version}_VERSION"),
     f"pgedge-postgresql-{pg_major_version}-spock50":          os.getenv(f"PGEDGE_SPOCK50_{pg_major_version}_VERSION"),
     f"pgedge-postgresql-{pg_major_version}-pgaudit":          os.getenv(f"PGEDGE_PGAUDIT_{pg_major_version}_VERSION"),

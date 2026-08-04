@@ -1,5 +1,10 @@
 name: PEP Self-Test
 on: {pull_request: {}, workflow_dispatch: {}}
+# Least privilege: this self-test only checks out and runs unit/lint layers.
+# Read-only contents is all the GITHUB_TOKEN (incl. the pep_read_token passed to
+# the reusable workflow) needs; safe for a public repo where forks trigger PRs.
+permissions:
+  contents: read
 jobs:
   unit:
     runs-on: ubuntu-24.04

@@ -1,0 +1,44 @@
+{
+  "_comment": "Example AWS EC2 instance registry for pgedge-pep-test regression runs. Copy this file to configuration/aws_instances.json (gitignored) and fill in your own instances before running with --target aws.",
+  "_usage": "Set 'enabled: true' to include an instance in AWS test runs.",
+  "_key_security": "Never commit .pem key files. Prefer SSH agent (ssh-add) or AWS_SSH_KEY_PATH env var. If using a file, store it in keys/ (gitignored).",
+  "_key_resolution": "key_file resolution order: explicit path in this file → AWS_SSH_KEY_PATH env var → SSH agent (ssh-add).",
+
+  "rhel": [
+    {
+      "name":        "rocky9-amd",
+      "host":        "rocky9-amd.example.com",
+      "username":    "rocky",
+      "key_file":    "",
+      "description": "Rocky Linux 9 AMD",
+      "enabled":     false
+    },
+    {
+      "name":        "rocky10-arm",
+      "host":        "rocky10-arm.example.com",
+      "username":    "rocky",
+      "key_file":    "",
+      "description": "Rocky Linux 10 ARM",
+      "enabled":     false
+    }
+  ],
+
+  "deb": [
+    {
+      "name":        "debian13-amd",
+      "host":        "debian13-amd.example.com",
+      "username":    "admin",
+      "key_file":    "",
+      "description": "Debian 13 AMD",
+      "enabled":     false
+    },
+    {
+      "name":        "ubuntu2404-amd",
+      "host":        "ubuntu2404-amd.example.com",
+      "username":    "ubuntu",
+      "key_file":    "",
+      "description": "Ubuntu 24.04 AMD",
+      "enabled":     false
+    }
+  ]
+}

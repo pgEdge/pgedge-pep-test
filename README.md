@@ -113,14 +113,20 @@ To pick a custom set for a single run without editing the catalog, pass `--conta
 
 When running against live AWS EC2 instances instead of Docker containers, use `--target aws`. The test runner reads **`configuration/aws_instances.json`** and the `AWSInstanceClient` replaces the Docker client transparently — all existing test files work unchanged.
 
+`configuration/aws_instances.json` is gitignored (it holds your own hosts). Copy the template first and edit it with your instances:
+
+```bash
+cp configuration/aws_instances.example.json configuration/aws_instances.json
+```
+
 **`configuration/aws_instances.json`** structure:
 
 ```json
 {
   "rhel": [
     {
-      "name":        "z_Rocky9_ARM",
-      "host":        "ec2-3-111-170-196.ap-south-1.compute.amazonaws.com",
+      "name":        "rocky9-arm",
+      "host":        "rocky9-arm.example.com",
       "username":    "rocky",
       "key_file":    "",
       "description": "Rocky Linux 9 ARM / ap-south-1",
@@ -129,8 +135,8 @@ When running against live AWS EC2 instances instead of Docker containers, use `-
   ],
   "deb": [
     {
-      "name":        "z_Debian13_AMD",
-      "host":        "ec2-3-110-84-181.ap-south-1.compute.amazonaws.com",
+      "name":        "debian13-amd",
+      "host":        "debian13-amd.example.com",
       "username":    "admin",
       "key_file":    "",
       "description": "Debian 13 AMD / ap-south-1",
@@ -283,7 +289,7 @@ pgedge-pep-test/
 │   ├── config18.env
 │   ├── config19.env
 │   ├── containers_list.json # Docker container registry (enable/disable per container)
-│   └── aws_instances.json   # AWS EC2 instance registry (enable/disable per instance)
+│   └── aws_instances.example.json  # Template for the AWS EC2 registry; copy to aws_instances.json (gitignored, holds your own hosts)
 ├── aspects/                 # Test aspects and utilities
 │   ├── aws_client.py        # AWSInstanceClient (drop-in Docker replacement)
 │   ├── ssh_executor.py      # SSH-based container interface for AWS VMs

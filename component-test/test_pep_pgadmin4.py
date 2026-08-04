@@ -495,7 +495,7 @@ def test_pgadmin4_web_setup(container_name, container_type):
     """Functional: Run setup-web.sh to configure pgAdmin4 for web mode via Apache/httpd.
 
     Pipes all interactive prompts non-interactively:
-      - Email  : zaidagilist@gmail.com
+      - Email  : pep-test@example.com
       - Password: test123!@#
       - All yes/no questions: y
     Asserts the output contains both success lines:
@@ -529,7 +529,7 @@ def test_pgadmin4_web_setup(container_name, container_type):
     cmd = [
         "bash", "-c",
         (
-            f"printf 'zaidagilist@gmail.com\\ntest123!@#\\ntest123!@#\\ny\\ny\\ny\\n'"
+            f"printf 'pep-test@example.com\\ntest123!@#\\ntest123!@#\\ny\\ny\\ny\\n'"
             f" | {setup_script} 2>&1"
         ),
     ]

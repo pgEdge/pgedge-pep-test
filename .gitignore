@@ -214,3 +214,13 @@ __marimo__/
 
 # Local test outputs (generated per run; not source)
 test-logs/
+actual-output/
+
+# Local AWS inventory (copy from configuration/aws_instances.example.json; holds your own hosts/keys)
+configuration/aws_instances.json
+
+# SSH keys and other local secrets (never commit)
+keys/
+
+# JetBrains IDE project files (user-specific)
+.idea/

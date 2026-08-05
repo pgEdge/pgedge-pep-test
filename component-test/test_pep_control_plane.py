@@ -451,10 +451,10 @@ def test_verify_license_file(container_name, container_type):
 
     config = get_container_config(container_type)
     control_plane_package = config["control_plane_package"]
-    # RHEL ships the license under /usr/share/licenses/<pkg>/LICENSE; Debian ships
-    # it under /usr/share/doc/<pkg>/copyright.
+    # RHEL ships the license under /usr/share/licenses/<pkg>/LICENSE.md; Debian
+    # ships it under /usr/share/doc/<pkg>/copyright.
     if container_type == "rhel":
-        license_path = f"/usr/share/licenses/{control_plane_package}/LICENSE"
+        license_path = f"/usr/share/licenses/{control_plane_package}/LICENSE.md"
     else:  # deb
         license_path = f"/usr/share/doc/{control_plane_package}/copyright"
 
@@ -484,20 +484,28 @@ def test_verify_readme_file(container_name, container_type):
 
     config = get_container_config(container_type)
     control_plane_package = config["control_plane_package"]
-    # RHEL ships README.md uncompressed; Debian ships it gzipped as README.md.gz.
+    # Both families ship README.md under /usr/share/doc/<pkg>/. Debian doc
+    # compression depends on the debhelper version, so accept README.md.gz too.
+    readme_dir = f"/usr/share/doc/{control_plane_package}"
     if container_type == "rhel":
-        readme_path = f"/usr/share/doc/{control_plane_package}/README.md"
+        readme_paths = [f"{readme_dir}/README.md"]
     else:  # deb
-        readme_path = f"/usr/share/doc/{control_plane_package}/README.md.gz"
+        readme_paths = [f"{readme_dir}/README.md", f"{readme_dir}/README.md.gz"]
 
     print(f"\n--- Verifying README file on {container_name} ({container_type}) ---")
 
-    exit_code, output = container.exec_run(
-        f"test -f {readme_path}",
-        user="root"
-    )
-    assert exit_code == 0, f"README.md not found at {readme_path}: {output.decode()}"
-    print(f"✅ README.md exists at {readme_path}")
+    found_path = None
+    for candidate in readme_paths:
+        exit_code, output = container.exec_run(
+            f"test -f {candidate}",
+            user="root"
+        )
+        if exit_code == 0:
+            found_path = candidate
+            break
+
+    assert found_path, f"README.md not found at any of {readme_paths}"
+    print(f"✅ README.md exists at {found_path}")
 
 
 @pytest.mark.parametrize("container_name,container_type", all_containers)

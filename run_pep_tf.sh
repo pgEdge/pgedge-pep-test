@@ -7,6 +7,30 @@ VERSION="1.1.0"
 ENV_DIR="./configuration"
 
 # ============================================================================
+# Virtualenv guard
+# Activate the project venv so bare `pytest` resolves, unless we are already
+# inside a virtualenv (respects an externally activated env).
+# ============================================================================
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+if [[ -z "${VIRTUAL_ENV:-}" ]]; then
+  if [[ -f "${SCRIPT_DIR}/venv/bin/activate" ]]; then
+    # shellcheck source=/dev/null
+    source "${SCRIPT_DIR}/venv/bin/activate"
+    echo "🐍 Activated virtualenv: ${SCRIPT_DIR}/venv"
+  fi
+fi
+
+if ! command -v pytest >/dev/null 2>&1; then
+  echo "❌ pytest not found."
+  echo "   Create the virtualenv and install dependencies:"
+  echo "     python3 -m venv venv"
+  echo "     source venv/bin/activate"
+  echo "     pip3 install -r requirements.txt"
+  exit 1
+fi
+
+# ============================================================================
 # CLI argument parsing
 # ============================================================================
 CLI_MODE=false

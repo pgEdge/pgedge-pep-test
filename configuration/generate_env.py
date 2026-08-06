@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Regenerate ALL_PACKAGES and DEB_ALL_PACKAGES in config16/17/18.env
+Regenerate ALL_PACKAGES and DEB_ALL_PACKAGES in config16/17/18/19.env
 from configuration/packages_test_matrix.json.
 
 Workflow:
@@ -9,7 +9,7 @@ Workflow:
   3. Run tests
 
 Usage:
-    python configuration/generate_env.py              # Update all three config files
+    python configuration/generate_env.py              # Update all config env files
     python configuration/generate_env.py --dry-run    # Print what would change, no writes
     python configuration/generate_env.py --pg 18      # Only update config18.env
 """
@@ -22,7 +22,7 @@ from pathlib import Path
 
 CONFIG_DIR = Path(__file__).parent
 MATRIX_FILE = CONFIG_DIR / "packages_test_matrix.json"
-PG_VERSIONS = [16, 17, 18]
+PG_VERSIONS = [16, 17, 18, 19]
 
 
 def build_package_list(components: list, pg: int, platform: str) -> str:

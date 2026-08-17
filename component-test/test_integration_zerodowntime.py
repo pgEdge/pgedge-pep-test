@@ -459,6 +459,12 @@ def test_initialize_multiple_nodes(container_name, container_type):
         "track_commit_timestamp": "on"
     }
 
+    # PG >= 16.15 / 17.11 / 18.5 / 19.0beta3 require logical decoding output
+    # plugins to be allow-listed before they can be loaded. Without this,
+    # spock_output is rejected and cross-wiring the nodes fails. Returns {} on
+    # older point releases, which do not recognise the GUC.
+    guc_parameters.update(pg_server_management.output_plugin_libraries_guc())
+
     # Initialize each node
     for node_num in range(1, no_of_nodes + 1):
         node_name = f"n{node_num}"
@@ -1331,6 +1337,12 @@ done
         "max_wal_senders": "10",
         "track_commit_timestamp": "on"
     }
+
+    # PG >= 16.15 / 17.11 / 18.5 / 19.0beta3 require logical decoding output
+    # plugins to be allow-listed before they can be loaded. Without this,
+    # spock_output is rejected and cross-wiring the nodes fails. Returns {} on
+    # older point releases, which do not recognise the GUC.
+    guc_parameters.update(pg_server_management.output_plugin_libraries_guc())
 
     # Initialize PostgreSQL cluster for n3
     success, config_content, message = pg_server_management.init_cluster(

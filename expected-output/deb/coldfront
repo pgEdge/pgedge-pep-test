@@ -1,0 +1,8 @@
+/etc/pgedge/coldfront/config.yaml
+/usr/bin/archiver
+/usr/bin/compactor
+/usr/bin/partitioner
+/usr/share/doc/pgedge-coldfront/README.md.gz
+/usr/share/doc/pgedge-coldfront/changelog.Debian.gz
+/usr/share/pgedge-coldfront/coldfront-sbom.json
+/usr/share/pgedge-coldfront/coldfront-sbom.json.asc

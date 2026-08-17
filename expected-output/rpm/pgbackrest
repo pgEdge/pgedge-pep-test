@@ -5,8 +5,8 @@
 /usr/lib/tmpfiles.d/pgbackrest.conf
 /usr/share/licenses/pgedge-pgbackrest
 /usr/share/licenses/pgedge-pgbackrest/LICENSE
-/usr/share/pgbackrest-sbom.json
-/usr/share/pgbackrest-sbom.json.asc
+/usr/share/pgedge-pgbackrest/pgbackrest-sbom.json
+/usr/share/pgedge-pgbackrest/pgbackrest-sbom.json.asc
 /var/lib/pgbackrest
 /var/log/pgbackrest
 /var/spool/pgbackrest

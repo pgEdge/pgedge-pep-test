@@ -100,14 +100,50 @@ def setup_debian(os_id="", major=""):
     run(cmd)
 
 
+def disable_pgdg_repositories():
+    """Disable every pgdg* repository on a RHEL-family host.
+
+    PGDG ships its own builds of PostgreSQL and of shared dependencies such as
+    python3-psycopg2. Left enabled alongside the pgEdge repository, dnf can
+    resolve those packages against PGDG builds, so the run ends up testing the
+    wrong artifacts. Disable them before anything is installed.
+
+    Must tolerate both extremes: long-lived AWS instances often carry a pgdg
+    repo left over from an earlier run, while fresh containers have none.
+    Three strategies are attempted in order, since the tooling differs by
+    release:
+      1. dnf4 `config-manager --set-disabled` (RHEL 9 family)
+      2. dnf5 `config-manager setopt`         (RHEL 10 family)
+      3. editing /etc/yum.repos.d/pgdg*.repo  (no config-manager plugin)
+    The chain ends in `true` so a host with no pgdg repo is a silent no-op.
+    """
+    print("--- Disabling pgdg repositories ---")
+    run(
+        "sudo dnf config-manager --set-disabled 'pgdg*' 2>/dev/null "
+        "|| sudo dnf config-manager setopt 'pgdg*.enabled=0' 2>/dev/null "
+        "|| sudo sed -i 's/^enabled[[:space:]]*=.*/enabled=0/' "
+        "/etc/yum.repos.d/pgdg*.repo 2>/dev/null "
+        "|| true"
+    )
+    # Report rather than assert: a host that never had pgdg configured is the
+    # normal case and must not fail the run.
+    run(
+        "if sudo dnf repolist --enabled 2>/dev/null | grep -qi '^pgdg'; then "
+        "echo 'WARNING: pgdg repositories are STILL ENABLED:'; "
+        "sudo dnf repolist --enabled 2>/dev/null | grep -i '^pgdg'; "
+        "else echo 'OK: no enabled pgdg repositories'; fi"
+    )
+
+
 def setup_rhel9():
     print("\n=== RHEL 9 Prerequisites ===")
     run("sudo dnf -y install https://dl.fedoraproject.org/pub/epel/epel-release-latest-9.noarch.rpm")
     run("sudo dnf config-manager --set-enabled codeready-builder-for-rhel-9-rhui-rpms")
+    disable_pgdg_repositories()
     run("sudo dnf install -y file")
     run("sudo dnf install -y sequoia-sq")
     run("sudo dnf install -y wget")
-    run("sudo dnf install -y python3-psycopg2")
+    #run("sudo dnf install -y python3-psycopg2")
 
 
 
@@ -116,10 +152,11 @@ def setup_rhel10():
     print("\n=== RHEL 10 Prerequisites ===")
     run("sudo dnf -y install https://dl.fedoraproject.org/pub/epel/epel-release-latest-10.noarch.rpm")
     run("sudo subscription-manager repos --enable codeready-builder-for-rhel-10-x86_64-rpms")
+    disable_pgdg_repositories()
     run("sudo dnf install -y file")
     run("sudo dnf install -y sequoia-sq")
     run("sudo dnf install -y wget")
-    run("sudo dnf install -y python3-psycopg2")
+    #run("sudo dnf install -y python3-psycopg2")
 
 
 
@@ -130,10 +167,11 @@ def setup_rocky9():
     run("dnf install -y sudo")
     run("sudo dnf install -y epel-release")
     run("sudo dnf config-manager --set-enabled crb")
+    disable_pgdg_repositories()
     run("sudo dnf install -y file")
     run("sudo dnf install -y sequoia-sq")
     run("sudo dnf install -y wget")
-    run("sudo dnf install -y python3-psycopg2")
+    #run("sudo dnf install -y python3-psycopg2")
 
 
 
@@ -144,10 +182,11 @@ def setup_rocky10():
     run("dnf install -y sudo")
     run("sudo dnf install -y epel-release")
     run("sudo dnf config-manager --set-enabled crb")
+    disable_pgdg_repositories()
     run("sudo dnf install -y file")
     run("sudo dnf install -y sequoia-sq")
     run("sudo dnf install -y wget")
-    run("sudo dnf install -y python3-psycopg2")
+    #run("sudo dnf install -y python3-psycopg2")
 
 
 
@@ -158,10 +197,11 @@ def setup_oracle9():
     run("dnf install -y sudo")
     run("sudo dnf -y install https://dl.fedoraproject.org/pub/epel/epel-release-latest-9.noarch.rpm")
     run("sudo dnf config-manager --set-enabled ol9_codeready_builder")
+    disable_pgdg_repositories()
     run("sudo dnf install -y file")
     run("sudo dnf install -y sequoia-sq")
     run("sudo dnf install -y wget")
-    run("sudo dnf install -y python3-psycopg2")
+    #run("sudo dnf install -y python3-psycopg2")
 
 
 
@@ -172,10 +212,11 @@ def setup_oracle10():
     run("dnf install -y sudo")
     run("sudo dnf -y install https://dl.fedoraproject.org/pub/epel/epel-release-latest-10.noarch.rpm")
     run("sudo dnf config-manager --set-enabled ol10_codeready_builder")
+    disable_pgdg_repositories()
     run("sudo dnf install -y file")
     run("sudo dnf install -y sequoia-sq")
     run("sudo dnf install -y wget")
-    run("sudo dnf install -y python3-psycopg2")
+    #run("sudo dnf install -y python3-psycopg2")
 
 
 
@@ -186,10 +227,11 @@ def setup_alma9():
     run("dnf install -y sudo")
     run("sudo dnf install -y epel-release")
     run("sudo dnf config-manager --set-enabled crb")
+    disable_pgdg_repositories()
     run("sudo dnf install -y file")
     run("sudo dnf install -y sequoia-sq")
     run("sudo dnf install -y wget")
-    run("sudo dnf install -y python3-psycopg2")
+    #run("sudo dnf install -y python3-psycopg2")
 
 
 
@@ -200,10 +242,11 @@ def setup_alma10():
     run("dnf install -y sudo")
     run("sudo dnf install -y epel-release")
     run("sudo dnf config-manager --set-enabled crb")
+    disable_pgdg_repositories()
     run("sudo dnf install -y file")
     run("sudo dnf install -y sequoia-sq")
     run("sudo dnf install -y wget")
-    run("sudo dnf install -y python3-psycopg2")
+    #run("sudo dnf install -y python3-psycopg2")
 
 
 

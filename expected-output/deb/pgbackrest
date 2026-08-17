@@ -3,7 +3,7 @@
 /lib/systemd/system/pgbackrest.service
 /usr/bin/pgbackrest
 /usr/share/doc/pgedge-pgbackrest
-/usr/share/doc/pgedge-pgbackrest/README.md.gz
+/usr/share/doc/pgedge-pgbackrest/README.md
 /usr/share/doc/pgedge-pgbackrest/changelog.Debian.gz
 /usr/share/man/man1/pgbackrest.1.gz
 /usr/share/pgedge-postgrest/pgbackrest-sbom.json

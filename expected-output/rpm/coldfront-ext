@@ -1,0 +1,9 @@
+/usr/pgsql-18/lib/coldfront.so
+/usr/pgsql-18/sbom/coldfront-sbom.json
+/usr/pgsql-18/sbom/coldfront-sbom.json.asc
+/usr/pgsql-18/share/extension/coldfront--0.1--1.0.sql
+/usr/pgsql-18/share/extension/coldfront--1.0.sql
+/usr/pgsql-18/share/extension/coldfront.control
+/usr/share/doc/pgedge-coldfront_18
+/usr/share/licenses/pgedge-coldfront_18/LICENSE.md
+/usr/share/doc/pgedge-coldfront_18/README.md

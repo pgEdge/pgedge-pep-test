@@ -45,6 +45,14 @@ n2_restapi_port   = int(os.getenv("PATRONI_N2_RESTAPI_PORT", "8008"))
 n3_restapi_port   = int(os.getenv("PATRONI_N3_RESTAPI_PORT", "8009"))
 etcd_host         = os.getenv("PATRONI_ETCD_HOST", "localhost:2379")
 
+# Patroni renders postgresql.conf itself, so the output plugin allow-list has to
+# be injected into the DCS parameters block rather than passed as a GUC dict.
+# Empty string on PG releases that predate output_plugin_libraries.
+_output_plugin_yaml = "".join(
+    f"\n        {key}: '{value}'"
+    for key, value in pg_server_management.output_plugin_libraries_guc(quoted=False).items()
+)
+
 # Spock major version (e.g. "60" -> pgedge-spock60_xx). spock60 is a separate
 # major version from spock50; both coexist in the repo, so it is selectable.
 spock_major = os.getenv("SPOCK_MAJOR", "60")
@@ -294,6 +302,11 @@ def test_initialize_clusters(container_name, container_type):
         "hot_standby_feedback":     "on",
     }
 
+    # PG >= 16.15 / 17.11 / 18.5 / 19.0beta3 require logical decoding output
+    # plugins to be allow-listed before they can be loaded. Returns {} on older
+    # point releases, which do not recognise the GUC.
+    guc_parameters.update(pg_server_management.output_plugin_libraries_guc())
+
     for node_name, pgdata, port in [("n1", "/tmp/n1", n1_port), ("n2", "/tmp/n2", n2_port)]:
         print(f"\nInitializing {node_name} at {pgdata} (port {port})")
         success, _, message = pg_server_management.init_cluster(
@@ -509,7 +522,7 @@ bootstrap:
         max_replication_slots: 10
         max_worker_processes: 16
         track_commit_timestamp: "on"
-        shared_preload_libraries: 'spock'
+        shared_preload_libraries: 'spock'{_output_plugin_yaml}
     slots:
       n3:
         type: physical

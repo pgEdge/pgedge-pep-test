@@ -4,6 +4,124 @@ Generic PostgreSQL server management module for container-based testing.
 Supports initialization, configuration, starting, stopping, and connection testing.
 """
 
+import os
+import re
+
+# ---------------------------------------------------------------------------
+# output_plugin_libraries
+# ---------------------------------------------------------------------------
+# From PostgreSQL 16.15 / 17.11 / 18.5 / 19.0beta3 onward, logical decoding
+# output plugins must be allow-listed in postgresql.conf via
+# output_plugin_libraries before the server will load them. Spock's
+# spock_output plugin is therefore not loadable by default, which breaks
+# cross-wired (2+ node) Spock and zodan clusters.
+#
+# Earlier point releases do not recognise the GUC at all — setting it there
+# makes the server fail to start — so every caller must gate on the running
+# PG_VERSION rather than applying it unconditionally.
+
+# Minimum point release per major version that introduced the GUC.
+OUTPUT_PLUGIN_LIBRARIES_MIN_VERSION = {
+    16: "16.15",
+    17: "17.11",
+    18: "18.5",
+    19: "19.0beta3",
+}
+
+# Default allow-list: pgoutput and test_decoding are the in-tree plugins,
+# spock_output is Spock's.
+DEFAULT_OUTPUT_PLUGIN_LIBRARIES = "pgoutput, test_decoding, spock_output"
+
+
+def parse_pg_version(version):
+    """Parse a PostgreSQL version string into a sortable tuple.
+
+    Handles release versions ("18.5") and pre-releases ("19.0beta3",
+    "19.0rc1"). Pre-release ordering follows PostgreSQL's own:
+        19.0beta1 < 19.0beta3 < 19.0rc1 < 19.0
+
+    Returns:
+        tuple: (major, minor, stage_rank, stage_number) where stage_rank is
+        0 for beta, 1 for rc and 2 for a final release.
+    """
+    if not version:
+        return None
+
+    match = re.match(r"^(\d+)(?:\.(\d+))?(?:(beta|rc)(\d+))?", str(version).strip())
+    if not match:
+        return None
+
+    major = int(match.group(1))
+    minor = int(match.group(2) or 0)
+    stage = match.group(3)
+    stage_num = int(match.group(4) or 0)
+
+    stage_rank = {"beta": 0, "rc": 1}.get(stage, 2)
+    return (major, minor, stage_rank, stage_num)
+
+
+def requires_output_plugin_libraries(pg_version=None):
+    """Return True when the given PostgreSQL version needs output_plugin_libraries.
+
+    Args:
+        pg_version: Version string such as "18.5". Defaults to the PG_VERSION
+            environment variable.
+
+    Returns:
+        bool: True when the GUC exists and must be set for spock_output to load.
+    """
+    if pg_version is None:
+        pg_version = os.getenv("PG_VERSION", "")
+
+    parsed = parse_pg_version(pg_version)
+    if parsed is None:
+        # Unparseable version — don't risk emitting a GUC the server may reject.
+        return False
+
+    major = parsed[0]
+    known = sorted(OUTPUT_PLUGIN_LIBRARIES_MIN_VERSION)
+
+    if major > known[-1]:
+        # Majors newer than any we know about always include the change.
+        return True
+    if major < known[0]:
+        return False
+
+    minimum = OUTPUT_PLUGIN_LIBRARIES_MIN_VERSION.get(major)
+    if minimum is None:
+        return False
+
+    return parsed >= parse_pg_version(minimum)
+
+
+def output_plugin_libraries_guc(pg_version=None, libraries=None, quoted=True):
+    """Build the output_plugin_libraries GUC entry for a cluster's postgresql.conf.
+
+    Returns an empty dict on PostgreSQL versions that predate the GUC, so it
+    can be merged into a guc_parameters dict unconditionally:
+
+        guc_parameters = {"shared_preload_libraries": "'spock'", ...}
+        guc_parameters.update(pg_server_management.output_plugin_libraries_guc())
+
+    Args:
+        pg_version: Version string; defaults to the PG_VERSION env var.
+        libraries: Comma-separated plugin list; defaults to
+            OUTPUT_PLUGIN_LIBRARIES env var, then the pgoutput/test_decoding/
+            spock_output default.
+        quoted: Wrap the value in single quotes (needed for postgresql.conf,
+            not for Patroni YAML which quotes values itself).
+
+    Returns:
+        dict: {"output_plugin_libraries": "<value>"} or {} when not required.
+    """
+    if not requires_output_plugin_libraries(pg_version):
+        return {}
+
+    if libraries is None:
+        libraries = os.getenv("OUTPUT_PLUGIN_LIBRARIES", DEFAULT_OUTPUT_PLUGIN_LIBRARIES)
+
+    return {"output_plugin_libraries": f"'{libraries}'" if quoted else libraries}
+
 
 def execute_psql_query(container, pgbin, pgport, pguser, query, dbname="postgres"):
     """

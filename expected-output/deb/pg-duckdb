@@ -1,0 +1,14 @@
+/usr/lib/postgresql/18/lib/libduckdb.so
+/usr/lib/postgresql/18/lib/pg_duckdb.so
+/usr/lib/postgresql/18/sbom
+/usr/lib/postgresql/18/sbom/pg_duckdb-sbom.json
+/usr/lib/postgresql/18/sbom/pg_duckdb-sbom.json.asc
+/usr/share/doc/pgedge-postgresql-18-pg-duckdb/README.md.gz
+/usr/share/doc/pgedge-postgresql-18-pg-duckdb/changelog.Debian.gz
+/usr/share/doc/pgedge-postgresql-18-pg-duckdb/changelog.gz
+/usr/share/postgresql/18/extension/pg_duckdb--0.1.0--0.2.0.sql
+/usr/share/postgresql/18/extension/pg_duckdb--0.2.0--0.3.0.sql
+/usr/share/postgresql/18/extension/pg_duckdb--0.3.0--1.0.0.sql
+/usr/share/postgresql/18/extension/pg_duckdb--1.0.0--1.1.0.sql
+/usr/share/postgresql/18/extension/pg_duckdb--1.0.0.sql
+/usr/share/postgresql/18/extension/pg_duckdb.control

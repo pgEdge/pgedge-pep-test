@@ -2,7 +2,7 @@
   "description": "Master component test matrix. Set 'enabled' to false to exclude a component from ALL_PACKAGES / DEB_ALL_PACKAGES. Use {PG} as the PostgreSQL major-version placeholder in package names. Run 'python configuration/generate_env.py' after editing to regenerate the config env files.",
   "components": [
 
-    {"category": "server",    "name": "postgresql-server",   "description": "PostgreSQL server binary",              "enabled": true,  "rhel": "pgedge-postgresql{PG}-server",   "deb": "pgedge-postgresql-{PG}"},
+    {"category": "server",    "name": "postgresql-server",   "description": "PostgreSQL server binary",              "enabled": false,  "rhel": "pgedge-postgresql{PG}-server",   "deb": "pgedge-postgresql-{PG}"},
     {"category": "extension", "name": "spock50",             "description": "Spock logical replication",            "enabled": false,  "rhel": "pgedge-spock50_{PG}",            "deb": "pgedge-postgresql-{PG}-spock50"},
     {"category": "extension", "name": "lolor",               "description": "Large Object for Logical Replication", "enabled": false,  "rhel": "pgedge-lolor_{PG}",              "deb": "pgedge-postgresql-{PG}-lolor"},
     {"category": "extension", "name": "snowflake",           "description": "Snowflake connector extension",        "enabled": false,  "rhel": "pgedge-snowflake_{PG}",          "deb": "pgedge-postgresql-{PG}-snowflake"},
@@ -26,7 +26,7 @@
     {"category": "tool",      "name": "pgadmin4",            "description": "pgAdmin 4 web UI",                     "enabled": false,  "rhel": "pgedge-pgadmin4",                "deb": "pgedge-pgadmin4"},
     {"category": "tool",      "name": "postgrest",           "description": "RESTful API for PostgreSQL",           "enabled": false,  "rhel": "pgedge-postgrest",               "deb": "pgedge-postgrest"},
     {"category": "tool",      "name": "etcd",                "description": "Distributed key-value store",          "enabled": false,  "rhel": "pgedge-etcd",                    "deb": "pgedge-etcd"},
-    {"category": "tool",      "name": "ace",                 "description": "ACE platform component",               "enabled": true,  "rhel": "pgedge-ace",                     "deb": "pgedge-ace"},
+    {"category": "tool",      "name": "ace",                 "description": "ACE platform component",               "enabled": false,  "rhel": "pgedge-ace",                     "deb": "pgedge-ace"},
     {"category": "tool",      "name": "radar",               "description": "Radar monitoring component",           "enabled": false,  "rhel": "pgedge-radar",                   "deb": "pgedge-radar"},
     {"category": "tool",      "name": "control-plane",       "description": "Control Plane management service",     "enabled": true,  "rhel": "pgedge-control-plane",           "deb": "pgedge-control-plane"},
 
@@ -43,10 +43,10 @@
     {"category": "ai_ml",     "name": "nla-cli",             "description": "Natural Language Adapter CLI",         "enabled": false,  "rhel": "pgedge-nla-cli",                 "deb": "pgedge-nla-cli"},
     {"category": "ai_ml",     "name": "nla-web",             "description": "Natural Language Adapter web UI",      "enabled": false,  "rhel": "pgedge-nla-web",                 "deb": "pgedge-nla-web"},
 
-    {"category": "ai_kb",     "name": "ai-kb-gemini",        "description": "AI KB — Gemini embedding-001",         "enabled": true,  "rhel": "pgedge-ai-kb-gemini-gemini-embedding-001",      "deb": "pgedge-ai-kb-gemini-gemini-embedding-001"},
-    {"category": "ai_kb",     "name": "ai-kb-ollama",        "description": "AI KB — Ollama nomic-embed-text",      "enabled": true,  "rhel": "pgedge-ai-kb-ollama-nomic-embed-text",         "deb": "pgedge-ai-kb-ollama-nomic-embed-text"},
-    {"category": "ai_kb",     "name": "ai-kb-openai",        "description": "AI KB — OpenAI text-embedding-3-small","enabled": true,  "rhel": "pgedge-ai-kb-openai-text-embedding-3-small",   "deb": "pgedge-ai-kb-openai-text-embedding-3-small"},
-    {"category": "ai_kb",     "name": "ai-kb-voyage",        "description": "AI KB — Voyage voyage-3",              "enabled": true,  "rhel": "pgedge-ai-kb-voyage-voyage-3",                 "deb": "pgedge-ai-kb-voyage-voyage-3"},
+    {"category": "ai_kb",     "name": "ai-kb-gemini",        "description": "AI KB — Gemini embedding-001",         "enabled": false,  "rhel": "pgedge-ai-kb-gemini-gemini-embedding-001",      "deb": "pgedge-ai-kb-gemini-gemini-embedding-001"},
+    {"category": "ai_kb",     "name": "ai-kb-ollama",        "description": "AI KB — Ollama nomic-embed-text",      "enabled": false,  "rhel": "pgedge-ai-kb-ollama-nomic-embed-text",         "deb": "pgedge-ai-kb-ollama-nomic-embed-text"},
+    {"category": "ai_kb",     "name": "ai-kb-openai",        "description": "AI KB — OpenAI text-embedding-3-small","enabled": false,  "rhel": "pgedge-ai-kb-openai-text-embedding-3-small",   "deb": "pgedge-ai-kb-openai-text-embedding-3-small"},
+    {"category": "ai_kb",     "name": "ai-kb-voyage",        "description": "AI KB — Voyage voyage-3",              "enabled": false,  "rhel": "pgedge-ai-kb-voyage-voyage-3",                 "deb": "pgedge-ai-kb-voyage-voyage-3"},
 
     {"category": "ai_dba",    "name": "ai-dba-server",       "description": "AI DBA server",                        "enabled": false,  "rhel": "pgedge-ai-dba-server",           "deb": "pgedge-ai-dba-server"},
     {"category": "ai_dba",    "name": "ai-dba-alerter",      "description": "AI DBA alerter",                       "enabled": false,  "rhel": "pgedge-ai-dba-alerter",          "deb": "pgedge-ai-dba-alerter"},
@@ -54,7 +54,7 @@
     {"category": "ai_dba",    "name": "ai-dba-client",       "description": "AI DBA CLI client",                    "enabled": false,  "rhel": "pgedge-ai-dba-client",           "deb": "pgedge-ai-dba-client"},
 
     {"category": "enterprise","name": "enterprise-all",      "description": "Enterprise all-in-one meta-package",   "enabled": true, "rhel": "pgedge-enterprise-all_{PG}",     "deb": "pgedge-enterprise-all-{PG}"},
-    {"category": "enterprise","name": "enterprise-postgres", "description": "Enterprise PostgreSQL meta-package",   "enabled": true, "rhel": "pgedge-enterprise-postgres_{PG}","deb": "pgedge-enterprise-postgres-{PG}"}
+    {"category": "enterprise","name": "enterprise-postgres", "description": "Enterprise PostgreSQL meta-package",   "enabled": false, "rhel": "pgedge-enterprise-postgres_{PG}","deb": "pgedge-enterprise-postgres-{PG}"}
 
   ]
 }

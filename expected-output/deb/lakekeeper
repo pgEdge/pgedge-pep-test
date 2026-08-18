@@ -1,0 +1,10 @@
+/etc/lakekeeper/lakekeeper.env
+/lib/systemd/system/lakekeeper.service
+/usr/bin/lakekeeper
+/usr/share/doc/pgedge-lakekeeper
+/usr/share/doc/pgedge-lakekeeper/LICENSE.gz
+/usr/share/doc/pgedge-lakekeeper/NOTICE
+/usr/share/doc/pgedge-lakekeeper/README.md
+/usr/share/doc/pgedge-lakekeeper/changelog.Debian.gz
+/usr/share/pgedge-lakekeeper/lakekeeper-sbom.json
+/usr/share/pgedge-lakekeeper/lakekeeper-sbom.json.asc

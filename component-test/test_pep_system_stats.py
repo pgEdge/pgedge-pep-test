@@ -25,8 +25,17 @@ COMPONENT_NAME_UPPER = "SYSTEM_STATS"  # Uppercase version for env variables
 
 # Environment variable keys (customize based on your component)
 # Format: PGEDGE_<COMPONENT>_<PG_VERSION>_VERSION
-VERSION_ENV_KEY = f"PGEDGE_SYSTEM_STATS_{{pg_version}}_VERSION"  # e.g., PGEDGE_LOLOR_16_VERSION
-VERSION_DEFAULT = "3.2.1"  # Default version if not set in env
+#
+# NOTE: unlike coupled components such as lolor, the config env files track the
+# system_stats version WITHOUT a PG-major infix (PGEDGE_SYSTEM_STATS_VERSION).
+# The infixed key is still checked first so a per-major override keeps working
+# if one is ever added; otherwise the plain key is used.
+# NOTE: no f-prefix here. An f-string would collapse "{{pg_version}}" to
+# "{pg_version}", so the later .replace("{{pg_version}}", ...) would never match
+# and the lookup would use a literal, non-existent env var name.
+VERSION_ENV_KEY = "PGEDGE_SYSTEM_STATS_{{pg_version}}_VERSION"  # e.g., PGEDGE_SYSTEM_STATS_18_VERSION
+VERSION_ENV_KEY_FALLBACK = "PGEDGE_SYSTEM_STATS_VERSION"  # what config{16,17,18,19}.env define
+VERSION_DEFAULT = "4.0"  # Default version if not set in env
 
 # Package names
 RHEL_PACKAGE_ENV = "SYSTEM_STATS_PACKAGE"  # Env variable name for RHEL package
@@ -87,7 +96,11 @@ pg_major_version = os.getenv("PG_MAJOR_VERSION", "16")
 
 # Component version
 version_key = VERSION_ENV_KEY.replace("{{pg_version}}", pg_major_version)
-component_version = os.getenv(version_key, VERSION_DEFAULT)
+component_version = (
+    os.getenv(version_key)
+    or os.getenv(VERSION_ENV_KEY_FALLBACK)
+    or VERSION_DEFAULT
+)
 
 # User configuration
 rhel_pguser = os.getenv("PG_USER", "postgres")

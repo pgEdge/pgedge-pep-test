@@ -576,8 +576,32 @@ def test_pgbackrest_configure_stanza(container_name, container_type):
     # Get container-specific configuration
     config = get_container_config(container_type)
     pguser_val = config["pguser"]
+    pgbin = config["pgbin"]
 
     print(f"\n--- Configuring pgBackRest stanza on {container_name} ({container_type}) ---")
+
+    # pgBackRest defaults pg1-port to 5432, but the test cluster is started with
+    # '-o -p {pgport}' (PG_PORT, e.g. 6433). Without an explicit pg1-port,
+    # stanza-create looks for .s.PGSQL.5432, fails to connect and aborts with
+    # "unable to find primary cluster - cannot proceed" [ERROR 056].
+    #
+    # The socket directory is read from the running server rather than assuming
+    # a platform default, since it differs between RHEL and Debian builds.
+    socket_path = ""
+    sock_exit_code, sock_output = pg_server_management.execute_psql_query(
+        container, pgbin, pgport, pguser_val, "SHOW unix_socket_directories;"
+    )
+    if sock_exit_code == 0:
+        for line in sock_output.splitlines():
+            candidate = line.strip().split(",")[0].strip()
+            if candidate.startswith("/"):
+                socket_path = candidate
+                break
+
+    if socket_path:
+        print(f"   Cluster socket directory: {socket_path}")
+    else:
+        print("   Could not resolve unix_socket_directories — using libpq default")
 
     # Build pgbackrest.conf content
     pgbackrest_conf = (
@@ -589,6 +613,8 @@ def test_pgbackrest_configure_stanza(container_name, container_type):
         f"\n"
         f"[{pgbackrest_stanza}]\n"
         f"pg1-path={pgdata}\n"
+        f"pg1-port={pgport}\n"
+        + (f"pg1-socket-path={socket_path}\n" if socket_path else "")
     )
 
     # Write pgbackrest.conf

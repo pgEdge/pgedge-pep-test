@@ -80,6 +80,12 @@ _ace_spock_guc = {
     "track_commit_timestamp": "on",
 }
 
+# PG >= 16.15 / 17.11 / 18.5 / 19.0beta3 require logical decoding output plugins
+# to be allow-listed before they can be loaded. ACE diffs across cross-wired
+# n1/n2/n3 nodes, so spock_output must be permitted. Returns {} on older point
+# releases, which do not recognise the GUC.
+_ace_spock_guc.update(pg_server_management.output_plugin_libraries_guc())
+
 
 def get_container_config(container_type):
     """Get configuration based on container type (rhel or deb)"""

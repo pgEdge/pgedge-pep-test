@@ -1,0 +1,9 @@
+/usr/lib/postgresql/18/lib/coldfront.so
+/usr/lib/postgresql/18/sbom/coldfront-sbom.json
+/usr/lib/postgresql/18/sbom/coldfront-sbom.json.asc
+/usr/share/doc/pgedge-postgresql-18-coldfront
+/usr/share/doc/pgedge-postgresql-18-coldfront/README.md.gz
+/usr/share/doc/pgedge-postgresql-18-coldfront/changelog.Debian.gz
+/usr/share/postgresql/18/extension/coldfront--0.1--1.0.sql
+/usr/share/postgresql/18/extension/coldfront--1.0.sql
+/usr/share/postgresql/18/extension/coldfront.control

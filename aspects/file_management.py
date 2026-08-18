@@ -229,7 +229,8 @@ def verify_bundled_files(
     component,
     package_name,
     project_root,
-    pg_major_version=None
+    pg_major_version=None,
+    expected_name=None
 ):
     """
     Verify bundled files for a component match expected files.
@@ -247,6 +248,11 @@ def verify_bundled_files(
         pg_major_version: PostgreSQL major version (e.g., "16", "17", "18").
             Used to locate version-specific expected output files under
             expected-output/{platform}/{pg_major_version}/
+        expected_name: Optional explicit expected-output filename, bypassing the
+            name derived from `component`. Needed when two packages derive the same
+            base name — e.g. the coupled pgedge-coldfront_18 and the decoupled
+            pgedge-coldfront both derive "coldfront" but ship different files.
+            When None (default) the name is derived from `component` as before.
 
     Returns:
         tuple: (success: bool, details: dict, message: str)
@@ -268,7 +274,11 @@ def verify_bundled_files(
     # Example: pgedge-postgresql-18-system-stats -> system_stats (Debian multi-word)
     import re
 
-    if container_type == "rhel":
+    if expected_name:
+        # Explicit override — caller states which expected-output file to compare
+        # against, because name derivation would be ambiguous for this package.
+        base_name = expected_name
+    elif container_type == "rhel":
         base_name = component.replace("pgedge-", "").rsplit('_', 1)[0]
     else:  # deb
         # For Debian packages, handle both formats:

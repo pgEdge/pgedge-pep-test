@@ -1,0 +1,8 @@
+/usr/lib/pgedge/coldfront/duckdb-extensions/v1.5.4/linux_amd64/azure.duckdb_extension
+/usr/lib/pgedge/coldfront/duckdb-extensions/v1.5.4/linux_amd64/iceberg.duckdb_extension
+/usr/lib/pgedge/coldfront/duckdb-extensions/v1.5.4/linux_amd64/postgres_scanner.duckdb_extension
+/usr/share/pgedge-coldfront-duckdb-extensions/coldfront-duckdb-extensions-sbom.json
+/usr/share/pgedge-coldfront-duckdb-extensions/coldfront-duckdb-extensions-sbom.json.asc
+/usr/share/pgedge-coldfront-duckdb-extensions/coldfront-duckdb-extensions.conf.sample
+/usr/share/licenses/pgedge-coldfront-duckdb-extensions/LICENSE.md
+/usr/share/doc/pgedge-coldfront-duckdb-extensions/README.md

@@ -1,0 +1,13 @@
+/usr/pgsql-18/lib/libduckdb.so
+/usr/pgsql-18/lib/pg_duckdb.so
+/usr/pgsql-18/sbom/pg_duckdb-sbom.json
+/usr/pgsql-18/sbom/pg_duckdb-sbom.json.asc
+/usr/pgsql-18/share/extension/pg_duckdb--0.1.0--0.2.0.sql
+/usr/pgsql-18/share/extension/pg_duckdb--0.2.0--0.3.0.sql
+/usr/pgsql-18/share/extension/pg_duckdb--0.3.0--1.0.0.sql
+/usr/pgsql-18/share/extension/pg_duckdb--1.0.0--1.1.0.sql
+/usr/pgsql-18/share/extension/pg_duckdb--1.0.0.sql
+/usr/pgsql-18/share/extension/pg_duckdb.control
+/usr/share/doc/pgedge-pg-duckdb_18
+/usr/share/licenses/pgedge-pg-duckdb_18
+/usr/share/licenses/pgedge-pg-duckdb_18/LICENSE

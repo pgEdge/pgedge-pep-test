@@ -48,6 +48,17 @@ def detect_component_from_test_file(config):
 
     # Component mapping based on test file names
     component_map = {
+        'test_pep_coldfront': {
+            # Coldfront spans five packages; the report header shows the coupled
+            # extension pair, which is what the version/package fields track.
+            'name': 'Coldfront',
+            'version_env': 'PGEDGE_COLDFRONT_18_VERSION',
+            'version_default': '1.0.0-beta2',
+            'rhel_package_env': 'COLDFRONT_PACKAGE',
+            'rhel_package_default': 'pgedge-coldfront_18',
+            'deb_package_env': 'DEB_COLDFRONT_PACKAGE',
+            'deb_package_default': 'pgedge-postgresql-18-coldfront'
+        },
         'test_pep_pgbouncer': {
             'name': 'PgBouncer',
             'version_env': 'PGEDGE_PGBOUNCER_VERSION',
@@ -86,12 +97,14 @@ def detect_component_from_test_file(config):
         },
         'test_pep_system_stats': {
             'name': 'System Stats',
-            'version_env': 'PGEDGE_SYSTEM_STATS_16_VERSION',
-            'version_default': '3.2.1',
+            # system_stats is versioned without a PG-major infix in the config
+            # env files, unlike most coupled components.
+            'version_env': 'PGEDGE_SYSTEM_STATS_VERSION',
+            'version_default': '4.0',
             'rhel_package_env': 'SYSTEM_STATS_PACKAGE',
             'rhel_package_default': 'pgedge-system_stats_16',
             'deb_package_env': 'DEB_SYSTEM_STATS_PACKAGE',
-            'deb_package_default': 'pgedge-postgresql-16-system_stats'
+            'deb_package_default': 'pgedge-postgresql-16-system-stats'
         },
         'test_pep_vectorizer': {
             'name': 'Vectorizer',

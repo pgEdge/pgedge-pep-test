@@ -201,7 +201,7 @@ Run without arguments to enter interactive menu mode:
 |--------|-------------|--------|
 | `--pgver` | PostgreSQL versions to test | `16`, `17`, `18`, `19`, `all` |
 | `--platforms` | Target platforms | `rpm`, `deb`, `all` |
-| `--components` | Components to test | `server`, `snowflake`, `pgbouncer`, `pgbackrest`, `postgrest`, `lolor`, `postgis`, `system_stats`, `vectorizer`, `zerodowntime`, `mcp`, `rag`, `ace`, `repo_health`, `docloader`, `anonymizer`, `pg_vectorize`, `pg_tokenizer`, `vchord_bm25`, `pgaudit`, `pgadmin4`, `patroni`, `pg_stat_monitor`, `ai_db_workbench`, `radar`, `spock_patroni_failover`, `llvmjit`, `spock`, `supautils`, `ai_kb`, `pgvector`, `control_plane`, `all` |
+| `--components` | Components to test | `server`, `snowflake`, `pgbouncer`, `pgbackrest`, `postgrest`, `lolor`, `postgis`, `system_stats`, `vectorizer`, `zerodowntime`, `mcp`, `rag`, `ace`, `repo_health`, `docloader`, `anonymizer`, `pg_vectorize`, `pg_tokenizer`, `vchord_bm25`, `pgaudit`, `pgadmin4`, `patroni`, `pg_stat_monitor`, `ai_db_workbench`, `radar`, `spock_patroni_failover`, `llvmjit`, `spock`, `supautils`, `ai_kb`, `pgvector`, `control_plane`, `coldfront`, `all` |
 | `--repo` | Repository to use | `release`, `staging`, `daily` |
 | `--target` | Execution target | `docker` (default), `aws` |
 | `--arch` | Filter enabled containers by architecture | `arm64`, `amd64` |
@@ -278,6 +278,7 @@ pgedge-pep-test/
 │   ├── test_pep_pg_stat_monitor.py
 │   ├── test_pep_pgvector.py
 │   ├── test_pep_control_plane.py
+│   ├── test_pep_coldfront.py
 │   ├── test_integration_zerodowntime.py
 │   ├── test_pep_llvmjit.py
 │   ├── test_spock_patroni_failover.py
@@ -367,3 +368,4 @@ pgedge-pep-test/
 | `ai_kb` | AI knowledge-base embedding-model packages (gemini, ollama, openai, voyage) |
 | `pgvector` | Vector similarity search extension (`vector`) |
 | `control_plane` | pgEdge control plane service (standalone `/usr/sbin` binary + systemd unit) |
+| `coldfront` | Coldfront cold-storage tiering: `coldfront` + `pg_duckdb` extensions, the archiver/compactor/partitioner binaries, bundled DuckDB extensions, and lakekeeper |

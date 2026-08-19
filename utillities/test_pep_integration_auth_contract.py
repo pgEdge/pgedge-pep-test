@@ -1,22 +1,53 @@
 """Public-repo auth contract (2026-08-20).
 
 PEP is a PUBLIC repo, so the reusable integration workflow self-checks-out WITHOUT
-any dedicated read token: `pep_read_token` was removed from both the workflow's
-`secrets:` declaration and its checkout step, and every self-test caller stopped
-passing it (a caller may not pass a secret the reusable workflow no longer
+a dedicated caller-supplied read token: `pep_read_token` was removed from both the
+workflow's `secrets:` declaration and its checkout step, and every self-test caller
+stopped passing it (a caller may not pass a secret the reusable workflow no longer
 declares). This test LOCKS IN that simplification and guards the two properties
 that must survive it: (1) immutable implementation-ref pinning, and (2)
 resolved-SHA provenance recording.
 
+The prohibition is on `pep_read_token` SPECIFICALLY — not on all `secrets:` blocks:
+a future full-mode caller may legitimately pass the optional
+`DOCKERHUB_USERNAME`/`DOCKERHUB_TOKEN` the reusable workflow still accepts.
+
 Stdlib-only (no PyYAML), matching the CI unit job's interpreter and the style of
 test_pep_selftest_artifacts.py.
 """
+import re
 import unittest
 from pathlib import Path
 
 _REPO = Path(__file__).resolve().parent.parent
 _INTEGRATION = _REPO / ".github" / "workflows" / "pep-integration.yml"
 _SELFTEST = _REPO / ".github" / "workflows" / "pep-selftest.yml"
+
+
+def _declared_call_secrets(text):
+    """Return the set of secret NAMES declared under on.workflow_call.secrets in
+    the reusable workflow (keys only; comment/blank lines skipped). Used to
+    assert the token contract at the declaration site rather than by a blanket
+    'no secrets:' scan."""
+    lines = text.splitlines()
+    i = 0
+    while i < len(lines) and lines[i].rstrip() != "    secrets:":
+        i += 1
+    if i >= len(lines):
+        return set()
+    base, keys = 4, set()
+    i += 1
+    while i < len(lines):
+        ln = lines[i]
+        if ln.strip() and not ln.lstrip().startswith("#"):
+            indent = len(ln) - len(ln.lstrip(" "))
+            if indent <= base:
+                break
+            m = re.match(r"^\s+([A-Za-z_][A-Za-z0-9_]*):", ln)
+            if m:
+                keys.add(m.group(1))
+        i += 1
+    return keys
 
 
 def _checkout_step(text):
@@ -74,11 +105,23 @@ class PublicAuthContract(unittest.TestCase):
         self.assertIn("resolved_sha=", self.integration)
         self.assertIn("provenance.json", self.integration)
 
-    def test_selftest_callers_pass_no_secrets_block(self):
-        # With no required secret to pass, the four local caller jobs carry no
-        # `secrets:` block at all.
-        self.assertNotIn("secrets:", self.selftest,
-                         "self-test caller jobs should no longer declare a secrets: block")
+    def test_reusable_workflow_declares_no_read_token_secret(self):
+        # Narrowed contract (2026-08-20): prohibit `pep_read_token` SPECIFICALLY at
+        # the declaration site, NOT all secrets. The reusable workflow may still
+        # declare the optional DockerHub creds a future full-mode caller can pass.
+        declared = _declared_call_secrets(self.integration)
+        self.assertNotIn("pep_read_token", declared,
+                         f"pep_read_token must not be a declared secret; got {sorted(declared)}")
+        allowed = {"DOCKERHUB_USERNAME", "DOCKERHUB_TOKEN"}
+        self.assertTrue(declared <= allowed,
+                        f"unexpected declared secret(s): {sorted(declared - allowed)} "
+                        f"(only optional DockerHub creds are allowed)")
+
+    def test_selftest_callers_do_not_pass_read_token(self):
+        # A future caller MAY carry a `secrets:` block (e.g. DockerHub); what is
+        # forbidden is passing pep_read_token. Today no caller passes any secret.
+        self.assertNotIn("pep_read_token", self.selftest,
+                         "no self-test caller may pass pep_read_token")
 
 
 if __name__ == "__main__":

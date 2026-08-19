@@ -125,9 +125,10 @@ jobs:
       - name: Checkout PEP implementation (self, pinned)
         uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803  # v6.1.0
         with:
-          # PEP is public -> no token needed to check it out (actions/checkout uses the
-          # job's default GITHUB_TOKEN, which reads any public repo). We still pin to an
-          # immutable implementation ref; the next step records the resolved SHA.
+          # PEP is public -> no dedicated caller-supplied read token is needed to check
+          # it out: actions/checkout uses the job's built-in GITHUB_TOKEN, which reads
+          # any public repo. We still pin to an immutable implementation ref; the next
+          # step records the resolved SHA.
           repository: pgEdge/pgedge-pep-test
           ref: ${{ inputs.pep_implementation_ref }}
       - name: Record PEP ref + resolved SHA

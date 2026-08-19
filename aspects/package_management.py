@@ -13,6 +13,13 @@ _nz_spec = _ilu.spec_from_file_location(
 _nz = _ilu.module_from_spec(_nz_spec)
 _nz_spec.loader.exec_module(_nz)
 
+# Pure install-decision/assertion module (owns assert_safe_version); imported by path.
+_pv_spec = _ilu.spec_from_file_location(
+    "pep_verify",
+    str(_Path(__file__).resolve().parent.parent / "utillities" / "pep_verify.py"))
+_pv = _ilu.module_from_spec(_pv_spec)
+_pv_spec.loader.exec_module(_pv)
+
 
 def install_package(container, package_name, pg_major_version=None, install_pg_server=False):
     """
@@ -345,3 +352,49 @@ def validate_bundled_file(container, file_path):
 
     return True, file_info, message
 
+
+
+def install_pinned(container, package_name, exact_version):
+    """Install an EXACT version (L2a) via ARGUMENT-VECTOR exec — no `sh -c` around
+    caller data, so shell metacharacters in exact_version can never become commands.
+    exact_version is validated (allowlist) before use; the package spec is a single
+    argv element. Returns (success: bool, output: str)."""
+    _pv.assert_safe_version(exact_version)          # defense-in-depth (also validated upstream)
+    ec, _ = container.exec_run(["/bin/sh", "-c", "command -v dnf"], user="root")  # constant probe
+    if ec == 0:
+        argv = ["dnf", "install", "-y", f"{package_name}-{exact_version}"]
+        env = None
+    else:
+        container.exec_run(["apt-get", "update"], user="root")
+        argv = ["apt-get", "install", "-y", f"{package_name}={exact_version}"]
+        env = {"DEBIAN_FRONTEND": "noninteractive"}
+    ec, out = container.exec_run(argv, user="root", environment=env)   # list argv, NOT a shell string
+    return ec == 0, out.decode(errors="replace")
+
+
+def query_installed_version(container, package_name):
+    """Read-only: return the installed package-manager identity string — RPM
+    VERSION-RELEASE or DEB Version — or None if not installed / unqueryable.
+    (package_name is a known component package, not caller free-text; mirrors the
+    query used by verify_package_version.)"""
+    ec, _ = container.exec_run(["/bin/sh", "-c", "command -v dnf"], user="root")
+    if ec == 0:
+        cmd = f"rpm -q --queryformat '%{{VERSION}}-%{{RELEASE}}' {package_name}"
+    else:
+        ec, _ = container.exec_run(["/bin/sh", "-c", "command -v apt-get"], user="root")
+        if ec != 0:
+            return None
+        cmd = f"dpkg-query --showformat='${{Version}}' --show {package_name}"
+    ec, out = container.exec_run(["/bin/sh", "-c", cmd], user="root")
+    if ec != 0:
+        return None
+    return out.decode(errors="replace").strip() or None
+
+
+def query_binary_version(container, binary_path):
+    """Read-only: return the raw `<binary> -version` output (contains a 'Version:'
+    line for a real tag build), or None if the binary can't be run."""
+    ec, out = container.exec_run([binary_path, "-version"], user="root")
+    if ec != 0:
+        return None
+    return out.decode(errors="replace").strip() or None

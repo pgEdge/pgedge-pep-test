@@ -23,6 +23,14 @@ class UnsafeVersionError(ValueError):
     """Raised when a pinned exact-version string is malformed or shell-unsafe."""
 
 
+class InstallDecisionError(ValueError):
+    """Raised when a request is internally inconsistent: an identity rung is marked
+    attemptable_now but the family-specific expected identity needed to pin the
+    install is absent/empty. normalize_request should never emit this; choose_install
+    fails fast here rather than installing 'latest' and mutating the container before
+    the contradiction would surface at identity verification."""
+
+
 def assert_safe_version(exact_version):
     """Return exact_version if it matches the allowlist, else raise
     UnsafeVersionError. Pure + unit-testable (no Docker)."""
@@ -39,7 +47,13 @@ def choose_install(request):
     RPM: expected_rpm may be a full NVR, but the install spec needs the bare
     VERSION-RELEASE -> reduce via _pid.canonical_rpm(...). DEB: expected_deb is
     already the bare dpkg Version -> used as-is. (package_name comes from the
-    normalized request, so no signature change / no caller change.)"""
+    normalized request, so no signature change / no caller change.)
+
+    If l2a is attemptable but the family-specific expected identity is absent/empty
+    (or reduces to empty), the request is INTERNALLY INCONSISTENT: raise
+    InstallDecisionError so we fail before mutating the container, rather than
+    installing 'latest' and only detecting the contradiction later at identity
+    verification. ('latest', None) is returned ONLY when l2a is genuinely false."""
     now = request["attemptable_now"]
     if now["l2a"]:
         if request["family"] == "rpm":
@@ -47,8 +61,11 @@ def choose_install(request):
             token = _pid.canonical_rpm(raw, request.get("package_name")) if raw else None
         else:
             token = request.get("expected_deb")
-        if token:
-            return ("pinned", assert_safe_version(token))
+        if not token:
+            raise InstallDecisionError(
+                f"attemptable_now.l2a is set but the {request['family']} expected "
+                f"identity is absent/empty; cannot pin an exact install")
+        return ("pinned", assert_safe_version(token))
     return ("latest", None)
 
 

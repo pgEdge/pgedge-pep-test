@@ -358,14 +358,40 @@ def install_pinned(container, package_name, exact_version):
     """Install an EXACT version (L2a) via ARGUMENT-VECTOR exec — no `sh -c` around
     caller data, so shell metacharacters in exact_version can never become commands.
     exact_version is validated (allowlist) before use; the package spec is a single
-    argv element. Returns (success: bool, output: str)."""
+    argv element.
+
+    Repository-freshness/error handling mirrors install_package so a just-published
+    exact package is resolvable and a failed preparation never falls through to an
+    install:
+      * DNF: `dnf clean expire-cache` before the install (stale cache otherwise
+        reports "No match" for RPMs published after the last refresh);
+      * APT: wait out the apt/dpkg lock, then `apt-get update`; if that refresh
+        fails, return (False, msg) WITHOUT attempting the install;
+      * no supported package manager -> (False, msg), no install attempted.
+
+    Returns (success: bool, output: str). (assert_safe_version still RAISES on an
+    unsafe/malformed version — that is a programming/safety error, not an
+    operational failure.)"""
     _pv.assert_safe_version(exact_version)          # defense-in-depth (also validated upstream)
     ec, _ = container.exec_run(["/bin/sh", "-c", "command -v dnf"], user="root")  # constant probe
     if ec == 0:
+        # Expire cached repo metadata so a newly-published exact RPM resolves
+        # (mirrors install_package's dnf refresh; constant command, no caller data).
+        container.exec_run(["/bin/sh", "-c", "dnf clean expire-cache"], user="root")
         argv = ["dnf", "install", "-y", f"{package_name}-{exact_version}"]
         env = None
     else:
-        container.exec_run(["apt-get", "update"], user="root")
+        ec, _ = container.exec_run(["/bin/sh", "-c", "command -v apt-get"], user="root")
+        if ec != 0:
+            return False, "No supported package manager found (dnf or apt-get)"
+        # Preserve install_package's Debian preparation: wait out the apt/dpkg lock,
+        # then refresh the index. A failed refresh must NOT fall through to an
+        # install against a stale/incomplete index.
+        from aspects.configure_repository import _wait_for_apt_lock
+        _wait_for_apt_lock(container)
+        uec, uout = container.exec_run(["apt-get", "update"], user="root")
+        if uec != 0:
+            return False, f"apt-get update failed before pinned install: {uout.decode(errors='replace')}"
         argv = ["apt-get", "install", "-y", f"{package_name}={exact_version}"]
         env = {"DEBIAN_FRONTEND": "noninteractive"}
     ec, out = container.exec_run(argv, user="root", environment=env)   # list argv, NOT a shell string

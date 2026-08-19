@@ -30,6 +30,13 @@ def _install_calls(c):
     return [cmd for cmd, _ in c.calls if isinstance(cmd, list) and "install" in cmd]
 
 
+def _index_of_install(c):
+    for i, (cmd, _) in enumerate(c.calls):
+        if isinstance(cmd, list) and "install" in cmd:
+            return i
+    return -1
+
+
 @pytest.mark.parametrize("has_dnf,sep,mgr", [(True, "-", "dnf"), (False, "=", "apt-get")])
 def test_pkg_spec_is_single_argv_element_never_shell(has_dnf, sep, mgr):
     c = FakeContainer(has_dnf=has_dnf)
@@ -41,10 +48,12 @@ def test_pkg_spec_is_single_argv_element_never_shell(has_dnf, sep, mgr):
     assert argv[0] == mgr and isinstance(argv, list)     # argv list, not a string
     # the version is ONE element, exactly package{sep}version, not split or interpolated
     assert f"pgedge-rag-server{sep}1.0.0-1.el9" in argv
-    # NOTHING caller-derived ever goes through `sh -c` (only the constant dnf probe may)
+    # NO caller-derived data (package name / version) ever crosses an `sh -c`. The
+    # constant prep commands (probes, `dnf clean expire-cache`, apt lock/update) may
+    # use `sh -c`, but they never contain the caller's package or version tokens.
     for cmd, _ in c.calls:
         if isinstance(cmd, list) and len(cmd) >= 3 and cmd[:2] == ["/bin/sh", "-c"]:
-            assert cmd[2] == "command -v dnf"            # the ONLY sh -c allowed
+            assert "pgedge-rag-server" not in cmd[2] and "1.0.0-1.el9" not in cmd[2]
 
 
 def test_install_pinned_returns_success_flag():
@@ -58,6 +67,76 @@ def test_unsafe_version_rejected_before_any_exec():
     with pytest.raises(pm._pv.UnsafeVersionError):
         pm.install_pinned(c, "pgedge-rag-server", "1.0.0; rm -rf /")
     assert c.calls == []          # rejected BEFORE any exec_run -- no probe, no install
+
+
+def test_dnf_metadata_refreshed_before_pinned_install():
+    # DNF path must expire stale repo metadata (like install_package) so a
+    # just-published exact RPM is resolvable -- and that refresh must run BEFORE
+    # the install, not after.
+    c = FakeContainer(has_dnf=True)
+    ok, _ = pm.install_pinned(c, "pgedge-rag-server", "1.0.0-1.el9")
+    assert ok
+    refresh_idx = next((i for i, (cmd, _) in enumerate(c.calls)
+                        if cmd == ["/bin/sh", "-c", "dnf clean expire-cache"]), -1)
+    assert refresh_idx >= 0                        # metadata refresh happened
+    assert refresh_idx < _index_of_install(c)      # ...and before the install
+
+
+def test_apt_lock_and_update_prep_before_install():
+    # APT path must wait out the apt/dpkg lock and refresh the index BEFORE
+    # installing (preserving install_package's Debian preparation).
+    c = FakeContainer(has_dnf=False)
+    ok, _ = pm.install_pinned(c, "pgedge-rag-server", "2.0.0~beta1-1.trixie")
+    assert ok
+    inst = _index_of_install(c)
+    lock_idx = next((i for i, (cmd, _) in enumerate(c.calls)
+                     if isinstance(cmd, list) and len(cmd) >= 3
+                     and cmd[:2] == ["/bin/sh", "-c"] and "fuser" in cmd[2]), -1)
+    update_idx = next((i for i, (cmd, _) in enumerate(c.calls)
+                       if cmd == ["apt-get", "update"]), -1)
+    assert 0 <= lock_idx < inst                    # lock wait ran before install
+    assert 0 <= update_idx < inst                  # index refresh ran before install
+    assert lock_idx < update_idx                   # lock wait precedes the refresh
+
+
+class _AptUpdateFailsContainer:
+    """apt-get exists and the lock clears, but `apt-get update` fails."""
+    def __init__(self):
+        self.calls = []
+    def exec_run(self, cmd, **kw):
+        self.calls.append((cmd, kw))
+        if cmd == ["/bin/sh", "-c", "command -v dnf"]:
+            return (1, b"")                        # not RHEL
+        if cmd == ["apt-get", "update"]:
+            return (1, b"E: could not refresh index")
+        return (0, b"ok")                          # apt-get probe + lock prep succeed
+
+
+def test_failed_apt_update_does_not_install():
+    # A failed index refresh must NOT fall through to an install against a stale
+    # index -- it returns (False, <message>) and never issues the install.
+    c = _AptUpdateFailsContainer()
+    ok, out = pm.install_pinned(c, "pgedge-rag-server", "2.0.0~beta1-1.trixie")
+    assert ok is False
+    assert "update" in out.lower()
+    assert _index_of_install(c) == -1              # install never attempted
+
+
+class _NoPkgMgrContainer:
+    """Neither dnf nor apt-get is present."""
+    def __init__(self):
+        self.calls = []
+    def exec_run(self, cmd, **kw):
+        self.calls.append((cmd, kw))
+        return (1, b"")                            # every `command -v` fails
+
+
+def test_no_package_manager_is_clear_failure():
+    c = _NoPkgMgrContainer()
+    ok, out = pm.install_pinned(c, "pgedge-rag-server", "1.0.0-1.el9")
+    assert ok is False
+    assert "no supported package manager" in out.lower()
+    assert _index_of_install(c) == -1              # nothing installed
 
 
 def test_query_installed_version_rpm():

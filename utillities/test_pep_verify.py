@@ -62,11 +62,12 @@ def test_assert_identity_non_attemptable_stays_not_attempted():
     assert ev["l2a"] == "not_attempted" and ev["l1"] == "proven"
 
 
-# NOTE: "" (empty) is NOT in this list. choose_install treats an empty explicit
-# token as ABSENCE of a pinned token -> ('latest', None), not an unsafe value; an
-# inconsistent request (l2a attemptable yet empty expected_*) is still caught later
-# by assert_identity marking L2a not_proven (no silent L2->L1 downgrade). The
-# primitive's rejection of "" is covered separately below.
+# NOTE (2026-08-20 correction): "" (empty) is NOT in this unsafe list -- an empty
+# expected_* with l2a=True is not a shell-safety problem but an INTERNALLY
+# INCONSISTENT request. choose_install raises InstallDecisionError for it (below)
+# so it fails BEFORE mutating the container, rather than installing 'latest' and
+# only failing later at identity verification. assert_safe_version still rejects ""
+# as a primitive (covered separately).
 @pytest.mark.parametrize("bad", [
     "1.0.0; rm -rf /", "1.0.0 && id", "$(id)", "`id`", "1.0.0|cat /etc/passwd",
     "1.0.0\nrm x", "1.0.0 rocky", "1.0.0#", "-1.0.0",
@@ -77,13 +78,24 @@ def test_choose_install_rejects_unsafe_version(bad):
         pv.choose_install(r)
 
 
-def test_choose_install_empty_explicit_token_is_latest_not_unsafe():
-    # An inconsistent request (l2a=True but expected_rpm="") is NOT a pinned install:
-    # empty == absent -> ('latest', None). The inconsistency surfaces at assert_identity.
+def test_choose_install_l2a_missing_rpm_identity_is_invariant_error():
+    # l2a attemptable but expected_rpm empty -> internally inconsistent request:
+    # fail fast, do NOT fall through to ('latest', None) and mutate the container.
     r = _req(attemptable_now={"l2a": True, "l2b": False, "l1": True}, expected_rpm="")
-    assert pv.choose_install(r) == ("latest", None)
-    ev = pv.assert_identity({"rpm": "1.0.0-1.el9", "component_version": "1.0.0"}, r, "pgedge-rag-server")
-    assert ev["l2a"] == "not_proven"          # empty expected -> not proven (a failure)
+    with pytest.raises(pv.InstallDecisionError):
+        pv.choose_install(r)
+
+
+def test_choose_install_l2a_missing_deb_identity_is_invariant_error():
+    # Same invariant on the DEB path (expected_deb absent/None while l2a is set).
+    r = _req(family="deb", attemptable_now={"l2a": True, "l2b": False, "l1": True})
+    with pytest.raises(pv.InstallDecisionError):
+        pv.choose_install(r)
+
+
+def test_choose_install_latest_only_when_l2a_false():
+    # ('latest', None) is preserved ONLY when l2a is genuinely false.
+    assert pv.choose_install(_req()) == ("latest", None)
 
 
 def test_assert_safe_version_rejects_empty():

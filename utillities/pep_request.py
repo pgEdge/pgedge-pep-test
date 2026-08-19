@@ -20,6 +20,20 @@ Stdlib only -> unit-testable via `pytest utillities/test_pep_request.py`.
 from __future__ import annotations
 
 import re
+import sys as _sys
+import importlib.util as _ilu
+from pathlib import Path as _Path
+
+# Sibling module (no package __init__), imported by path like the other pep_* modules.
+# It defines @dataclass types, so it MUST be registered in sys.modules under its own
+# name BEFORE exec_module — dataclass field introspection looks the module up there.
+_cr_spec = _ilu.spec_from_file_location(
+    "container_resolver", str(_Path(__file__).with_name("container_resolver.py")))
+_cr = _ilu.module_from_spec(_cr_spec)
+_sys.modules.setdefault("container_resolver", _cr)
+_cr_spec.loader.exec_module(_cr)
+# Default container catalog (overridable per call for tests).
+_DEFAULT_CATALOG = _Path(__file__).resolve().parent.parent / "configuration" / "containers_list.json"
 
 VALID_CHANNELS = ("release", "staging", "daily")
 VALID_FAMILIES = ("rpm", "deb")
@@ -65,13 +79,17 @@ def _enum(value, allowed, key):
     return value
 
 
-def normalize_request(raw: dict) -> dict:
+def normalize_request(raw: dict, *, catalog_path=None) -> dict:
     """Validate + normalize a raw request dict. Raises RequestError if invalid.
 
     Returns a normalized dict with `identity_target` ('L1' | 'L2'), `attemptable_now`
     {l2a,l2b,l1} (assertable given the inputs, no derivation), and
     `derivation_pending` {l2a,l2b} (would become attemptable once G6 assigns a
     derivation owner).
+
+    `catalog_path` overrides the container catalog used to validate
+    `container_alias` (defaults to configuration/containers_list.json); tests inject
+    a synthetic catalog.
     """
     if not isinstance(raw, dict):
         raise RequestError(f"request must be a dict, got {type(raw).__name__}")
@@ -96,9 +114,21 @@ def normalize_request(raw: dict) -> dict:
     if not _PG_MAJOR_RE.match(str(pg_major)):
         raise RequestError(f"pg_major {pg_major!r} must be numeric")
     # Target is selected by a catalog ALIAS (the OS is embedded in the container
-    # name; a bare distro/el-version cannot select a container). Catalog membership
-    # + family/arch agreement is validated in Plan 2 Task 5 (needs the catalog file).
+    # name; a bare distro/el-version cannot select a container). Validate that the
+    # alias RESOLVES in the catalog and that the resolved entry's family/arch agree
+    # with the request. `enabled` does NOT gate resolution (it only filters the
+    # default selection subset), so an explicitly named disabled alias still
+    # validates — only an unresolvable alias, or a family/arch disagreement, is rejected.
     container_alias = _require(raw, "container_alias")
+    catalog = _cr.load_catalog(catalog_path or _DEFAULT_CATALOG)
+    entry = _cr.resolve_token(catalog, container_alias)
+    if entry is None:
+        raise RequestError(
+            f"container_alias {container_alias!r} does not resolve in the catalog")
+    if entry.family != family or entry.arch != arch:
+        raise RequestError(
+            f"container_alias {container_alias!r} resolves to {entry.family}/{entry.arch}, "
+            f"which disagrees with the request's {family}/{arch}")
 
     # Optional identity inputs.
     expected_buildnum = _optional(raw, "expected_buildnum")

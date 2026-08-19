@@ -152,3 +152,65 @@ def test_non_dict_request_rejected():
 def test_invalid_scenario_rejected():
     with pytest.raises(pr.RequestError):
         pr.normalize_request(_base(scenario="rollback"))
+
+
+# --- Task 6: container_alias validation against the catalog (enabled-agnostic) ---
+import json
+
+
+def _syn_catalog(tmp_path):
+    """Minimal synthetic catalog (mirrors test_container_resolver style): one
+    DISABLED rhel entry + one ENABLED deb entry, so tests can prove resolution is
+    enabled-agnostic and that family/arch agreement is enforced."""
+    data = {
+        "rhel": [
+            {"name": "auto-rocky9-amd", "alias": "rocky9-amd64",
+             "description": "Rocky 9 AMD", "enabled": False},
+        ],
+        "deb": [
+            {"name": "auto-debian13-amd", "alias": "debian13-amd64",
+             "description": "Debian 13 AMD", "enabled": True},
+        ],
+    }
+    p = tmp_path / "containers_list.json"
+    p.write_text(json.dumps(data))
+    return str(p)
+
+
+def test_container_alias_resolves_and_agrees(tmp_path):
+    req = pr.normalize_request(
+        _base(family="deb", arch="amd64", container_alias="debian13-amd64"),
+        catalog_path=_syn_catalog(tmp_path))
+    assert req["container_alias"] == "debian13-amd64"
+
+
+def test_container_alias_enabled_false_still_validates(tmp_path):
+    # rocky9-amd64 is enabled:false here; an explicitly named alias must NOT be
+    # rejected for being disabled (enabled gates default selection, not resolution).
+    req = pr.normalize_request(
+        _base(family="rpm", arch="amd64", container_alias="rocky9-amd64"),
+        catalog_path=_syn_catalog(tmp_path))
+    assert req["container_alias"] == "rocky9-amd64"
+
+
+def test_container_alias_unresolvable_rejected(tmp_path):
+    with pytest.raises(pr.RequestError):
+        pr.normalize_request(
+            _base(family="rpm", arch="amd64", container_alias="bogus9-amd64"),
+            catalog_path=_syn_catalog(tmp_path))
+
+
+def test_container_alias_family_mismatch_rejected(tmp_path):
+    # debian13-amd64 is a DEB entry; a request declaring family=rpm disagrees.
+    with pytest.raises(pr.RequestError):
+        pr.normalize_request(
+            _base(family="rpm", arch="amd64", container_alias="debian13-amd64"),
+            catalog_path=_syn_catalog(tmp_path))
+
+
+def test_container_alias_arch_mismatch_rejected(tmp_path):
+    # debian13-amd64 is amd64; a request declaring arch=arm64 disagrees.
+    with pytest.raises(pr.RequestError):
+        pr.normalize_request(
+            _base(family="deb", arch="arm64", container_alias="debian13-amd64"),
+            catalog_path=_syn_catalog(tmp_path))

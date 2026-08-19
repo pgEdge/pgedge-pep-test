@@ -1,8 +1,9 @@
 name: PEP Self-Test
 on: {pull_request: {}, workflow_dispatch: {}}
 # Least privilege: this self-test only checks out and runs unit/lint layers.
-# Read-only contents is all the GITHUB_TOKEN (incl. the pep_read_token passed to
-# the reusable workflow) needs; safe for a public repo where forks trigger PRs.
+# Read-only contents is all the GITHUB_TOKEN needs; safe for a public repo where
+# forks trigger PRs. The reusable workflow is public and self-checks-out without a
+# token, so the caller jobs below pass no secrets.
 permissions:
   contents: read
 jobs:
@@ -47,8 +48,6 @@ jobs:
       execution_mode: preview
       invocation_id: preview          # item 1: unique per call so artifact names can't collide
       pep_implementation_ref: ${{ github.sha }}
-    secrets:
-      pep_read_token: ${{ secrets.GITHUB_TOKEN }}   # same-repo: default token suffices
 
   assert-preview:                   # SEPARATE downstream job reads the outputs
     needs: preview-call
@@ -78,8 +77,6 @@ jobs:
       scenario: upgrade             # unsupported in the POC -> expected rejection
       invocation_id: validation-upgrade   # item 1: unique per call
       pep_implementation_ref: ${{ github.sha }}
-    secrets:
-      pep_read_token: ${{ secrets.GITHUB_TOKEN }}
 
   assert-validation:                # SEPARATE downstream job asserts the classification
     needs: validation-call
@@ -114,8 +111,6 @@ jobs:
       mode: observe
       invocation_id: bad-execmode    # item 1: unique per call
       pep_implementation_ref: ${{ github.sha }}
-    secrets:
-      pep_read_token: ${{ secrets.GITHUB_TOKEN }}
 
   assert-bad-execmode:
     needs: bad-execmode-call
@@ -151,8 +146,6 @@ jobs:
       mode: bogus                   # invalid enforcement mode -> must be rejected
       invocation_id: bad-mode        # item 1: unique per call (else collides with preview-call)
       pep_implementation_ref: ${{ github.sha }}
-    secrets:
-      pep_read_token: ${{ secrets.GITHUB_TOKEN }}
 
   assert-bad-mode:
     needs: bad-mode-call

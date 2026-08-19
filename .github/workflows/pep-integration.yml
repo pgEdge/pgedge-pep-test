@@ -38,7 +38,10 @@ on:
       invocation_id:     {required: false, type: string, default: ""}
       pep_implementation_ref: {required: true, type: string}
     secrets:
-      pep_read_token:     {required: true}
+      # PEP is a PUBLIC repo: the self-checkout below needs no read credential, so no
+      # dedicated read secret is required (a public caller would have nothing to pass
+      # but its built-in GITHUB_TOKEN). Implementation-ref pinning + resolved-SHA
+      # provenance are preserved and are independent of any token.
       DOCKERHUB_USERNAME: {required: false}   # optional; full-mode pull rate limits
       DOCKERHUB_TOKEN:    {required: false}
     outputs:
@@ -122,9 +125,11 @@ jobs:
       - name: Checkout PEP implementation (self, pinned)
         uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803  # v6.1.0
         with:
+          # PEP is public -> no token needed to check it out (actions/checkout uses the
+          # job's default GITHUB_TOKEN, which reads any public repo). We still pin to an
+          # immutable implementation ref; the next step records the resolved SHA.
           repository: pgEdge/pgedge-pep-test
           ref: ${{ inputs.pep_implementation_ref }}
-          token: ${{ secrets.pep_read_token }}
       - name: Record PEP ref + resolved SHA
         env:
           IN_REF: ${{ inputs.pep_implementation_ref }}

@@ -208,10 +208,12 @@ def normalize_version(version_string, package_name=""):
 
     Handles formats like:
     - 1.0-beta2, 1.0.0-beta1 (hyphen separator)
+    - 1.0~beta2, 1.0.0~beta1 (Debian tilde separator for pre-releases)
     - 1.0beta2, 1.0.0beta2 (no separator)
     - 1.0, 1.0.0 (different precision)
     - 1.0.0-beta3.1.el9 (RPM VERSION-RELEASE with dist suffix)
     - 16.11-1.bullseye (Debian packaging suffix)
+    - 1.0.0~beta2-1.trixie (Debian pre-release + packaging suffix)
 
     Args:
         version_string: Version string to normalize
@@ -225,6 +227,12 @@ def normalize_version(version_string, package_name=""):
     # Convert to lowercase for case-insensitive comparison
     version = version_string.lower().strip()
     package_lower = package_name.lower()
+
+    # Debian encodes pre-releases with a tilde (1.0.0~beta2) so they sort before
+    # the final release, whereas RPM and the config env files use a hyphen
+    # (1.0.0-beta2). Fold the tilde into a hyphen up front so a deb-installed
+    # version compares equal to the expected value from the env file.
+    version = version.replace('~', '-')
 
     # Strip RPM dist suffixes (e.g., .el9, .el8, .rocky9, .alma9, .fc39, .oel9)
     # These appear at the end of RPM VERSION-RELEASE strings

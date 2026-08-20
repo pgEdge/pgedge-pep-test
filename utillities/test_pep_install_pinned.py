@@ -119,7 +119,86 @@ def test_failed_apt_update_does_not_install():
     ok, out = pm.install_pinned(c, "pgedge-rag-server", "2.0.0~beta1-1.trixie")
     assert ok is False
     assert "update" in out.lower()
+    assert "could not refresh index" in out        # preserves the command's output detail
     assert _index_of_install(c) == -1              # install never attempted
+
+
+def test_apt_path_does_not_import_aspects_package(monkeypatch):
+    # Regression (2026-08-20): the apt-lock dependency must load via the module's
+    # own by-path shim, NOT `from aspects.configure_repository import ...`, so it
+    # works when package_management.py is loaded by path without the repo root on
+    # sys.path/PYTHONPATH. Guard __import__ to fail any 'aspects' import and prove
+    # the DEB path still installs.
+    import builtins
+    real_import = builtins.__import__
+
+    def guard(name, *a, **k):
+        if name == "aspects" or name.startswith("aspects."):
+            raise ModuleNotFoundError("No module named 'aspects' (simulated clean env)")
+        return real_import(name, *a, **k)
+
+    monkeypatch.setattr(builtins, "__import__", guard)
+    c = FakeContainer(has_dnf=False)
+    ok, _ = pm.install_pinned(c, "pgedge-rag-server", "2.0.0~beta1-1.trixie")
+    assert ok
+    assert _index_of_install(c) != -1              # DEB install ran, no 'aspects' import needed
+
+
+class _DnfExpireFailsContainer:
+    """dnf exists but `dnf clean expire-cache` fails."""
+    def __init__(self):
+        self.calls = []
+    def exec_run(self, cmd, **kw):
+        self.calls.append((cmd, kw))
+        if cmd == ["/bin/sh", "-c", "command -v dnf"]:
+            return (0, b"")
+        if cmd == ["/bin/sh", "-c", "dnf clean expire-cache"]:
+            return (1, b"Errors during downloading metadata")
+        return (0, b"ok")
+
+
+def test_failed_dnf_refresh_does_not_install():
+    # A failed metadata refresh must NOT fall through to a pinned install against a
+    # stale cache -- it returns (False, <message>) and never issues the install.
+    c = _DnfExpireFailsContainer()
+    ok, out = pm.install_pinned(c, "pgedge-rag-server", "1.0.0-1.el9")
+    assert ok is False
+    assert "expire-cache" in out.lower()
+    assert "Errors during downloading metadata" in out   # preserves the command's output detail
+    assert _index_of_install(c) == -1              # install never attempted
+
+
+class _AptLockFailsContainer:
+    """apt-get exists but the apt/dpkg lock never frees, so _wait_for_apt_lock raises."""
+    def __init__(self):
+        self.calls = []
+    def exec_run(self, cmd, **kw):
+        self.calls.append((cmd, kw))
+        if cmd == ["/bin/sh", "-c", "command -v dnf"]:
+            return (1, b"")
+        if (isinstance(cmd, list) and len(cmd) >= 3 and cmd[:2] == ["/bin/sh", "-c"]
+                and "fuser" in cmd[2]):
+            return (1, b"lock still held")          # poll never clears -> raises
+        return (0, b"ok")
+
+
+def test_failed_apt_lock_prep_does_not_update_or_install():
+    # If lock preparation raises, install_pinned returns (False, <message>) and runs
+    # NEITHER apt-get update NOR the install afterwards.
+    c = _AptLockFailsContainer()
+    ok, out = pm.install_pinned(c, "pgedge-rag-server", "2.0.0~beta1-1.trixie")
+    assert ok is False
+    assert "lock" in out.lower()                    # preserves the raised exception detail
+    assert ["apt-get", "update"] not in [cmd for cmd, _ in c.calls]
+    assert _index_of_install(c) == -1
+
+
+def test_unsafe_version_still_raises_not_operational_tuple():
+    # UnsafeVersionError is a programming/safety error and must PROPAGATE, never be
+    # converted into a (False, msg) operational tuple.
+    c = FakeContainer(has_dnf=True)
+    with pytest.raises(pm._pv.UnsafeVersionError):
+        pm.install_pinned(c, "pgedge-rag-server", "1.0.0; rm -rf /")
 
 
 class _NoPkgMgrContainer:

@@ -19,6 +19,7 @@ CASES = [
     ("1.0.0-1.el9", "pgedge-rag-server", "1.0.0"),
     ("16.11-1.bullseye", "pgedge-postgresql-16", "16.11.0"),  # pads to 3 parts
     ("1.0.0-beta2", "pgedge-rag-server", "1.0.0.beta2"),
+    ("1.0.0~beta2-1.trixie", "pgedge-rag-server", "1.0.0.beta2"),  # deb tilde pre-release, via the wrapper
     ("1.0.0", "pgedge-lolor", "1.0.0"),
 ]
 

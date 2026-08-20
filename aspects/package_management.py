@@ -235,10 +235,12 @@ def normalize_version(version_string, package_name=""):
 
     Handles formats like:
     - 1.0-beta2, 1.0.0-beta1 (hyphen separator)
+    - 1.0~beta2, 1.0.0~beta1 (Debian tilde separator for pre-releases)
     - 1.0beta2, 1.0.0beta2 (no separator)
     - 1.0, 1.0.0 (different precision)
     - 1.0.0-beta3.1.el9 (RPM VERSION-RELEASE with dist suffix)
     - 16.11-1.bullseye (Debian packaging suffix)
+    - 1.0.0~beta2-1.trixie (Debian pre-release + packaging suffix)
 
     Args:
         version_string: Version string to normalize
@@ -247,6 +249,10 @@ def normalize_version(version_string, package_name=""):
     Returns:
         str: Normalized version string in format "1.0.0.beta2" (dots as separators) or "1.0.0" for non-beta
     """
+    # Delegates to the shared normalizer (utillities/pep_version_normalize.py),
+    # which handles RPM/deb packaging suffixes and folds the Debian pre-release
+    # tilde (1.0.0~beta2 -> 1.0.0-beta2) so a deb-installed pre-release compares
+    # equal to the hyphenated value from the config env files.
     return _nz.normalize_version(version_string, package_name)
 
 

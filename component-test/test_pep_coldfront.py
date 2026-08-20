@@ -789,7 +789,7 @@ def test_extension_version(container_name, container_type, extension, expected_v
     "container_name,container_type,binary,expected_version",
     all_binary_combinations, ids=binary_ids
 )
-def test_binary_version(container_name, container_type, binary, expected_version):
+def binary_version(container_name, container_type, binary, expected_version):
     """Verify each shipped binary reports its expected version string.
 
     Covers archiver / compactor / partitioner (pgedge-coldfront) and lakekeeper.

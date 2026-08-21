@@ -100,9 +100,16 @@ if postgis_target_version == "36":
 # Debian's single postgis-3 package always tracks the newest minor available.
 deb_postgis_version = postgis36_version or postgis35_version
 
-# All extensions to create
+# All extensions to create.
+# The config env files export ALL_EXTENSIONS (all caps); this previously read the
+# mixed-case "All_EXTENSIONS", which no config defines, so the list was always
+# empty and test_create_extensions generated zero cases. Read the correct name
+# and keep the old spelling as a fallback for any environment still exporting it.
 all_extensions = [
-    ext.strip() for ext in os.getenv("All_EXTENSIONS", "").split(",")
+    ext.strip()
+    for ext in (
+        os.getenv("ALL_EXTENSIONS") or os.getenv("All_EXTENSIONS") or ""
+    ).split(",")
     if ext.strip()
 ]
 
@@ -121,6 +128,14 @@ RHEL_PACKAGE_VERSION_MAP = {
     f"pgedge-pgvector_{pg_major_version}":             os.getenv(f"PGEDGE_PGVECTOR_{pg_major_version}_VERSION"),
     f"pgedge-system_stats_{pg_major_version}":         os.getenv("PGEDGE_SYSTEM_STATS_VERSION"),
     f"pgedge-postgrest_{pg_major_version}":            os.getenv("PGEDGE_POSTGREST_VERSION"),
+    # Coldfront: two PG-coupled extensions plus three decoupled packages.
+    # 'pgedge-coldfront_{PG}' (coupled) and 'pgedge-coldfront' (decoupled) are
+    # different packages with different versions — keep both keys distinct.
+    f"pgedge-coldfront_{pg_major_version}":            os.getenv(f"PGEDGE_COLDFRONT_{pg_major_version}_VERSION"),
+    f"pgedge-pg-duckdb_{pg_major_version}":            os.getenv(f"PGEDGE_PG_DUCKDB_{pg_major_version}_VERSION"),
+    "pgedge-coldfront":                                os.getenv("PGEDGE_COLDFRONT_SERVER_VERSION"),
+    "pgedge-coldfront-duckdb-extensions":              os.getenv("PGEDGE_COLDFRONT_DUCKDB_EXTENSIONS_VERSION"),
+    "pgedge-lakekeeper":                               os.getenv("PGEDGE_LAKEKEEPER_VERSION"),
     "pgedge-pgbouncer":                                os.getenv("PGEDGE_PGBOUNCER_VERSION"),
     "pgedge-pgbackrest":                               os.getenv("PGEDGE_PGBACKREST_VERSION"),
     "pgedge-pgadmin4":                                 os.getenv("PGEDGE_PGADMIN4_VERSION"),
@@ -150,6 +165,15 @@ DEB_PACKAGE_VERSION_MAP = {
     f"pgedge-postgresql-{pg_major_version}-pgvector":         os.getenv(f"PGEDGE_PGVECTOR_{pg_major_version}_VERSION"),
     f"pgedge-postgresql-{pg_major_version}-system-stats":     os.getenv("PGEDGE_SYSTEM_STATS_VERSION"),
     f"pgedge-postgresql-{pg_major_version}-postgrest":        os.getenv("PGEDGE_POSTGREST_VERSION"),
+    # Coldfront: coupled extensions carry the PG major in the deb name, the three
+    # decoupled packages use the same name on both platforms. lakekeeper reuses
+    # PGEDGE_LAKEKEEPER_VERSION — normalize_version folds Debian's '~beta2' into
+    # the '-beta2' form the env file stores, so one variable covers both.
+    f"pgedge-postgresql-{pg_major_version}-coldfront":        os.getenv(f"PGEDGE_COLDFRONT_{pg_major_version}_VERSION"),
+    f"pgedge-postgresql-{pg_major_version}-pg-duckdb":        os.getenv(f"PGEDGE_PG_DUCKDB_{pg_major_version}_VERSION"),
+    "pgedge-coldfront":                                       os.getenv("PGEDGE_COLDFRONT_SERVER_VERSION"),
+    "pgedge-coldfront-duckdb-extensions":                     os.getenv("PGEDGE_COLDFRONT_DUCKDB_EXTENSIONS_VERSION"),
+    "pgedge-lakekeeper":                                      os.getenv("PGEDGE_LAKEKEEPER_VERSION"),
     "pgedge-pgbouncer":                                       os.getenv("PGEDGE_PGBOUNCER_VERSION"),
     "pgedge-pgbackrest":                                      os.getenv("PGEDGE_PGBACKREST_VERSION"),
     "pgedge-pgadmin4":                                        os.getenv("PGEDGE_PGADMIN4_VERSION"),
@@ -162,6 +186,40 @@ DEB_PACKAGE_VERSION_MAP = {
     "pgedge-ai-dba-collector":                                os.getenv("PGEDGE_AI_DBA_VERSION"),
     "pgedge-ai-dba-client":                                   os.getenv("PGEDGE_AI_DBA_VERSION"),
 }
+
+
+# Libraries always placed in shared_preload_libraries (historical behaviour).
+BASE_PRELOAD_LIBRARIES = ["spock", "lolor", "snowflake"]
+
+# Libraries that must be preloaded for their extension to be creatable, mapped to
+# the package that provides them per platform. PostgreSQL refuses to start when a
+# preloaded library is missing from disk, so each of these is added only when its
+# package is actually part of this run's install list.
+CONDITIONAL_PRELOAD_LIBRARIES = {
+    "coldfront": {
+        "rhel": f"pgedge-coldfront_{pg_major_version}",
+        "deb":  f"pgedge-postgresql-{pg_major_version}-coldfront",
+    },
+    "pg_duckdb": {
+        "rhel": f"pgedge-pg-duckdb_{pg_major_version}",
+        "deb":  f"pgedge-postgresql-{pg_major_version}-pg-duckdb",
+    },
+}
+
+
+def get_preload_libraries(container_type):
+    """Return the shared_preload_libraries entries for the given platform.
+
+    Keyed off the matrix-derived install list so toggling a component in
+    packages_test_matrix.json cannot leave the cluster preloading a library that
+    was never installed.
+    """
+    packages = set(rhel_all_packages if container_type == "rhel" else deb_all_packages)
+    libs = list(BASE_PRELOAD_LIBRARIES)
+    for lib, package_by_platform in CONDITIONAL_PRELOAD_LIBRARIES.items():
+        if package_by_platform[container_type] in packages:
+            libs.append(lib)
+    return libs
 
 
 def get_container_config(container_type):
@@ -412,8 +470,11 @@ def test_init_cluster(container_name, container_type):
 
     print(f"\n--- Initializing cluster on {container_name} ---")
 
+    preload_libraries = get_preload_libraries(container_type)
+    print(f"   shared_preload_libraries = {','.join(preload_libraries)}")
+
     guc_parameters = {
-        "shared_preload_libraries": "'spock,lolor,snowflake'",
+        "shared_preload_libraries": f"'{','.join(preload_libraries)}'",
         "wal_level": "logical",
         "max_replication_slots": "10",
         "max_wal_senders": "10",

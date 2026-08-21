@@ -145,7 +145,22 @@ def execute_psql_query(container, pgbin, pgport, pguser, query, dbname="postgres
     return exit_code, output.decode()
 
 
-def init_cluster(container, pgbin, pgdata, pguser, guc_parameters=None):
+# Default database encoding for every test cluster.
+#
+# initdb with no --encoding derives the encoding from the environment's locale.
+# These containers and AMIs run with LANG unset (C/POSIX locale), so initdb
+# picks SQL_ASCII — and some extensions refuse to install on a non-UTF8
+# database. pg_duckdb, for example, aborts with:
+#   "pg_duckdb can only be installed in a Postgres database with UTF8 encoding,
+#    this one is encoded using SQL_ASCII."
+# which also takes down coldfront, since CREATE EXTENSION coldfront CASCADEs to
+# pg_duckdb. No pgEdge deployment runs SQL_ASCII, so UTF8 is both the realistic
+# and the compatible choice.
+DEFAULT_ENCODING = "UTF8"
+
+
+def init_cluster(container, pgbin, pgdata, pguser, guc_parameters=None,
+                 encoding=DEFAULT_ENCODING, locale=None):
     """
     Initialize a PostgreSQL cluster and configure GUC parameters.
 
@@ -157,6 +172,14 @@ def init_cluster(container, pgbin, pgdata, pguser, guc_parameters=None):
         guc_parameters: Optional dict of GUC parameters to add to postgresql.conf
                        Example: {"shared_preload_libraries": "'snowflake'",
                                 "track_commit_timestamp": "on"}
+        encoding: Database encoding passed to initdb (default UTF8 — see
+                 DEFAULT_ENCODING above). Pass None to let initdb derive the
+                 encoding from the environment locale, restoring the old
+                 behaviour.
+        locale: Optional locale for initdb. When omitted, --no-locale is used so
+               the cluster keeps the C locale it has always had; initdb allows
+               the C locale to pair with any explicit encoding, whereas a
+               non-C locale whose codeset differs from `encoding` is rejected.
 
     Returns:
         tuple: (success: bool, config_content: str, message: str)
@@ -173,11 +196,19 @@ def init_cluster(container, pgbin, pgdata, pguser, guc_parameters=None):
     print("Removing existing data directory...")
     container.exec_run(f"rm -rf {pgdata}", user=pguser)
 
+    # Build the initdb command
+    initdb_cmd = f"{pgbin}/initdb -D {pgdata}"
+    if encoding:
+        initdb_cmd += f" --encoding={encoding}"
+        # Keep the C locale (what these hosts already produce) so only the
+        # encoding changes; collation behaviour is unaffected.
+        initdb_cmd += f" --locale={locale}" if locale else " --no-locale"
+    elif locale:
+        initdb_cmd += f" --locale={locale}"
+
     # Run initdb
-    print("Running initdb...")
-    exit_code, output = container.exec_run(
-        f"{pgbin}/initdb -D {pgdata}", user=pguser
-    )
+    print(f"Running initdb: {initdb_cmd}")
+    exit_code, output = container.exec_run(initdb_cmd, user=pguser)
 
     if exit_code != 0:
         raise Exception(f"Initdb failed: {output.decode()}")

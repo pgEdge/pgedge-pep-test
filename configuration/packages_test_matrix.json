@@ -28,7 +28,13 @@
     {"category": "tool",      "name": "etcd",                "description": "Distributed key-value store",          "enabled": false,  "rhel": "pgedge-etcd",                    "deb": "pgedge-etcd"},
     {"category": "tool",      "name": "ace",                 "description": "ACE platform component",               "enabled": false,  "rhel": "pgedge-ace",                     "deb": "pgedge-ace"},
     {"category": "tool",      "name": "radar",               "description": "Radar monitoring component",           "enabled": false,  "rhel": "pgedge-radar",                   "deb": "pgedge-radar"},
-    {"category": "tool",      "name": "control-plane",       "description": "Control Plane management service",     "enabled": true,  "rhel": "pgedge-control-plane",           "deb": "pgedge-control-plane"},
+    {"category": "tool",      "name": "control-plane",       "description": "Control Plane management service",     "enabled": false,  "rhel": "pgedge-control-plane",           "deb": "pgedge-control-plane"},
+
+    {"category": "extension", "name": "coldfront",           "description": "Coldfront cold-storage tiering extension", "enabled": true, "rhel": "pgedge-coldfront_{PG}",          "deb": "pgedge-postgresql-{PG}-coldfront"},
+    {"category": "extension", "name": "pg-duckdb",           "description": "DuckDB execution engine extension",    "enabled": true,  "rhel": "pgedge-pg-duckdb_{PG}",          "deb": "pgedge-postgresql-{PG}-pg-duckdb"},
+    {"category": "tool",      "name": "coldfront-server",    "description": "Coldfront archiver/compactor/partitioner", "enabled": true, "rhel": "pgedge-coldfront",           "deb": "pgedge-coldfront"},
+    {"category": "tool",      "name": "coldfront-duckdb-extensions", "description": "Bundled DuckDB extensions for Coldfront", "enabled": true, "rhel": "pgedge-coldfront-duckdb-extensions", "deb": "pgedge-coldfront-duckdb-extensions"},
+    {"category": "tool",      "name": "lakekeeper",          "description": "Lakekeeper Iceberg REST catalog",      "enabled": true,  "rhel": "pgedge-lakekeeper",              "deb": "pgedge-lakekeeper"},
 
     {"category": "ha",        "name": "patroni-consul",      "description": "Patroni with Consul DCS",              "enabled": false,  "rhel": "pgedge-patroni-consul",          "deb": null,                              "_deb_note": "Covered by pgedge-patroni"},
     {"category": "ha",        "name": "patroni-etcd",        "description": "Patroni with etcd DCS",                "enabled": false,  "rhel": "pgedge-patroni-etcd",            "deb": "pgedge-patroni"},

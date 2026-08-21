@@ -165,10 +165,10 @@ def test_standalone_does_not_skip_version_check(monkeypatch):
 # ------------------------------------------------------------------- identity delegation
 
 
-def test_identity_delegates_observations_and_fails_on_problems(monkeypatch):
+def test_identity_delegates_observations_and_fails_on_problems(monkeypatch, tmp_path):
     req = _int_req(PEP_EXPECTED_DEB="1.0.0~beta1-1.trixie")
-    monkeypatch.setattr(rag, "INTEGRATION_REQUEST", req)
-    monkeypatch.setattr(rag, "client", _Client())
+    inst, _ident = _wire_integration(monkeypatch, tmp_path, req)
+    rag.pep_evidence.write_install_evidence(req, "run-A", "pinned", "1.0.0~beta1-1.trixie", inst)
     monkeypatch.setattr(rag.package_management, "query_installed_version",
                         lambda c, pkg: "1.0.0~beta1-1.trixie")
     monkeypatch.setattr(rag.package_management, "query_binary_version",
@@ -198,10 +198,10 @@ def test_identity_delegates_observations_and_fails_on_problems(monkeypatch):
     assert "l2a" in str(ei.value)
 
 
-def test_identity_passes_when_helper_returns_no_problems(monkeypatch):
+def test_identity_passes_when_helper_returns_no_problems(monkeypatch, tmp_path):
     req = _int_req()
-    monkeypatch.setattr(rag, "INTEGRATION_REQUEST", req)
-    monkeypatch.setattr(rag, "client", _Client())
+    inst, _ident = _wire_integration(monkeypatch, tmp_path, req)
+    rag.pep_evidence.write_install_evidence(req, "run-A", "latest", None, inst)
     monkeypatch.setattr(rag.package_management, "query_installed_version", lambda c, pkg: "1.0.0")
     monkeypatch.setattr(rag.package_management, "query_binary_version", lambda c, path: "Version: 1.0.0")
 
@@ -221,3 +221,102 @@ def test_identity_skips_in_standalone(monkeypatch):
     monkeypatch.setattr(rag, "INTEGRATION_REQUEST", None)
     with pytest.raises(pytest.skip.Exception):
         rag.test_rag_identity("c1", "deb", "pgedge-rag-server")
+
+
+# --------------------------------------------------- Task 9: install-before-identity
+
+import json
+
+
+def _wire_integration(monkeypatch, tmp_path, req, run_token="run-A"):
+    """Common setup: integration request, fake client, tmp evidence paths, token."""
+    monkeypatch.setattr(rag, "INTEGRATION_REQUEST", req)
+    monkeypatch.setattr(rag, "client", _Client())
+    inst = str(tmp_path / "install-evidence.json")
+    ident = str(tmp_path / "identity-evidence.json")
+    monkeypatch.setenv("PEP_INSTALL_OUT", inst)
+    monkeypatch.setenv("PEP_IDENTITY_OUT", ident)
+    monkeypatch.setenv("PEP_RUN_TOKEN", run_token)
+    return inst, ident
+
+
+def test_install_writes_scope_marker_then_identity_passes(monkeypatch, tmp_path):
+    # Full happy path through the REAL functions + REAL pep_evidence/pep_verify:
+    # a successful pinned install records the scope marker, and identity then
+    # passes the precondition, gathers observations, and proves identity.
+    req = _int_req(PEP_EXPECTED_DEB="1.0.0~beta1-1.trixie")
+    inst, ident = _wire_integration(monkeypatch, tmp_path, req)
+    monkeypatch.setattr(rag.package_management, "install_pinned", _Spy((True, "ok")))
+
+    rag.test_rag_component_install("c1", "deb", "pgedge-rag-server")
+
+    marker = json.loads(open(inst).read())
+    assert marker["run_token"] == "run-A" and marker["install_kind"] == "pinned"
+    assert marker["install_token"] == "1.0.0~beta1-1.trixie"
+
+    monkeypatch.setattr(rag.package_management, "query_installed_version",
+                        lambda c, pkg: "1.0.0~beta1-1.trixie")
+    monkeypatch.setattr(rag.package_management, "query_binary_version", lambda c, path: "Version: 1.0.0")
+
+    rag.test_rag_identity("c1", "deb", "pgedge-rag-server")   # must NOT raise
+    ev = json.loads(open(ident).read())
+    assert set(ev) == {"l2a", "l2b", "l1"} and ev["l2a"] == "proven" and ev["l1"] == "proven"
+
+
+def _assert_precondition_failure(ident_path, excinfo, needle):
+    # The failure must persist a STRICT identity file (so the run reads completed/
+    # fail, not a masked infra_failure) and name the reason. L1 is not_attempted
+    # (identity was never queried), consistent with assert_identity.
+    ev = json.loads(open(ident_path).read())
+    assert set(ev) == {"l2a", "l2b", "l1"}                 # strict schema preserved
+    assert ev["l1"] == "not_attempted"
+    assert needle in str(excinfo.value)
+
+
+def test_identity_fails_when_install_marker_absent(monkeypatch, tmp_path):
+    req = _int_req(PEP_EXPECTED_DEB="1.0.0~beta1-1.trixie")
+    _inst, ident = _wire_integration(monkeypatch, tmp_path, req)   # no install run -> no marker
+    with pytest.raises(pytest.fail.Exception) as ei:
+        rag.test_rag_identity("c1", "deb", "pgedge-rag-server")
+    _assert_precondition_failure(ident, ei, "absent")
+
+
+def test_identity_fails_on_stale_run_token(monkeypatch, tmp_path):
+    req = _int_req(PEP_EXPECTED_DEB="1.0.0~beta1-1.trixie")
+    inst, ident = _wire_integration(monkeypatch, tmp_path, req, run_token="run-NEW")
+    # Marker written by a PRIOR run (different token) still sitting in test-logs/.
+    rag.pep_evidence.write_install_evidence(req, "run-OLD", "pinned", "1.0.0~beta1-1.trixie", inst)
+    with pytest.raises(pytest.fail.Exception) as ei:
+        rag.test_rag_identity("c1", "deb", "pgedge-rag-server")
+    _assert_precondition_failure(ident, ei, "run_token")
+
+
+def test_identity_fails_on_target_mismatch(monkeypatch, tmp_path):
+    req = _int_req(PEP_EXPECTED_DEB="1.0.0~beta1-1.trixie")           # deb / debian13-amd64
+    inst, ident = _wire_integration(monkeypatch, tmp_path, req, run_token="run-A")
+    other = _int_req(PEP_FAMILY="rpm", PEP_CONTAINER_ALIAS="rocky9-amd64",
+                     PEP_EXPECTED_RPM="1.0.0-1.el9")                  # a DIFFERENT target
+    rag.pep_evidence.write_install_evidence(other, "run-A", "pinned", "1.0.0-1.el9", inst)
+    with pytest.raises(pytest.fail.Exception) as ei:
+        rag.test_rag_identity("c1", "deb", "pgedge-rag-server")
+    _assert_precondition_failure(ident, ei, "target")
+
+
+def test_identity_fails_when_run_token_empty(monkeypatch, tmp_path):
+    # A bypassed bridge (no PEP_RUN_TOKEN) must fail safe even if a marker exists
+    # with an empty token -- empty-vs-empty must not pass the precondition.
+    req = _int_req(PEP_EXPECTED_DEB="1.0.0~beta1-1.trixie")
+    inst, ident = _wire_integration(monkeypatch, tmp_path, req, run_token="")
+    rag.pep_evidence.write_install_evidence(req, "", "pinned", "1.0.0~beta1-1.trixie", inst)
+    with pytest.raises(pytest.fail.Exception) as ei:
+        rag.test_rag_identity("c1", "deb", "pgedge-rag-server")
+    _assert_precondition_failure(ident, ei, "PEP_RUN_TOKEN")
+
+
+def test_certification_upgrade_guard_skips_when_upgrade_off(monkeypatch):
+    # The bridge forces UPGRADE=false for certification; this is the component-level
+    # guard that turns that into an actual skip (no replacement before identity).
+    monkeypatch.setattr(rag, "INTEGRATION_REQUEST", _int_req())
+    monkeypatch.delenv("UPGRADE", raising=False)                     # == "false"
+    with pytest.raises(pytest.skip.Exception):
+        rag.test_rag_component_upgrade("c1", "deb", "pgedge-rag-server")

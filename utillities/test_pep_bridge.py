@@ -240,3 +240,38 @@ def test_manifest_with_two_reports(tmp_path):
     assert data["reports"] == ["a.xml", "b.xml"]
     # re-parses cleanly
     json.dumps(data)
+
+
+# --- Task 9 RESET: integration mode clears stale install/identity evidence -------
+
+
+@_needs_tools
+def test_reset_removes_default_install_and_identity_evidence():
+    # A stale marker from a previous run must be cleared before pytest, so it can
+    # never satisfy this run's install-before-identity precondition. Uses the valid
+    # dry-run integration invocation (Docker-free); RESET runs before any pytest.
+    tl = _REPO_ROOT / "test-logs"
+    tl.mkdir(exist_ok=True)
+    inst = tl / "install-evidence.json"
+    ident = tl / "identity-evidence.json"
+    inst.write_text('{"stale": true}')
+    ident.write_text('{"l2a": "proven", "l2b": "proven", "l1": "proven"}')
+    proc = _run(_BASE_ARGS)
+    assert proc.returncode == 0, f"stdout:\n{proc.stdout}\nstderr:\n{proc.stderr}"
+    assert not inst.exists(), "stale default install-evidence.json not removed by RESET"
+    assert not ident.exists(), "stale default identity-evidence.json not removed by RESET"
+
+
+@_needs_tools
+def test_reset_respects_overridden_marker_paths(tmp_path):
+    # The runtime contract advertises PEP_INSTALL_OUT / PEP_IDENTITY_OUT overrides;
+    # RESET must clear the EFFECTIVE (overridden) paths, not just the defaults.
+    inst = tmp_path / "install-evidence.json"
+    ident = tmp_path / "identity-evidence.json"
+    inst.write_text('{"stale": true}')
+    ident.write_text('{"l2a": "proven", "l2b": "proven", "l1": "proven"}')
+    proc = _run(_BASE_ARGS, extra_env={
+        "PEP_INSTALL_OUT": str(inst), "PEP_IDENTITY_OUT": str(ident)})
+    assert proc.returncode == 0, f"stdout:\n{proc.stdout}\nstderr:\n{proc.stderr}"
+    assert not inst.exists(), "RESET ignored PEP_INSTALL_OUT override"
+    assert not ident.exists(), "RESET ignored PEP_IDENTITY_OUT override"

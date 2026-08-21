@@ -200,6 +200,12 @@ def test_rag_component_install(container_name, container_type, component):
                 ok, platform, message = package_management.install_package(container, component)
                 assert ok, f"Package installation failed: {message}"
                 print(f"✅ {message} (L1/latest -- degraded, not pinned)")
+            # Record the install scope marker AFTER a successful install: binds this
+            # run + target so the identity test can enforce install-before-identity
+            # (a failed install raises above, so no marker is written -> identity fails).
+            install_out = os.getenv("PEP_INSTALL_OUT", "test-logs/install-evidence.json")
+            pep_evidence.write_install_evidence(
+                req, os.environ.get("PEP_RUN_TOKEN", ""), kind, exact, install_out)
         else:
             # Standalone mode: unchanged legacy behavior.
             success, platform, message = package_management.install_package(container, component)
@@ -490,6 +496,24 @@ def test_rag_identity(container_name, container_type, component):
 
     assert container.status == "running"
 
+    identity_out = os.getenv("PEP_IDENTITY_OUT", "test-logs/identity-evidence.json")
+
+    # Install-before-identity precondition: trust identity only if THIS run installed
+    # THIS target (scope marker written by test_rag_component_install). On any failure
+    # -- absent/stale/mismatched marker -- persist schema-valid zero-observation
+    # identity evidence (L2 rungs may be not_proven while L1 is not_attempted, since
+    # identity was never queried), so the run reports a truthful completed/fail rather
+    # than a masked infra_failure, and fail WITHOUT querying identity, so no
+    # post-replacement state can be certified.
+    install_out = os.getenv("PEP_INSTALL_OUT", "test-logs/install-evidence.json")
+    run_token = os.environ.get("PEP_RUN_TOKEN", "")
+    pre = pep_evidence.install_precondition_problems(
+        pep_evidence.load_json_object(install_out), req, run_token)
+    if pre:
+        reason = "; ".join(pre)
+        pep_evidence.record_precondition_failure(req, identity_out)
+        pytest.fail(f"install-before-identity precondition failed: {reason}")
+
     fam = req["family"]
     # Gather ALL observations together (read-only helpers from package_management).
     pm_ver = package_management.query_installed_version(container, req["package_name"])
@@ -505,9 +529,8 @@ def test_rag_identity(container_name, container_type, component):
 
     # record_identity_verdict persists the evidence BEFORE returning problems, so a
     # failing assertion below never loses it.
-    out = os.getenv("PEP_IDENTITY_OUT", "test-logs/identity-evidence.json")
     ev, problems = pep_evidence.record_identity_verdict(
-        observed, req, out, binary_missing=binary_missing)
+        observed, req, identity_out, binary_missing=binary_missing)
     print(f"identity evidence ({component}): {ev}")
 
     assert not problems, "; ".join(problems)

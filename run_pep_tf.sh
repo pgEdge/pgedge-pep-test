@@ -297,6 +297,20 @@ done
 # byte-for-byte the standalone contract (the variable is simply absent).
 if [[ -n "${EXPECTED_VERSION:-}" || "${INTEGRATION_FLAG:-}" == "true" ]]; then
   export PEP_INTEGRATION_MODE=1
+  # Task 9 RESET: a fresh per-run token + a clean slate for the install/identity
+  # scope markers, so a PREVIOUS run's evidence in the never-cleared test-logs/ can
+  # never satisfy this run's install-before-identity precondition. Done ONCE here
+  # (before any pytest) so every child pytest inherits the same PEP_RUN_TOKEN.
+  if [[ -n "${GITHUB_RUN_ID:-}" ]]; then
+    export PEP_RUN_TOKEN="${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT:-1}"
+  else
+    export PEP_RUN_TOKEN="$(date +%s)-$$"
+  fi
+  # Remove the EFFECTIVE marker paths, honoring the same PEP_INSTALL_OUT /
+  # PEP_IDENTITY_OUT overrides the component test reads -- so the reset and the
+  # writer/reader always agree on which files count for this run.
+  rm -f "${PEP_INSTALL_OUT:-test-logs/install-evidence.json}" \
+        "${PEP_IDENTITY_OUT:-test-logs/identity-evidence.json}"
 else
   unset PEP_INTEGRATION_MODE
 fi

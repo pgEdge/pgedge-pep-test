@@ -36,6 +36,8 @@
     {"category": "tool",      "name": "coldfront-duckdb-extensions", "description": "Bundled DuckDB extensions for Coldfront", "enabled": true, "rhel": "pgedge-coldfront-duckdb-extensions", "deb": "pgedge-coldfront-duckdb-extensions"},
     {"category": "tool",      "name": "lakekeeper",          "description": "Lakekeeper Iceberg REST catalog",      "enabled": true,  "rhel": "pgedge-lakekeeper",              "deb": "pgedge-lakekeeper"},
 
+    {"category": "extension", "name": "safesession",         "description": "SafeSession session-safety extension", "enabled": true,  "rhel": "pgedge-safesession_{PG}",        "deb": "pgedge-postgresql-{PG}-safesession"},
+
     {"category": "ha",        "name": "patroni-consul",      "description": "Patroni with Consul DCS",              "enabled": false,  "rhel": "pgedge-patroni-consul",          "deb": null,                              "_deb_note": "Covered by pgedge-patroni"},
     {"category": "ha",        "name": "patroni-etcd",        "description": "Patroni with etcd DCS",                "enabled": false,  "rhel": "pgedge-patroni-etcd",            "deb": "pgedge-patroni"},
     {"category": "ha",        "name": "patroni-aws",         "description": "Patroni with AWS DCS",                 "enabled": false,  "rhel": "pgedge-patroni-aws",             "deb": null},

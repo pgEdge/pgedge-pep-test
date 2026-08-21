@@ -53,7 +53,7 @@ def _resolve():
     #   capture the root-.env value into a new layer here and thread it through
     #   rz.resolve() below (and update PEP_CONFIG_REPO's capture in run_pep_tf.sh if
     #   the sourcing contract changes). Until then the layer is intentionally absent.
-    return rz.resolve(
+    resolved = rz.resolve(
         ["repo", "scenario", "upgrade"],
         caller={"repo": os.environ.get("PEP_CALLER_REPO") or None,
                 "scenario": os.environ.get("PEP_CALLER_SCENARIO") or None},
@@ -61,6 +61,15 @@ def _resolve():
                    "upgrade": os.environ.get("PEP_CFG_UPGRADE") or None},
         defaults={"scenario": "certification", "upgrade": "false"},
     )
+    # Scenario policy: certification is a no-replacement run, so the EFFECTIVE
+    # upgrade is always false regardless of what config requested. Deciding it
+    # here (rather than in the shell after the artifact is written) makes
+    # resolved-config.json and the runtime UPGRADE come from ONE decision that
+    # cannot drift, and reports the value's true origin as scenario_policy
+    # instead of letting the config value masquerade as the effective one.
+    if resolved["scenario"]["value"] == "certification":
+        resolved["upgrade"] = {"value": "false", "source": "scenario_policy"}
+    return resolved
 
 
 def _validate(resolved):

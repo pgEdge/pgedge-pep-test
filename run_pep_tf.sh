@@ -644,8 +644,14 @@ for env in "${env_list[@]}"; do
     rc=$?; [[ "$rc" != "0" ]] && _pep_die_by_rc "$rc"
     PEP_SCENARIO="$(python3 utillities/pep_resolve_cli.py --get scenario)"
     rc=$?; [[ "$rc" != "0" ]] && _pep_die_by_rc "$rc"
+    # Runtime UPGRADE is the resolver's EFFECTIVE decision (certification policy
+    # already folded in), read back from the SAME resolved-config.json that was
+    # just written — so the artifact and the runtime cannot disagree.
+    PEP_UPGRADE="$(python3 utillities/pep_resolve_cli.py --get upgrade)"
+    rc=$?; [[ "$rc" != "0" ]] && _pep_die_by_rc "$rc"
     export PEP_CHANNEL PEP_SCENARIO
     export REPO="$PEP_CHANNEL"
+    export UPGRADE="$PEP_UPGRADE"
 
     # (b) Complete the request env BEFORE the preflight. PG major comes from the
     #     loop variable; family from --platforms scope; the rest from CLI flags.
@@ -673,10 +679,10 @@ for env in "${env_list[@]}"; do
     if [[ -n "${ENFORCE_MODE:-}"      ]]; then export PEP_MODE="$ENFORCE_MODE";                 else unset PEP_MODE;              fi
     # PEP_ARCH_FILTER is already exported from --arch during arg validation.
 
-    # (c) Scenario enforcement.
-    if [[ "$PEP_SCENARIO" == "certification" ]]; then
-      export UPGRADE=false
-    elif [[ "$PEP_SCENARIO" == "upgrade" ]]; then
+    # (c) Scenario enforcement. The certification no-upgrade decision is owned by
+    #     the resolver (folded into the effective UPGRADE exported above), so it is
+    #     not re-forced here. Only the unimplemented scenario is rejected.
+    if [[ "$PEP_SCENARIO" == "upgrade" ]]; then
       echo "[integration] scenario=upgrade is not implemented in this POC" >&2
       exit "$PEP_RC_VALIDATION"
     fi

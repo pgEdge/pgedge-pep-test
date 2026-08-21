@@ -109,6 +109,46 @@ def test_standalone_run_triggers_no_integration_behavior():
     assert "PEP_INTEGRATION_MODE" not in (proc.stdout + proc.stderr)
 
 
+# ── Effective upgrade reporting (certification no-upgrade policy) ─────────────
+
+@_needs_tools
+def test_certification_reports_effective_upgrade_false_and_runtime_agrees():
+    # config17.env sets UPGRADE=true, but certification policy forces the effective
+    # runtime UPGRADE=false. resolved-config.json must report that EFFECTIVE value
+    # with a policy-derived source, and the exact read-back the bridge uses to set
+    # the runtime UPGRADE (`--get upgrade`) must return the same value -> no drift.
+    resolved = _REPO_ROOT / "test-logs" / "resolved-config.json"
+    if resolved.exists():
+        resolved.unlink()
+    proc = _run(_BASE_ARGS)   # --scenario certification, --pgver 17 (config UPGRADE=true)
+    assert proc.returncode == 0, f"stdout:\n{proc.stdout}\nstderr:\n{proc.stderr}"
+    data = json.loads(resolved.read_text())
+    assert data["upgrade"]["value"] == "false", data["upgrade"]
+    assert data["upgrade"]["source"] == "scenario_policy", data["upgrade"]
+    # The runtime UPGRADE is derived from the SAME resolved decision via --get.
+    getproc = subprocess.run(
+        [sys.executable, str(_REPO_ROOT / "utillities" / "pep_resolve_cli.py"),
+         "--get", "upgrade"],
+        cwd=str(_REPO_ROOT), capture_output=True, text=True,
+    )
+    assert getproc.returncode == 0, getproc.stderr
+    assert getproc.stdout.strip() == "false", getproc.stdout
+
+
+@_needs_tools
+def test_standalone_does_not_apply_upgrade_policy():
+    # Standalone behavior is unchanged: no integration bridge runs, so no
+    # resolved-config.json and no scenario_policy decision is produced. The
+    # runtime UPGRADE keeps following the legacy config path untouched.
+    resolved = _REPO_ROOT / "test-logs" / "resolved-config.json"
+    if resolved.exists():
+        resolved.unlink()
+    proc = _run(["--pgver", "17", "--platforms", "rpm", "--components", "rag", "--dry-run"])
+    assert proc.returncode == 0, proc.stderr
+    assert not resolved.exists(), "standalone wrote resolved-config.json"
+    assert "scenario_policy" not in (proc.stdout + proc.stderr)
+
+
 # ── Correction pass: negative bridge cases (findings 1, 3, 4) ────────────────
 
 @_needs_tools

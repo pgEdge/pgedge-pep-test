@@ -1,0 +1,101 @@
+name: PEP full-mode spike (temporary)
+
+# TEMPORARY, THROWAWAY validation for Plan 2 Task 10. It exercises the real
+# reusable workflow in FULL mode against the verified staging DEB fixture, on a
+# dedicated branch only. Delete this file and the branch after review -- nothing
+# here is meant to reach main.
+on:
+  push:
+    branches:
+      - spike/pep-fullmode        # dedicated throwaway branch ONLY -- no other branch can trigger it
+
+permissions:
+  contents: read
+
+jobs:
+  # Live full-mode call into the reusable workflow (local ref, public repo -> no
+  # read token). Pins the immutable implementation ref to the reviewed feature
+  # checkpoint. The two optional DockerHub secrets are forwarded EXPLICITLY (not
+  # `secrets: inherit`) so image pulls are authenticated.
+  full:
+    uses: ./.github/workflows/pep-integration.yml
+    with:
+      component: rag
+      package_name: pgedge-rag-server
+      channel: staging
+      expected_version: "2.0.0"
+      expected_deb: "2.0.0~beta1-1.trixie"
+      expected_binary: "2.0.0-beta1"
+      expected_buildnum: "beta1_1"
+      effective_tag: "v2.0.0-beta1"
+      family: deb
+      arch: amd64
+      pg_major: "17"
+      container_alias: debian13-amd64
+      scenario: certification
+      mode: observe
+      execution_mode: full
+      pep_implementation_ref: f1ebe5974b77de9f48efe6c324c4c08201095ee6
+    secrets:
+      DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+      DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+
+  # Independent acceptance gate. Observe mode keeps `full` green after HANDLED
+  # failures, so this job re-checks the outputs and FAILS the run unless the
+  # framework completed AND exact identity was proven. A truthful product-test
+  # fail (test_verdict=fail) is acceptable; a non-completed/not_run run or an
+  # unproven identity rung is not.
+  assert-full:
+    needs: full
+    if: ${{ always() }}
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Assert live full-mode acceptance criteria
+        env:
+          EXEC: ${{ needs.full.outputs.execution_status }}
+          VERDICT: ${{ needs.full.outputs.test_verdict }}
+          IDENT: ${{ needs.full.outputs.identity_evidence }}
+          CHANNEL: ${{ needs.full.outputs.resolved_channel }}
+          ARTIFACT: ${{ needs.full.outputs.summary_artifact }}
+        run: |
+          python3 - <<'PY'
+          import json, os, sys
+          exec_status = os.environ.get("EXEC", "")
+          verdict = os.environ.get("VERDICT", "")
+          try:
+              ident = json.loads(os.environ.get("IDENT") or "{}")
+          except ValueError:
+              ident = {}
+          try:
+              channel = json.loads(os.environ.get("CHANNEL") or "{}")
+          except ValueError:
+              channel = {}
+          artifact = os.environ.get("ARTIFACT", "")
+
+          print(f"execution_status : {exec_status!r}")
+          print(f"test_verdict     : {verdict!r}")
+          print(f"identity_evidence: {ident}")
+          print(f"resolved_channel : {channel}")
+          print(f"summary_artifact : {artifact!r}")
+
+          problems = []
+          if exec_status != "completed":
+              problems.append(f"execution_status must be 'completed', got {exec_status!r}")
+          if verdict not in ("pass", "fail"):
+              problems.append(f"test_verdict must be 'pass' or 'fail' (never 'not_run'), got {verdict!r}")
+          for rung in ("l2a", "l2b", "l1"):
+              if ident.get(rung) != "proven":
+                  problems.append(f"identity {rung} must be 'proven', got {ident.get(rung)!r}")
+          if channel.get("value") != "staging":
+              problems.append(f"resolved channel must be 'staging', got {channel!r}")
+          if not artifact:
+              problems.append("summary_artifact must be non-empty")
+
+          if problems:
+              print("\nTask 10 acceptance FAILED:")
+              for p in problems:
+                  print(f"  - {p}")
+              sys.exit(1)
+          print("\nTask 10 acceptance PASSED: framework completed and exact identity proven "
+                "(a truthful product-test fail is acceptable).")
+          PY

@@ -45,6 +45,30 @@ LIST_CONTAINERS=false
 ARCH=""
 DRY_RUN="false"
 
+# ── Integration bridge (Task 3) ─────────────────────────────────────────────
+# All of the following default empty so a standalone/manual/current-CI run
+# (no integration flags) behaves byte-for-byte as before. Integration mode is
+# only activated when --integration or --expected-version is supplied.
+PEP_RC_VALIDATION=3          # exit code reserved for a KNOWN request-validation rejection
+INTEGRATION_FLAG=""
+EXPECTED_VERSION=""
+EXPECTED_BUILDNUM=""
+EFFECTIVE_TAG=""
+EXPECTED_RPM=""
+EXPECTED_DEB=""
+EXPECTED_BINARY=""
+SCENARIO=""
+PACKAGE_NAME=""
+ENFORCE_MODE=""             # integration enforcement mode (observe|gate); reaches the request
+
+# Exit with $1, but if it equals PEP_RC_VALIDATION preserve that exact code so
+# the caller can distinguish a request rejection from an infra failure.
+_pep_die_by_rc() {
+  local rc="$1"
+  [[ "$rc" == "$PEP_RC_VALIDATION" ]] && exit "$PEP_RC_VALIDATION"
+  exit "$rc"
+}
+
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --pgver)
@@ -96,6 +120,56 @@ while [[ $# -gt 0 ]]; do
       DRY_RUN="true"
       CLI_MODE=true
       shift 1
+      ;;
+    --integration)
+      INTEGRATION_FLAG="true"
+      CLI_MODE=true
+      shift 1
+      ;;
+    --expected-version)
+      EXPECTED_VERSION="$2"
+      CLI_MODE=true
+      shift 2
+      ;;
+    --expected-buildnum)
+      EXPECTED_BUILDNUM="$2"
+      CLI_MODE=true
+      shift 2
+      ;;
+    --effective-tag)
+      EFFECTIVE_TAG="$2"
+      CLI_MODE=true
+      shift 2
+      ;;
+    --expected-rpm)
+      EXPECTED_RPM="$2"
+      CLI_MODE=true
+      shift 2
+      ;;
+    --expected-deb)
+      EXPECTED_DEB="$2"
+      CLI_MODE=true
+      shift 2
+      ;;
+    --expected-binary)
+      EXPECTED_BINARY="$2"
+      CLI_MODE=true
+      shift 2
+      ;;
+    --scenario)
+      SCENARIO="$2"
+      CLI_MODE=true
+      shift 2
+      ;;
+    --mode)
+      ENFORCE_MODE="$2"
+      CLI_MODE=true
+      shift 2
+      ;;
+    --package-name)
+      PACKAGE_NAME="$2"
+      CLI_MODE=true
+      shift 2
       ;;
     --version|-V)
       echo "$(basename "$0") version ${VERSION}"
@@ -159,6 +233,18 @@ OPTIONS:
   --dry-run               Resolve containers and print what would run, then exit
                           (no pytest, no Docker pulls, no package installs, no repo setup)
 
+  Integration bridge (Task 3 — for pgEdge build pipelines; ignored otherwise):
+  --integration           Activate integration mode (also implied by --expected-version)
+  --expected-version <v>  Build-authoritative expected package version (REQUIRED in integration)
+  --package-name <name>   Canonical package name for the component (e.g. pgedge-rag-server)
+  --scenario <name>       certification (default) or upgrade
+  --mode <name>           Enforcement mode reaching the request: observe (default) or gate
+  --expected-buildnum <n> Expected build number (identity input)
+  --effective-tag <tag>   Effective git tag (must start with 'v')
+  --expected-rpm <str>    Expected rpm identity string (rpm family only)
+  --expected-deb <str>    Expected deb identity string (deb family only)
+  --expected-binary <str> Expected binary identity string
+
   --help, -h              Show this help message and exit
 
   --version, -V           Show the test runner version and exit
@@ -195,17 +281,70 @@ HELPTEXT
   esac
 done
 
+# ── Integration marker (Task 3) ─────────────────────────────────────────────
+# Activate integration mode when the caller passes --integration or supplies a
+# build-authoritative --expected-version. Computed BEFORE --arch validation so a
+# malformed --arch is classified as a request-validation rejection (exit 3) in
+# integration mode, while standalone keeps its legacy exit 2. Nothing below the
+# marker's gated blocks runs unless PEP_INTEGRATION_MODE=1, keeping standalone
+# behavior unchanged.
+#
+# Item 2: DERIVE the mode from THIS invocation's supported inputs only — the
+# else branch explicitly unsets it so an inherited PEP_INTEGRATION_MODE=1 in the
+# parent environment can NEVER turn a no-integration-arguments run into an
+# integration run. (Setting-only, as before, would let a poisoned parent env
+# silently flip a standalone invocation.) Unsetting in the standalone case is
+# byte-for-byte the standalone contract (the variable is simply absent).
+if [[ -n "${EXPECTED_VERSION:-}" || "${INTEGRATION_FLAG:-}" == "true" ]]; then
+  export PEP_INTEGRATION_MODE=1
+  # Task 9 RESET: a fresh per-run token + a clean slate for the install/identity
+  # scope markers, so a PREVIOUS run's evidence in the never-cleared test-logs/ can
+  # never satisfy this run's install-before-identity precondition. Done ONCE here
+  # (before any pytest) so every child pytest inherits the same PEP_RUN_TOKEN.
+  if [[ -n "${GITHUB_RUN_ID:-}" ]]; then
+    export PEP_RUN_TOKEN="${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT:-1}"
+  else
+    export PEP_RUN_TOKEN="$(date +%s)-$$"
+  fi
+  # Remove the EFFECTIVE marker paths, honoring the same PEP_INSTALL_OUT /
+  # PEP_IDENTITY_OUT overrides the component test reads -- so the reset and the
+  # writer/reader always agree on which files count for this run.
+  rm -f "${PEP_INSTALL_OUT:-test-logs/install-evidence.json}" \
+        "${PEP_IDENTITY_OUT:-test-logs/identity-evidence.json}"
+else
+  unset PEP_INTEGRATION_MODE
+fi
+
 # Validate --arch (empty == absent == no filter)
 if [[ -n "$ARCH" ]]; then
   case "$ARCH" in
     arm64|amd64) ;;
     *)
+      # Message kept on stdout to preserve byte-for-byte standalone behavior
+      # (the exit CODE is what the integration contract keys off, not the stream).
       echo "[arch-filter] ERROR: --arch must be 'arm64' or 'amd64' (got '$ARCH')"
+      # Finding 4: in integration mode an invalid arch is a KNOWN request
+      # validation rejection (exit 3); standalone preserves the legacy exit 2.
+      [[ "${PEP_INTEGRATION_MODE:-}" == "1" ]] && exit "$PEP_RC_VALIDATION"
       exit 2
       ;;
   esac
 fi
 export PEP_ARCH_FILTER="$ARCH"
+
+# Integration-only --repo allowlist validation. Standalone runs keep their
+# permissive behavior (no rejection was present before); in integration mode a
+# repo override outside {release,staging,daily} is a request-validation error.
+# (The resolver CLI also validates repo -> exit 3 as defense-in-depth.)
+if [[ "${PEP_INTEGRATION_MODE:-}" == "1" && -n "$REPO_OVERRIDE" ]]; then
+  case "$REPO_OVERRIDE" in
+    release|staging|daily) ;;
+    *)
+      echo "[integration] ERROR: --repo must be one of release, staging, daily (got '$REPO_OVERRIDE')" >&2
+      exit "$PEP_RC_VALIDATION"
+      ;;
+  esac
+fi
 
 # Discovery shortcut: print the catalog and exit.
 if [[ "$LIST_CONTAINERS" == "true" ]]; then
@@ -460,6 +599,13 @@ for env in "${env_list[@]}"; do
   envfile="${ENV_DIR}/config${env}.env"
 
   if [[ ! -f "$envfile" ]]; then
+    # Finding 1: in integration mode a requested PG major with no config file is a
+    # request-validation rejection (exit 3) — NEVER a silent skip that would let a
+    # preview dry-run report a false-green. Standalone keeps skipping (exit 0).
+    if [[ "${PEP_INTEGRATION_MODE:-}" == "1" ]]; then
+      echo "[integration] ERROR: no configuration for PG major ${env} (missing ${envfile}); rejecting request" >&2
+      exit "$PEP_RC_VALIDATION"
+    fi
     echo "⚠️  Skipping missing environment file: $envfile"
     continue
   fi
@@ -471,11 +617,83 @@ for env in "${env_list[@]}"; do
   source "$envfile"
   set +a
 
+  # Snapshot the config's REPO BEFORE the --repo override clobbers it, so the
+  # resolver can record truthful provenance (config layer vs caller layer).
+  CONFIG_REPO="${REPO:-}"
+
   # Apply repo override BEFORE the JSON loader and --dry-run block so that the
   # dry-run output reflects the effective REPO (not the envfile's default).
   if [[ -n "$REPO_OVERRIDE" ]]; then
     export REPO="$REPO_OVERRIDE"
     echo "   Overriding REPO to: $REPO_OVERRIDE"
+  fi
+
+  # ── Integration bridge block (Task 3) ─────────────────────────────────────
+  # Runs only in integration mode; entirely skipped otherwise so standalone,
+  # manual and current-CI runs are unaffected. Must run BEFORE the --dry-run
+  # block so preview rejects an invalid/upgrade request and the dry-run REPO
+  # reflects the resolver-decided channel.
+  if [[ "${PEP_INTEGRATION_MODE:-}" == "1" ]]; then
+    # (a) Resolver control + read-back (no eval of caller strings; the resolver
+    #     validates repo/scenario against the allowlists and exits 3 on a bad one).
+    rm -f test-logs/resolved-config.json
+    PEP_CALLER_REPO="${REPO_OVERRIDE:-}" PEP_CONFIG_REPO="${CONFIG_REPO:-}" \
+    PEP_CALLER_SCENARIO="${SCENARIO:-}" PEP_CFG_UPGRADE="${UPGRADE:-}" \
+      python3 utillities/pep_resolve_cli.py
+    rc=$?; [[ "$rc" != "0" ]] && _pep_die_by_rc "$rc"
+    PEP_CHANNEL="$(python3 utillities/pep_resolve_cli.py --get repo)"
+    rc=$?; [[ "$rc" != "0" ]] && _pep_die_by_rc "$rc"
+    PEP_SCENARIO="$(python3 utillities/pep_resolve_cli.py --get scenario)"
+    rc=$?; [[ "$rc" != "0" ]] && _pep_die_by_rc "$rc"
+    # Runtime UPGRADE is the resolver's EFFECTIVE decision (certification policy
+    # already folded in), read back from the SAME resolved-config.json that was
+    # just written — so the artifact and the runtime cannot disagree.
+    PEP_UPGRADE="$(python3 utillities/pep_resolve_cli.py --get upgrade)"
+    rc=$?; [[ "$rc" != "0" ]] && _pep_die_by_rc "$rc"
+    export PEP_CHANNEL PEP_SCENARIO
+    export REPO="$PEP_CHANNEL"
+    export UPGRADE="$PEP_UPGRADE"
+
+    # (b) Complete the request env BEFORE the preflight. PG major comes from the
+    #     loop variable; family from --platforms scope; the rest from CLI flags.
+    export PG_MAJOR_VERSION="$env"
+    export PEP_COMPONENT="${COMPONENTS:-}"           # single component token, e.g. rag
+    export PEP_PACKAGE_NAME="${PACKAGE_NAME:-}"
+    _pep_family="$(echo "${PLATFORMS:-}" | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]')"
+    export PEP_FAMILY="$_pep_family"                 # rpm|deb (single-target integration)
+    export PEP_CONTAINER_ALIAS="${CONTAINERS_OVERRIDE:-}"
+    export PEP_EXPECTED_VERSION="${EXPECTED_VERSION:-}"
+    # Optional identity inputs: export when the caller supplied the flag, and
+    # UNSET otherwise. The unset is REQUIRED (finding 3): a value INHERITED from
+    # the parent environment must never contaminate an input the caller omitted.
+    # The adapter treats an absent var as "not provided" (None -> dropped), while
+    # pep_request rejects a provided-but-empty optional, so an unset flag must
+    # surface as absent — never as "" and never as a stale inherited value.
+    if [[ -n "${EXPECTED_BUILDNUM:-}" ]]; then export PEP_EXPECTED_BUILDNUM="$EXPECTED_BUILDNUM"; else unset PEP_EXPECTED_BUILDNUM; fi
+    if [[ -n "${EFFECTIVE_TAG:-}"     ]]; then export PEP_EFFECTIVE_TAG="$EFFECTIVE_TAG";       else unset PEP_EFFECTIVE_TAG;     fi
+    if [[ -n "${EXPECTED_RPM:-}"      ]]; then export PEP_EXPECTED_RPM="$EXPECTED_RPM";         else unset PEP_EXPECTED_RPM;      fi
+    if [[ -n "${EXPECTED_DEB:-}"      ]]; then export PEP_EXPECTED_DEB="$EXPECTED_DEB";         else unset PEP_EXPECTED_DEB;      fi
+    if [[ -n "${EXPECTED_BINARY:-}"   ]]; then export PEP_EXPECTED_BINARY="$EXPECTED_BINARY";   else unset PEP_EXPECTED_BINARY;   fi
+    # Enforcement mode (finding 4): the workflow's mode must reach the normalized
+    # request (validated observe|gate), not silently default. Same unset-on-absent
+    # discipline so an inherited PEP_MODE cannot leak.
+    if [[ -n "${ENFORCE_MODE:-}"      ]]; then export PEP_MODE="$ENFORCE_MODE";                 else unset PEP_MODE;              fi
+    # PEP_ARCH_FILTER is already exported from --arch during arg validation.
+
+    # (c) Scenario enforcement. The certification no-upgrade decision is owned by
+    #     the resolver (folded into the effective UPGRADE exported above), so it is
+    #     not re-forced here. Only the unimplemented scenario is rejected.
+    if [[ "$PEP_SCENARIO" == "upgrade" ]]; then
+      echo "[integration] scenario=upgrade is not implemented in this POC" >&2
+      exit "$PEP_RC_VALIDATION"
+    fi
+
+    # (d) Request preflight on the COMPLETE env (rejects an incomplete/invalid
+    #     request with exit 3 before any dry-run/real work happens).
+    python3 utillities/pep_request_env.py
+    rc=$?; [[ "$rc" != "0" ]] && _pep_die_by_rc "$rc"
+
+    unset _pep_family
   fi
 
   # Load target instances — Docker containers or AWS EC2 instances
@@ -883,6 +1101,19 @@ for fam, name in selected:
     done
   done
 done
+
+# ── Integration run manifest (Task 3) ───────────────────────────────────────
+# In integration mode (and only for a real run, not --dry-run) write a small
+# machine-readable manifest pointing the caller at the consolidated report dir
+# and every JUnit XML produced. Guarded so standalone/dry-run runs never emit it.
+if [[ "${PEP_INTEGRATION_MODE:-}" == "1" && "$DRY_RUN" != "true" ]]; then
+  python3 -c 'import json, sys
+from pathlib import Path
+Path("test-logs").mkdir(exist_ok=True)
+Path("test-logs/current-run.json").write_text(
+    json.dumps({"report_dir": sys.argv[1], "reports": sys.argv[2:]}, indent=2))
+' "$CONSOLIDATED_REPORT_DIR" ${ALL_JUNIT_XMLS[@]+"${ALL_JUNIT_XMLS[@]}"}
+fi
 
 # --dry-run: env loop is the only place that produces results; nothing real
 # happened, so skip the report/index/consolidated generation entirely.

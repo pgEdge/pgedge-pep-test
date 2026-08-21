@@ -1,0 +1,388 @@
+name: PEP Integration
+on:
+  workflow_call:
+    inputs:
+      component:        {required: true,  type: string}
+      package_name:     {required: true,  type: string}
+      channel:          {required: true,  type: string}   # release|staging|daily
+      expected_version: {required: true,  type: string}
+      container_alias:  {required: true,  type: string}   # catalog alias (target)
+      pg_major:         {required: true,  type: string}
+      family:           {required: true,  type: string}   # rpm|deb
+      arch:             {required: true,  type: string}   # amd64|arm64
+      expected_buildnum: {required: false, type: string, default: ""}
+      effective_tag:     {required: false, type: string, default: ""}
+      expected_rpm:      {required: false, type: string, default: ""}
+      expected_deb:      {required: false, type: string, default: ""}
+      expected_binary:   {required: false, type: string, default: ""}
+      scenario:          {required: false, type: string, default: "certification"}
+      mode:              {required: false, type: string, default: "observe"}
+      execution_mode:    {required: false, type: string, default: "preview"}
+      # A validated, caller-provided discriminator folded into the upload-artifact
+      # name so two calls in ONE caller run that differ only by a dimension NOT in
+      # the name (e.g. enforcement `mode`) cannot collide. Charset is validated in
+      # the preflight and the safe value is the SINGLE source of the artifact name.
+      #
+      # DECISION: kept OPTIONAL (default ""), NOT required — a single-call caller,
+      # or a matrix whose legs already differ in a named dimension, needs no id, and
+      # forcing one on every caller would be a gratuitous contract break.
+      #
+      # CALLER UNIQUENESS OBLIGATION (precise): actions/upload-artifact forbids two
+      # artifacts sharing a name within one run. The name already includes
+      # component, family, arch, pg_major, channel, container_alias, scenario and
+      # execution_mode. IF two concurrent calls in the same caller run would share
+      # ALL of those AND differ only in a field that is NOT in the name (today only
+      # enforcement `mode`), THEN each such call MUST pass a distinct invocation_id;
+      # otherwise it may be omitted. An invalid invocation_id is rejected (validation)
+      # and dropped from the name, so it never breaks the upload.
+      invocation_id:     {required: false, type: string, default: ""}
+      pep_implementation_ref: {required: true, type: string}
+    secrets:
+      # PEP is a PUBLIC repo: the self-checkout below needs no read credential, so no
+      # dedicated read secret is required (a public caller would have nothing to pass
+      # but its built-in GITHUB_TOKEN). Implementation-ref pinning + resolved-SHA
+      # provenance are preserved and are independent of any token.
+      DOCKERHUB_USERNAME: {required: false}   # optional; full-mode pull rate limits
+      DOCKERHUB_TOKEN:    {required: false}
+    outputs:
+      execution_status:  {value: "${{ jobs.run.outputs.execution_status }}"}
+      test_verdict:      {value: "${{ jobs.run.outputs.test_verdict }}"}
+      enforcement_mode:  {value: "${{ jobs.run.outputs.enforcement_mode }}"}
+      identity_evidence: {value: "${{ jobs.run.outputs.identity_evidence }}"}
+      resolved_channel:  {value: "${{ jobs.run.outputs.resolved_channel }}"}
+      summary_artifact:  {value: "${{ jobs.run.outputs.summary_artifact }}"}
+jobs:
+  run:
+    runs-on: ${{ inputs.arch == 'arm64' && 'ubuntu-24.04-arm' || 'ubuntu-24.04' }}
+    outputs:
+      execution_status:  ${{ steps.emit.outputs.execution_status }}
+      test_verdict:      ${{ steps.emit.outputs.test_verdict }}
+      enforcement_mode:  ${{ steps.emit.outputs.enforcement_mode }}
+      identity_evidence: ${{ steps.emit.outputs.identity_evidence }}
+      resolved_channel:  ${{ steps.emit.outputs.resolved_channel }}
+      summary_artifact:  ${{ steps.emit.outputs.summary_artifact }}
+    steps:
+      # Finding 2/4: validate execution_mode STRICTLY as preview|full up front.
+      # An unknown value must NOT silently fall through the `== 'full'` guards and
+      # be treated as preview (a false-green). continue-on-error keeps the job
+      # alive so Summarize (if: always()) can classify it as a validation rejection
+      # (exit-3 semantics); the fw step is gated on rc==0 so the framework never
+      # runs for an invalid mode. (Enforcement `mode` observe|gate is validated
+      # separately by the bridge/normalize_request, finding 4.)
+      - name: Validate inputs + build safe artifact name (preflight)
+        id: preflight
+        continue-on-error: true
+        # Runs BEFORE checkout (fail-fast on caller input), so the name is built
+        # inline in bash — it cannot depend on a checked-out repo script. This step
+        # is the SINGLE SOURCE of the artifact name: Emit's summary_artifact output
+        # and the Upload step both consume steps.preflight.outputs.artifact_name and
+        # neither re-interpolates a raw, later-validated input (follow-up item 1b).
+        env:
+          IN_EXEC: ${{ inputs.execution_mode }}
+          IN_INVOCATION_ID: ${{ inputs.invocation_id }}
+          IN_COMPONENT: ${{ inputs.component }}
+          IN_FAMILY: ${{ inputs.family }}
+          IN_ARCH: ${{ inputs.arch }}
+          IN_PG: ${{ inputs.pg_major }}
+          IN_CHANNEL: ${{ inputs.channel }}
+          IN_ALIAS: ${{ inputs.container_alias }}
+          IN_SCENARIO: ${{ inputs.scenario }}
+          IN_EXECMODE: ${{ inputs.execution_mode }}
+          RUN_NUMBER: ${{ github.run_number }}
+          RUN_ATTEMPT: ${{ github.run_attempt }}
+        run: |
+          rc=0
+          case "$IN_EXEC" in
+            preview|full) ;;
+            *) echo "invalid execution_mode: '$IN_EXEC' (must be preview|full)" >&2; rc=3 ;;
+          esac
+          # invocation_id is a caller-provided discriminator folded into the
+          # artifact name. An unsafe value is BOTH a validation rejection (rc=3)
+          # AND is DROPPED from the name below — so a bad value like `bad/id` can
+          # never reach upload-artifact.name and fail the report-only job under
+          # always(). Empty is allowed (optional input; see the input's doc for the
+          # caller's uniqueness obligation). Charset kept in lockstep with the drop.
+          safe_inv=""
+          if [ -n "$IN_INVOCATION_ID" ]; then
+            if printf '%s' "$IN_INVOCATION_ID" | grep -qE '^[A-Za-z0-9._-]{1,64}$'; then
+              safe_inv="-$IN_INVOCATION_ID"
+            else
+              echo "invalid invocation_id: '$IN_INVOCATION_ID' (allowed: [A-Za-z0-9._-], 1-64 chars)" >&2
+              rc=3
+            fi
+          fi
+          # Build the artifact name from the validated execution_mode + the safe
+          # (validated-or-dropped) invocation_id. The final `tr` is a belt-and-
+          # suspenders guarantee that the emitted name is upload-safe regardless of
+          # any dimension value — the name output is ALWAYS safe even when rc=3.
+          name="pep-summary-${IN_COMPONENT}-${IN_FAMILY}-${IN_ARCH}-pg${IN_PG}-${IN_CHANNEL}-${IN_ALIAS}-${IN_SCENARIO}-${IN_EXECMODE}${safe_inv}-r${RUN_NUMBER}-a${RUN_ATTEMPT}"
+          name="$(printf '%s' "$name" | tr -c 'A-Za-z0-9._-' '_')"
+          {
+            echo "rc=$rc"
+            echo "artifact_name=$name"
+          } >> "$GITHUB_OUTPUT"
+          [ "$rc" = "0" ] || exit "$rc"
+      - name: Checkout PEP implementation (self, pinned)
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803  # v6.1.0
+        with:
+          # PEP is public -> no dedicated caller-supplied read token is needed to check
+          # it out: actions/checkout uses the job's built-in GITHUB_TOKEN, which reads
+          # any public repo. We still pin to an immutable implementation ref; the next
+          # step records the resolved SHA.
+          repository: pgEdge/pgedge-pep-test
+          ref: ${{ inputs.pep_implementation_ref }}
+      - name: Record PEP ref + resolved SHA
+        env:
+          IN_REF: ${{ inputs.pep_implementation_ref }}
+        run: |
+          echo "requested_ref=$IN_REF"
+          echo "resolved_sha=$(git rev-parse HEAD)"
+      - name: Capture caller provenance (from github context)
+        env:
+          IN_REF: ${{ inputs.pep_implementation_ref }}
+        run: |
+          mkdir -p test-logs
+          python3 - <<'PY'
+          import json, os
+          from pathlib import Path
+          import subprocess
+          pep_sha = subprocess.check_output(["git", "rev-parse", "HEAD"]).decode().strip()
+          Path("test-logs/provenance.json").write_text(json.dumps({
+              "caller_repo": os.environ["GITHUB_REPOSITORY"],
+              "caller_sha": os.environ["GITHUB_SHA"],
+              "caller_ref": os.environ["GITHUB_REF"],
+              "caller_run_id": os.environ["GITHUB_RUN_ID"],
+              "caller_run_attempt": os.environ["GITHUB_RUN_ATTEMPT"],
+              "pep_requested_ref": os.environ["IN_REF"],
+              "pep_resolved_sha": pep_sha,   # recorded resolved SHA (issue #6)
+          }))
+          PY
+      - name: Set up Python
+        id: setup_python
+        continue-on-error: true          # classify a setup failure as infra, don't hard-fail
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1  # v6.3.0
+        with: {python-version: "3.11"}
+      - name: Install dependencies
+        id: pip
+        continue-on-error: true
+        run: pip install -r requirements.txt
+      # DockerHub login (full mode) — mirrors pep-regression.yml (:207-227): gate on a
+      # creds check so a fork/PR without secrets still runs via anonymous pulls.
+      - name: '[dockerhub] check credentials'
+        id: dockerhub_creds
+        if: ${{ inputs.execution_mode == 'full' }}
+        env:
+          DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+          DOCKERHUB_TOKEN:    ${{ secrets.DOCKERHUB_TOKEN }}
+        run: |
+          if [[ -n "$DOCKERHUB_USERNAME" && -n "$DOCKERHUB_TOKEN" ]]; then
+            echo "have_creds=true"  >> "$GITHUB_OUTPUT"
+          else
+            echo "have_creds=false" >> "$GITHUB_OUTPUT"; echo "[dockerhub] anonymous pulls"
+          fi
+      - name: '[dockerhub] login (conditional)'
+        id: dockerhub_login
+        if: ${{ inputs.execution_mode == 'full' && steps.dockerhub_creds.outputs.have_creds == 'true' }}
+        continue-on-error: true          # carry-forward #4: a login failure must be
+                                         # CAPTURED and classified as infra in Summarize,
+                                         # never abort the job before summarization.
+        uses: docker/login-action@06fb636fac595d6fb4b28a5dfcb21a6f5091859c  # v4.5.0
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+      - name: Docker preflight (full mode)
+        id: docker
+        if: ${{ inputs.execution_mode == 'full' }}
+        continue-on-error: true
+        run: docker version
+        # A failed preflight is classified as setup/infra in the Summarize step.
+      - name: Run framework (preview or full)
+        id: fw
+        if: ${{ steps.preflight.outputs.rc == '0' }}   # skip when execution_mode is invalid
+        continue-on-error: true          # handle framework failure -> summarize anyway
+        env:                             # pass inputs via env + build a Bash array (injection-safe)
+          IN_PG: ${{ inputs.pg_major }}
+          IN_FAMILY: ${{ inputs.family }}
+          IN_ARCH: ${{ inputs.arch }}
+          IN_COMPONENT: ${{ inputs.component }}
+          IN_CHANNEL: ${{ inputs.channel }}
+          IN_ALIAS: ${{ inputs.container_alias }}
+          IN_PKG: ${{ inputs.package_name }}
+          IN_EXP_VERSION: ${{ inputs.expected_version }}
+          IN_EXP_BUILDNUM: ${{ inputs.expected_buildnum }}
+          IN_EFF_TAG: ${{ inputs.effective_tag }}
+          IN_EXP_RPM: ${{ inputs.expected_rpm }}
+          IN_EXP_DEB: ${{ inputs.expected_deb }}
+          IN_EXP_BIN: ${{ inputs.expected_binary }}
+          IN_SCENARIO: ${{ inputs.scenario }}
+          IN_MODE: ${{ inputs.execution_mode }}
+          IN_ENFORCE_MODE: ${{ inputs.mode }}   # enforcement mode -> must reach the request (finding 4)
+        run: |
+          set -o pipefail
+          args=( --integration
+                 --pgver "$IN_PG" --platforms "$IN_FAMILY" --arch "$IN_ARCH"
+                 --components "$IN_COMPONENT" --repo "$IN_CHANNEL"
+                 --containers "$IN_ALIAS" --package-name "$IN_PKG"
+                 --expected-version "$IN_EXP_VERSION" --scenario "$IN_SCENARIO" )
+          # Finding 4: forward the enforcement mode so it reaches the normalized
+          # request (run_pep_tf.sh --mode -> PEP_MODE -> normalize_request). An
+          # invalid mode is then rejected by the bridge preflight with exit 3
+          # (FW_CODE==3 -> validation), not silently defaulted to observe.
+          [ -n "$IN_ENFORCE_MODE" ] && args+=( --mode "$IN_ENFORCE_MODE" )
+          [ -n "$IN_EXP_BUILDNUM" ] && args+=( --expected-buildnum "$IN_EXP_BUILDNUM" )
+          [ -n "$IN_EFF_TAG" ]      && args+=( --effective-tag "$IN_EFF_TAG" )
+          [ -n "$IN_EXP_RPM" ]      && args+=( --expected-rpm "$IN_EXP_RPM" )
+          [ -n "$IN_EXP_DEB" ]      && args+=( --expected-deb "$IN_EXP_DEB" )
+          [ -n "$IN_EXP_BIN" ]      && args+=( --expected-binary "$IN_EXP_BIN" )
+          [ "$IN_MODE" != "full" ]  && args+=( --dry-run )
+          # issue #10 / carry-forward #2: preserve the SCRIPT'S exit code, not just
+          # the GitHub step outcome (success/failure). Record it as a step output so
+          # Summarize can distinguish an expected validation/policy rejection (code
+          # $PEP_RC_VALIDATION == 3) from an unexpected failure (any other nonzero)
+          # from success/clean-dry-run (0). `continue-on-error` keeps the job alive;
+          # `outcome` alone would collapse 3 and 1 into "failure".
+          set +e
+          ./run_pep_tf.sh "${args[@]}"
+          rc=$?
+          set -e
+          echo "exit_code=$rc" >> "$GITHUB_OUTPUT"
+          exit "$rc"
+      - name: Summarize (ALWAYS)
+        id: summarize
+        if: always()
+        # Deliberately NO continue-on-error here: in observe mode the summarizer
+        # exits 0 (job stays green, outputs still propagate); in gate mode it exits
+        # nonzero to fail the job -- that job status IS the gate enforcement.
+        env:
+          IN_MODE: ${{ inputs.mode }}
+          IN_EXEC: ${{ inputs.execution_mode }}
+          IN_PREFLIGHT: ${{ steps.preflight.outputs.rc }}   # execution_mode validity (finding 2)
+          FW_CODE: ${{ steps.fw.outputs.exit_code }}   # real script exit code (issue #10/#12)
+          DOCKER_OUTCOME: ${{ steps.docker.outcome }}
+          SETUP_OUTCOME: ${{ steps.setup_python.outcome }}
+          PIP_OUTCOME: ${{ steps.pip.outcome }}
+          LOGIN_OUTCOME: ${{ steps.dockerhub_login.outcome }}
+        run: |
+          # Finding 4: an invalid enforcement mode is already a validation
+          # rejection — the bridge rejects it with exit 3 (FW_CODE==3 branch
+          # below). Coerce an out-of-range IN_MODE to observe here so the
+          # summarizer's `--mode` choices guard cannot raise SystemExit(2) and
+          # turn that clean validation outcome into a summarizer crash /
+          # infra_failure (this step has NO continue-on-error). Enforcement for a
+          # valid gate run is unaffected.
+          #
+          # DEFERRED DECISION (item 3) — this coercion is FAIL-OPEN: an invalid
+          # enforcement mode degrades to observe (job stays green) rather than
+          # fail-closed (fail the job). That is safe while gate is not yet
+          # production-enabled, but the fail-open vs fail-closed choice for an
+          # invalid/unknown enforcement mode MUST be revisited before mode=gate is
+          # turned on in production. Tracked in the living plan (Deferred decisions).
+          case "$IN_MODE" in observe|gate) ;; *) IN_MODE=observe ;; esac
+          args=( --out test-logs/summary.json --mode "$IN_MODE" )
+          # issue #8 + carry-forward #1: read ONLY this run's reports (manifest),
+          # NEVER a recursive glob over an accumulating test-logs/. In a full
+          # (non-preview) integration run the manifest is written unconditionally by
+          # run_pep_tf.sh (Task 3 Step 5, even for zero reports). So a MISSING
+          # manifest here is a truthful infrastructure failure (the bridge never
+          # ran), NOT a cue to glob. The --xml-dir glob fallback is allowed ONLY in
+          # preview (where run_pep_tf.sh --dry-run intentionally writes no manifest).
+          if [ -f test-logs/current-run.json ]; then
+            args+=( --reports-manifest test-logs/current-run.json )
+          elif [ "$IN_EXEC" != "full" ]; then
+            args+=( --xml-dir test-logs )          # preview only
+          fi   # full-mode missing manifest -> handled as infra below (no glob)
+          [ -f test-logs/identity-evidence.json ] && args+=( --identity-json test-logs/identity-evidence.json )
+          [ -f test-logs/provenance.json ]        && args+=( --provenance-json test-logs/provenance.json )
+          # ---- Single, precedence-ordered classification (exactly one flag) ----
+          # issue #5 + carry-forward #1/#2/#4: PREVIEW MUST NOT MASK A FAILURE. A
+          # preview result is valid only when the dry-run invocation itself succeeded,
+          # so setup / dependency / login / docker / validation / framework outcomes
+          # are ALL classified BEFORE --preview is ever selected. The framework's real
+          # exit code (FW_CODE, issue #10) separates an EXPECTED validation/policy
+          # rejection (3 -> incomplete/not_run) from an UNEXPECTED failure (any other
+          # nonzero -> infra_failure). Setup/pip/login/docker are workflow-code steps
+          # classified truthfully as infra (observe -> still exit 0); only pre-code
+          # failures (checkout, runner platform) can't be forced green. The summarizer
+          # is stdlib-only, so it runs even if `pip install` failed.
+          # IMPORTANT (issue #12 — FW_CODE contract matches the classifier):
+          # run_pep_tf.sh CAPTURES pytest failures rather than returning their exit
+          # code, so a nonzero (or missing) FW_CODE never means "tests failed" — it
+          # means the SCRIPT/infra itself failed. Product test failures are still
+          # represented: they flow through JUnit and drive test_verdict=fail once the
+          # manifest is parsed. Therefore, after the setup/login/docker checks and the
+          # validation code 3, ANY missing-or-nonzero FW_CODE is infra_failure in BOTH
+          # preview and full modes, and is NOT conditioned on whether report files
+          # happen to exist.
+          if [ "$IN_PREFLIGHT" = "3" ]; then
+            # Finding 2 + follow-up item 1: an unknown execution_mode OR an
+            # invalid invocation_id is a caller-input validation rejection
+            # (exit-3 semantics), classified BEFORE the preview branch so it can
+            # never masquerade as a green preview.
+            args+=( --validation-error "invalid workflow input (execution_mode or invocation_id) (validation)" )
+          elif [ "$SETUP_OUTCOME" = "failure" ] || [ "$PIP_OUTCOME" = "failure" ]; then
+            args+=( --infra-error "python/dependency setup failed (setup)" )
+          elif [ "$LOGIN_OUTCOME" = "failure" ]; then
+            args+=( --infra-error "dockerhub login failed (setup)" )
+          elif [ "$DOCKER_OUTCOME" = "failure" ]; then
+            args+=( --infra-error "docker preflight failed (setup)" )
+          elif [ "$FW_CODE" = "3" ]; then
+            # EXPECTED request/policy rejection (bad channel, scenario=upgrade, a
+            # pre-flight RequestError) -> validation failure, NEVER infra, NEVER green.
+            args+=( --validation-error "request/policy rejected by run_pep_tf (validation)" )
+          elif [ -z "$FW_CODE" ] || [ "$FW_CODE" != "0" ]; then
+            # Missing or unexpected-nonzero script exit -> infra, BOTH modes, NOT
+            # gated on report presence (issue #12). (rc=3 already peeled off above.)
+            args+=( --infra-error "run_pep_tf.sh failed unexpectedly (rc=${FW_CODE:-<none>})" )
+          # ---- from here down FW_CODE == 0 (clean script exit) ----
+          elif [ "$IN_EXEC" != "full" ]; then
+            args+=( --preview )                       # preview only reached on a clean dry-run
+          # ---- FULL mode, clean script exit ----
+          elif [ ! -f test-logs/current-run.json ]; then
+            args+=( --infra-error "current-run manifest missing (bridge did not run)" )
+          elif [ ! -f test-logs/identity-evidence.json ]; then
+            # carry-forward #4: a full certification run must NOT emit completed/pass
+            # without identity evidence. Absent artifact = the identity test never
+            # produced it -> infra_failure. (Malformed/invalid evidence is already
+            # rejected upstream by the summarizer's _validate_identity_evidence ->
+            # infra_failure. Preview does not require identity.)
+            args+=( --infra-error "identity evidence missing in full run (identity test did not run)" )
+          fi
+          # else (full, clean exit, manifest + identity present): no flag -> the
+          # summarizer parses the manifest and JUnit drives the real verdict.
+          python3 utillities/pep_result_summary.py "${args[@]}"
+      - name: Emit outputs
+        id: emit
+        if: always()
+        env:
+          # The artifact name is NOT rebuilt here from raw inputs -- it comes only
+          # from the safe value the preflight step produced (item 1b). Routed via
+          # env for the same injection-safety discipline as the rest of the file.
+          ARTIFACT_NAME: ${{ steps.preflight.outputs.artifact_name }}
+        run: |
+          python3 - <<'PY' >> "$GITHUB_OUTPUT"
+          import json
+          from pathlib import Path
+          p = Path("test-logs/summary.json")
+          s = json.loads(p.read_text()) if p.exists() else {"execution_status":"infra_failure","test_verdict":"not_run","identity_evidence":{}}
+          print(f"execution_status={s.get('execution_status')}")
+          print(f"test_verdict={s.get('test_verdict')}")
+          print(f"enforcement_mode={s.get('enforcement_mode')}")
+          print(f"identity_evidence={json.dumps(s.get('identity_evidence', {}))}")
+          rc = json.loads(Path('test-logs/resolved-config.json').read_text()) if Path('test-logs/resolved-config.json').exists() else {}
+          print(f"resolved_channel={json.dumps(rc.get('repo', {}))}")   # {value, source}
+          PY
+          # summary_artifact output = the SAME preflight-produced value the Upload
+          # step below uses for name:. No raw, later-validated input is interpolated
+          # here, so a rejected invocation_id can never yield an unsafe name.
+          echo "summary_artifact=$ARTIFACT_NAME" >> "$GITHUB_OUTPUT"
+      - name: Upload artifacts (ALWAYS, unique-per-call + rerun-safe name)
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
+        with:
+          # name: is the preflight-produced, upload-safe value -- the EXACT same
+          # step output the Emit step publishes as summary_artifact. Deliberately
+          # NOT built from raw inputs.* (item 1b): under always() a raw, later-
+          # rejected invocation_id would otherwise make this upload fail and turn a
+          # truthfully-classified validation/incomplete job red.
+          name: ${{ steps.preflight.outputs.artifact_name }}
+          path: test-logs/

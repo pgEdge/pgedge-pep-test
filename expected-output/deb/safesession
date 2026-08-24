@@ -1,0 +1,9 @@
+/usr/lib/postgresql/18/lib/bitcode/pgedge_safesession/src/pgedge_safesession.bc
+/usr/lib/postgresql/18/lib/bitcode/pgedge_safesession.index.bc
+/usr/lib/postgresql/18/lib/pgedge_safesession.so
+/usr/lib/postgresql/18/sbom/pgedge-safesession-sbom.json
+/usr/lib/postgresql/18/sbom/pgedge-safesession-sbom.json.asc
+/usr/share/doc/pgedge-postgresql-18-safesession/README.md
+/usr/share/doc/pgedge-postgresql-18-safesession/copyright
+/usr/share/postgresql/18/extension/pgedge_safesession--1.0-beta1.sql
+/usr/share/postgresql/18/extension/pgedge_safesession.control

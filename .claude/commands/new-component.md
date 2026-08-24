@@ -1,6 +1,6 @@
 ---
 name: new-component
-description: Interactively scaffold a complete new pgEdge component. Asks guided questions about the component, updates all config files, creates expected-output placeholders, generates the test file, and wires everything into run_pep_tf.sh, conftest.py, and README.md.
+description: Interactively scaffold a complete new pgEdge component. Asks guided questions about the component, updates all config files, creates expected-output placeholders, generates the test file, and wires everything into run_pep_tf.sh, conftest.py, README.md, and optionally test_pep_repo_health.py.
 argument-hint: "<component-name>  (e.g. patroni, pgaudit, myext)"
 ---
 
@@ -26,6 +26,7 @@ Ask the following questions as a numbered list in a single message:
 > 8. Do the packages install a **README file**? Expected path: `/usr/share/doc/<package>/README.md`. Answer `yes` or `no`.
 > 9. Would you like to **provide the expected file list** for each package now? Options: **a)** paste the output of `rpm -ql <pkg>` or `dpkg -L <pkg>` for each package now, **b)** create TODO placeholders, **c)** skip bundled-file verification.
 > 10. Are there **package-level dependencies** between these packages or on other pgEdge packages? If yes, list them as `package → dependency` (one per line). If no, type `none`.
+> 11. Should this component also be added to **`test_pep_repo_health.py`**? Answer `yes` or `no`. `repo_health` installs every enabled component together on one host to catch conflicts between them. Answering `yes` adds the package to `packages_test_matrix.json`, the repo_health version maps, and — where applicable — the preload-library and `ALL_EXTENSIONS` lists.
 
 Wait for the user's answers, then store:
 - `component` = `$ARGUMENTS` (snake_case)
@@ -41,6 +42,7 @@ Wait for the user's answers, then store:
 - `has_readme` = true/false (from question 8)
 - `bundled_files_option` = a/b/c (from question 9)
 - `dependencies` = map of package → [dependencies] or empty (from question 10)
+- `add_to_repo_health` = true/false (from question 11)
 
 Derive naming variables:
 - `short_name` = `rhel_pkg` with `pgedge-` prefix stripped, and any `_16`/`_17`/`_18` suffix stripped
@@ -190,7 +192,92 @@ Read `component-test/conftest.py`. Add to `component_map`:
 
 ---
 
-## Phase 7 — Wire into README.md
+## Phase 7 — Wire into test_pep_repo_health.py (only if `add_to_repo_health` is true)
+
+If the user answered **no** to question 11, skip this phase entirely — do not touch
+`packages_test_matrix.json`, `test_pep_repo_health.py`, or any `ALL_EXTENSIONS` line.
+State in the final summary that repo_health wiring was skipped by request.
+
+If they answered **yes**: `repo_health` installs every matrix-enabled package together
+on a single host to surface conflicts between components. It is driven entirely by
+`packages_test_matrix.json`, so support requires four separate edits.
+
+**1. Add the package(s) to `configuration/packages_test_matrix.json`**
+
+One entry per package. Use `{PG}` as the PostgreSQL-major placeholder for coupled
+packages; decoupled packages use a literal name. Match the file's existing column
+alignment, and set `"enabled": true` — an entry with `enabled: false` is invisible to
+repo_health, so the component would silently never be tested.
+
+```json
+{"category": "extension", "name": "<short_name>", "description": "<one line>", "enabled": true, "rhel": "<rhel_pkg with {PG}>", "deb": "<deb_pkg with {PG}>"},
+```
+
+Note that enabling an entry also changes what `configuration/generate_env.py` writes
+into `ALL_PACKAGES` / `DEB_ALL_PACKAGES`. Mention this to the user rather than
+running the generator unprompted.
+
+**2. Add the package(s) to both version maps in `component-test/test_pep_repo_health.py`**
+
+A package is version-verified only when it appears in *both* the install list and the
+platform's version map, so add it to `RHEL_PACKAGE_VERSION_MAP` **and**
+`DEB_PACKAGE_VERSION_MAP`:
+
+```python
+# RHEL_PACKAGE_VERSION_MAP
+f"pgedge-<short_name>_{pg_major_version}":            os.getenv(f"PGEDGE_<SHORT>_{pg_major_version}_VERSION"),
+# DEB_PACKAGE_VERSION_MAP
+f"pgedge-postgresql-{pg_major_version}-<short_name>": os.getenv(f"PGEDGE_<SHORT>_{pg_major_version}_VERSION"),
+```
+
+A single env var covers both platforms even when the RPM version reads `1.0-beta1` and
+the DEB version reads `1.0~beta1`: `package_management.normalize_version()` folds the
+Debian tilde into the hyphen form. Do **not** introduce a separate `*_DEB_VERSION`
+variable for this.
+
+Watch for key collisions: a coupled `pgedge-<name>_{PG}` and a decoupled
+`pgedge-<name>` are different packages with different versions and must stay distinct
+keys in the same dict.
+
+**3. Add to `CONDITIONAL_PRELOAD_LIBRARIES` — only if the component ships a library
+that must appear in `shared_preload_libraries`**
+
+```python
+"<library_name>": {
+    "rhel": f"pgedge-<short_name>_{pg_major_version}",
+    "deb":  f"pgedge-postgresql-{pg_major_version}-<short_name>",
+},
+```
+
+Never append the library directly to the `shared_preload_libraries` string.
+PostgreSQL refuses to start when a preloaded library is missing from disk, so
+`get_preload_libraries()` gates every entry on the package actually being in the
+matrix-derived install list — otherwise toggling the component off in the matrix
+breaks the whole run at `test_start_server`.
+
+If you are unsure whether the component needs preloading, say so explicitly rather
+than guessing silently; `test_start_server` dumps the PostgreSQL log on failure, which
+makes a wrong guess easy to spot on the first run.
+
+**4. Append each extension to `ALL_EXTENSIONS` — only if the component installs
+extensions**
+
+Add the extension name(s) to the `export ALL_EXTENSIONS=` line in **every** config env
+file, so `test_create_extensions` covers them.
+
+**Verify, don't assume.** Before reporting done, confirm:
+- the package appears in both platforms' matrix-derived install lists and resolves to a
+  non-empty expected version
+- `get_preload_libraries()` includes the library, and **drops it** when the matrix entry
+  is disabled (test this by flipping `enabled` in a scratch copy of the matrix, then
+  restoring it)
+- `packages_test_matrix.json` is still valid JSON with its column formatting intact
+- `test_pep_repo_health.py` still collects, and the new component appears in the
+  collected test ids
+
+---
+
+## Phase 8 — Wire into README.md
 
 Read `README.md` and:
 
@@ -201,7 +288,7 @@ Read `README.md` and:
 
 ---
 
-## Phase 8 — Final summary
+## Phase 9 — Final summary
 
 Print a complete summary table:
 
@@ -215,8 +302,14 @@ Print a complete summary table:
 | `expected-output/deb/<deb_pkg>` | Created (placeholder / filled) |
 | `run_pep_tf.sh` | Added menu entry, RPM/DEB cases, `test_type_list`, and report loop |
 | `component-test/conftest.py` | Added `component_map` entry |
+| `configuration/packages_test_matrix.json` | Added matrix entry (only if `add_to_repo_health`) |
+| `component-test/test_pep_repo_health.py` | Added version-map entries + preload library (only if `add_to_repo_health`) |
 | `README.md` | Updated `--components` table, project tree, and Supported Components table |
 | `test-logs/index.html` | Will auto-include `<component>` card on next test run (driven by `run_pep_tf.sh` report loop) |
+
+When `add_to_repo_health` is false, list the repo_health rows as **Skipped (not
+requested)** rather than omitting them, so it is obvious the step was a choice and not
+an oversight.
 
 Then remind the user:
 - Run `./run_pep_tf.sh --components <component> --repo staging` to test the new scaffold

@@ -35,7 +35,7 @@ jobs:
       scenario: certification
       mode: observe
       execution_mode: full
-      pep_implementation_ref: f1ebe5974b77de9f48efe6c324c4c08201095ee6
+      pep_implementation_ref: 0ad37c85a436d7437c2c68e79464ae93b03ba88b
     secrets:
       DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
       DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}

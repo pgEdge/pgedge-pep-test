@@ -48,6 +48,15 @@ def detect_component_from_test_file(config):
 
     # Component mapping based on test file names
     component_map = {
+        'test_pep_pgmq': {
+            'name': 'pgmq',
+            'version_env': f'PGEDGE_PGMQ_{os.getenv("PG_MAJOR_VERSION", "16")}_VERSION',
+            'version_default': '1.12.0',
+            'rhel_package_env': 'PGMQ_PACKAGE',
+            'rhel_package_default': f'pgedge-pgmq_{os.getenv("PG_MAJOR_VERSION", "16")}',
+            'deb_package_env': 'DEB_PGMQ_PACKAGE',
+            'deb_package_default': f'pgedge-postgresql-{os.getenv("PG_MAJOR_VERSION", "16")}-pgmq'
+        },
         'test_pep_safesession': {
             'name': 'SafeSession',
             'version_env': 'PGEDGE_SAFESESSION_18_VERSION',

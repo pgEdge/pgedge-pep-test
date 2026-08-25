@@ -137,6 +137,7 @@ RHEL_PACKAGE_VERSION_MAP = {
     "pgedge-coldfront-duckdb-extensions":              os.getenv("PGEDGE_COLDFRONT_DUCKDB_EXTENSIONS_VERSION"),
     "pgedge-lakekeeper":                               os.getenv("PGEDGE_LAKEKEEPER_VERSION"),
     f"pgedge-safesession_{pg_major_version}":          os.getenv(f"PGEDGE_SAFESESSION_{pg_major_version}_VERSION"),
+    f"pgedge-pgmq_{pg_major_version}":                 os.getenv(f"PGEDGE_PGMQ_{pg_major_version}_VERSION"),
     "pgedge-pgbouncer":                                os.getenv("PGEDGE_PGBOUNCER_VERSION"),
     "pgedge-pgbackrest":                               os.getenv("PGEDGE_PGBACKREST_VERSION"),
     "pgedge-pgadmin4":                                 os.getenv("PGEDGE_PGADMIN4_VERSION"),
@@ -178,6 +179,7 @@ DEB_PACKAGE_VERSION_MAP = {
     # SafeSession: RPM is '1.0-beta1', DEB '1.0~beta1' — one variable covers
     # both, since normalize_version folds the Debian tilde into a hyphen.
     f"pgedge-postgresql-{pg_major_version}-safesession":      os.getenv(f"PGEDGE_SAFESESSION_{pg_major_version}_VERSION"),
+    f"pgedge-postgresql-{pg_major_version}-pgmq":             os.getenv(f"PGEDGE_PGMQ_{pg_major_version}_VERSION"),
     "pgedge-pgbouncer":                                       os.getenv("PGEDGE_PGBOUNCER_VERSION"),
     "pgedge-pgbackrest":                                      os.getenv("PGEDGE_PGBACKREST_VERSION"),
     "pgedge-pgadmin4":                                        os.getenv("PGEDGE_PGADMIN4_VERSION"),

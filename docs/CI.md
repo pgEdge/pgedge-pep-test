@@ -372,7 +372,7 @@ jobs:
       mode: observe                    # observe | gate
       execution_mode: full             # preview | full
       invocation_id: rag-deb-amd64-pg17   # unique per call within one run
-      pep_implementation_ref: <PEP_COMMIT_SHA>   # immutable pin (repeat the SHA)
+      pep_implementation_ref: <PEP_COMMIT_SHA>   # use the SAME full SHA as in uses:
     secrets:                           # optional — authenticated image pulls
       DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
       DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
@@ -380,13 +380,15 @@ jobs:
 
 ### Inputs
 
-**Required:** `component`, `package_name`, `channel` (`release`/`staging`/`daily`), `expected_version`, `container_alias`, `pg_major`, `family` (`rpm`/`deb`), `arch` (`amd64`/`arm64`), and `pep_implementation_ref` (the PEP SHA to run — pass the same immutable SHA you pinned in `uses:`).
+**Required:** `component`, `package_name`, `channel` (`release`/`staging`/`daily`), `expected_version`, `container_alias`, `pg_major`, `family` (`rpm`/`deb`), `arch` (`amd64`/`arm64`), and `pep_implementation_ref`.
 
-**Optional exact-identity inputs** (default `""`): `expected_rpm`, `expected_deb`, `expected_binary`, plus provenance-only `expected_buildnum` and `effective_tag`. Supplying an explicit `expected_rpm`/`expected_deb` makes **L2a** attemptable; an explicit `expected_binary` makes **L2b** attemptable. `expected_buildnum`/`effective_tag` alone are recorded as provenance only — they do **not** by themselves raise the identity target (deriving exact strings from them is a deliberate, still-open decision), so the run stays at L1 unless you pass the explicit `expected_*` strings.
+**Pinning responsibility (caller-owned):** use the **same immutable full commit SHA** in *both* the job-level `uses:` reference and `pep_implementation_ref` — `uses:` selects which workflow definition GitHub loads, and `pep_implementation_ref` is the ref the workflow then checks out and runs. The workflow records both the requested ref and the resolved SHA (`git rev-parse HEAD`) into `provenance.json` for audit, but it does **not** enforce that the ref is a full SHA (versus a branch/tag) and does **not** verify that the two caller references match. Keeping them identical and immutable is the caller's responsibility.
+
+**Optional exact-identity inputs** (default `""`): `expected_rpm`, `expected_deb`, `expected_binary`, plus `expected_buildnum` and `effective_tag`. Supplying an explicit `expected_rpm`/`expected_deb` makes **L2a** attemptable; an explicit `expected_binary` makes **L2b** attemptable. `expected_buildnum`/`effective_tag` are accepted and validated and currently mark the corresponding rung as *derivation-pending*, but they do **not** by themselves make L2 attemptable and are **not** currently surfaced as dedicated fields in provenance or the result summary (deriving exact strings from them is a deliberate, still-open decision). So the run stays at L1 unless you pass the explicit `expected_*` strings.
 
 **Run controls** (optional): `scenario` (default `certification`), `mode` (`observe`/`gate`, default `observe`), `execution_mode` (`preview`/`full`, default `preview`), `invocation_id` (default `""`).
 
-**Caller-supplied build identity vs PEP defaults:** the caller is authoritative for *what build is being certified* — `expected_version` and the `expected_*` strings come only from the caller and are never back-filled from PEP's config. PEP's `configuration/config{PG}.env` and repo-root `.env` supply only environment defaults (prereqs, paths, and the like); the resolved channel and scenario the run actually used are reported back in `resolved-config.json` with their source.
+**Caller-supplied build identity vs PEP defaults:** the caller is authoritative for *what build is being certified*. PEP's `configuration/config{PG}.env` and repo-root `.env` continue to supply framework/standalone test settings (prereqs, paths, and the like), but the integration `expected_version` and the `expected_*` identity fields remain **caller-controlled** and are **not** backfilled from those files. The resolved channel and scenario the run actually used are reported back in `resolved-config.json` with their source.
 
 ### preview vs full
 
@@ -404,15 +406,15 @@ jobs:
 
 ### Artifacts + `invocation_id` uniqueness
 
-Every call **always** uploads the whole `test-logs/` directory: `summary.json`, `identity-evidence.json`, `install-evidence.json`, `resolved-config.json`, `provenance.json`, `current-run.json`, and the JUnit/HTML reports. The artifact name is built from the target dimensions; when a single GitHub run calls this workflow more than once with otherwise-identical dimensions (e.g. two calls differing only by `mode`), give each call a distinct `invocation_id` — `upload-artifact` forbids duplicate names within one run, and `invocation_id` is the discriminator folded into the name (charset `A-Za-z0-9._-`, ≤64).
+Every call **always** uploads the `test-logs/` directory, but **its contents vary by outcome**. A `preview`/validation call produces a subset (e.g. `summary.json`, `provenance.json`, and — once the resolver runs — `resolved-config.json`), with no install/identity evidence or product reports. A **successful full run** additionally supplies `install-evidence.json`, `identity-evidence.json`, the `current-run.json` manifest, and the JUnit/HTML test reports. The artifact name is built from the target dimensions; when a single GitHub run calls this workflow more than once with otherwise-identical dimensions (e.g. two calls differing only by `mode`), give each call a distinct `invocation_id` — `upload-artifact` forbids duplicate names within one run, and `invocation_id` is the discriminator folded into the name (charset `A-Za-z0-9._-`, ≤64).
 
 ### What L1 / L2a / L2b actually prove
 
-- **L2a — package-manager identity (strong):** the installed package's exact NVR (RPM) or `Version` (DEB) equals the caller's `expected_rpm`/`expected_deb`. Proves the exact build was installed.
-- **L2b — binary identity (strong):** the installed binary's reported version equals `expected_binary`.
+- **L2a — exact package-manager version-release identity (strong):** the installed package's exact NVR (RPM) or `Version` (DEB) string equals the caller's `expected_rpm`/`expected_deb`. Proves the exact package-manager version-release was installed.
+- **L2b — exact binary version identity (strong):** the binary's self-reported version string equals `expected_binary`.
 - **L1 — component version (weak / degraded):** the component's reported version *contains* the normalized `expected_version`. This is a coarse substring/containment check — it confirms the right version line, **not** the exact build. A run that proves only L1 must not be described as exact-build.
 
-Each rung is independent and reported separately; a rung that is attemptable but unproven (mismatch or missing observation) makes `test_verdict=fail`. L2 is reachable only when the corresponding explicit `expected_*` string is supplied.
+L2a and L2b are **exact version-string** matches, not a byte-level or checksum/content assertion (there is no L3 content proof in this POC). Each rung is independent and reported separately; a rung that is attemptable but unproven (mismatch or missing observation) makes `test_verdict=fail`. L2 is reachable only when the corresponding explicit `expected_*` string is supplied.
 
 ### DockerHub credentials (optional)
 

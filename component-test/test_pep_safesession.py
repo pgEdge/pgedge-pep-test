@@ -622,7 +622,7 @@ def test_extension_version(container_name, container_type, extension):
     """Verify the installed extension version matches the expected version via \\dx in psql.
 
     Runs psql \\dx and greps for the extension name, then checks that the
-    reported version column matches SAFESESSION_EXTENSION_VERSION — the
+    reported version column equals SAFESESSION_EXTENSION_VERSION exactly — the
     .control file's default_version, which is tracked separately from the
     package version.
     """
@@ -665,9 +665,14 @@ def test_extension_version(container_name, container_type, extension):
     assert len(columns) >= 2, f"Unexpected \\dx row format: {ext_line}"
     installed_version = columns[1].strip()
 
-    assert safesession_extension_version in installed_version, (
+    # Exact match, not a substring check. Both values name the same thing — the
+    # .control file's default_version — so there is no formatting gap to absorb,
+    # and a substring test would let a longer version slip through: with the GA
+    # value of '1.0', "in" would happily pass against an installed '1.0.1'.
+    expected_version = safesession_extension_version.strip()
+    assert installed_version == expected_version, (
         f"Extension '{extension}' version mismatch: "
-        f"expected '{safesession_extension_version}', got '{installed_version}'"
+        f"expected '{expected_version}', got '{installed_version}'"
     )
     print(
         f"✅ Extension '{extension}' version {installed_version} "

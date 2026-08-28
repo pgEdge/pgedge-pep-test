@@ -104,7 +104,17 @@ def _get_container(container_name):
 
 @pytest.mark.parametrize("container_name,container_type", all_containers)
 def test_install_prerequisites(container_name, container_type):
-    """Step 0: Install prerequisites using machine_prereq_setup module"""
+    """Step 0: Install prerequisites and clear any pip-installed Patroni.
+
+    The pip cleanup runs here, after the prerequisites, for two reasons: pip
+    itself may only exist once the prerequisites are installed, and everything
+    downstream needs the packaged Patroni to be the one on PATH. A leftover
+    `pip3 install patroni` puts console scripts in /usr/local/bin, ahead of the
+    packaged /usr/bin copy, so test_patroni_binary_version would read the pip
+    build's version and report a mismatch that looks like a packaging bug.
+    Distro-owned files are detected and left untouched, so this is a no-op on a
+    clean machine.
+    """
     container_name = container_name.strip()
     if not container_name:
         pytest.skip("No container defined in env")
@@ -125,6 +135,19 @@ def test_install_prerequisites(container_name, container_type):
         print(f"   {message}")
     except Exception as e:
         pytest.fail(f"Failed to install prerequisites: {str(e)}")
+
+    try:
+        success, cleanup_summary, message = machine_cleanup.cleanup_pip_patroni(container)
+        assert success, f"pip Patroni cleanup failed: {message}"
+        print(f"✅ {message}")
+        for removed in cleanup_summary["pip_installs_removed"]:
+            print(f"   Removed pip install: {removed}")
+        for script in cleanup_summary["scripts_removed"]:
+            print(f"   Removed orphaned script: {script}")
+        for kept in cleanup_summary["package_owned_skipped"]:
+            print(f"   Left intact: {kept}")
+    except Exception as e:
+        pytest.fail(f"Failed to remove pip-installed Patroni: {str(e)}")
 
 
 @pytest.mark.parametrize("container_name,container_type", all_containers)

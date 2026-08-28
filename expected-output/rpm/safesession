@@ -1,7 +1,9 @@
 /usr/pgsql-18/lib/pgedge_safesession.so
 /usr/pgsql-18/sbom/pgedge-safesession-sbom.json
 /usr/pgsql-18/sbom/pgedge-safesession-sbom.json.asc
+/usr/pgsql-18/share/extension/pgedge_safesession--1.0-alpha1--1.0-beta1.sql
 /usr/pgsql-18/share/extension/pgedge_safesession--1.0-beta1.sql
+/usr/pgsql-18/share/extension/pgedge_safesession--1.0.sql
 /usr/pgsql-18/share/extension/pgedge_safesession.control
 /usr/share/doc/pgedge-safesession_18
 /usr/share/doc/pgedge-safesession_18/README.md

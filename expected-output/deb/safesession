@@ -5,5 +5,7 @@
 /usr/lib/postgresql/18/sbom/pgedge-safesession-sbom.json.asc
 /usr/share/doc/pgedge-postgresql-18-safesession/README.md
 /usr/share/doc/pgedge-postgresql-18-safesession/copyright
+/usr/share/postgresql/18/extension/pgedge_safesession--1.0-alpha1--1.0-beta1.sql
 /usr/share/postgresql/18/extension/pgedge_safesession--1.0-beta1.sql
+/usr/share/postgresql/18/extension/pgedge_safesession--1.0.sql
 /usr/share/postgresql/18/extension/pgedge_safesession.control

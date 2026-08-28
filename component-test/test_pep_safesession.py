@@ -15,9 +15,10 @@ packaging formats and are therefore resolved per platform rather than derived:
   * README  — same basename on both, different parent directory
   * SBOM    — <pg_path>/sbom/pgedge-safesession-sbom.json
 
-The package version also differs by format (RHEL '1.0-beta1' vs DEB
-'1.0~beta1'); package_management.normalize_version() folds the Debian tilde into
-the hyphen form, so a single expected value covers both.
+As of the 1.0 GA release the package version and the extension's
+default_version are both '1.0'. They are still read from separate env vars
+(PGEDGE_SAFESESSION_<PG>_VERSION and SAFESESSION_EXTENSION_VERSION) because
+they are independent values that happened to converge at GA.
 """
 import os
 import sys
@@ -58,11 +59,11 @@ skip_cleanup = os.getenv("SKIP_CLEANUP", "false").lower() == "true"
 pgport = os.getenv("PG_PORT", "5432")
 pgdata = os.getenv("PG_DATA_DIR", "/tmp/n1")
 pg_major_version = os.getenv("PG_MAJOR_VERSION", "18")
-safesession_version = os.getenv(f"PGEDGE_SAFESESSION_{pg_major_version}_VERSION", "1.0-beta1")
+safesession_version = os.getenv(f"PGEDGE_SAFESESSION_{pg_major_version}_VERSION", "1.0")
 
 # Extension version as reported by \dx — this is the .control file's
 # default_version and need not equal the package version.
-safesession_extension_version = os.getenv("SAFESESSION_EXTENSION_VERSION", "1.0-beta1")
+safesession_extension_version = os.getenv("SAFESESSION_EXTENSION_VERSION", "1.0")
 
 # SafeSession ships no standalone binary, so the binary tests stay disabled.
 component_binary = os.getenv("COMPONENT_BINARY", "")
@@ -621,7 +622,7 @@ def test_extension_version(container_name, container_type, extension):
     """Verify the installed extension version matches the expected version via \\dx in psql.
 
     Runs psql \\dx and greps for the extension name, then checks that the
-    reported version column matches SAFESESSION_EXTENSION_VERSION — the
+    reported version column equals SAFESESSION_EXTENSION_VERSION exactly — the
     .control file's default_version, which is tracked separately from the
     package version.
     """
@@ -664,9 +665,14 @@ def test_extension_version(container_name, container_type, extension):
     assert len(columns) >= 2, f"Unexpected \\dx row format: {ext_line}"
     installed_version = columns[1].strip()
 
-    assert safesession_extension_version in installed_version, (
+    # Exact match, not a substring check. Both values name the same thing — the
+    # .control file's default_version — so there is no formatting gap to absorb,
+    # and a substring test would let a longer version slip through: with the GA
+    # value of '1.0', "in" would happily pass against an installed '1.0.1'.
+    expected_version = safesession_extension_version.strip()
+    assert installed_version == expected_version, (
         f"Extension '{extension}' version mismatch: "
-        f"expected '{safesession_extension_version}', got '{installed_version}'"
+        f"expected '{expected_version}', got '{installed_version}'"
     )
     print(
         f"✅ Extension '{extension}' version {installed_version} "

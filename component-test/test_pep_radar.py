@@ -1,4 +1,5 @@
 import os
+import re
 import sys
 import subprocess
 from pathlib import Path
@@ -71,6 +72,16 @@ radar_sbom_dir = "/usr/share/pgedge-radar"
 radar_sbom_json = "pgedge-radar-sbom.json"
 radar_sbom_asc = "pgedge-radar-sbom.json.asc"
 
+# Functional collection runs. radar writes its bundle into the current working
+# directory as radar-<hostname>-<YYYYMMDD>-<HHMMSS>.zip, so each case runs in
+# its own scratch directory and claims the single zip that appears there.
+radar_workdir_base = "/tmp/radar-functional"
+radar_zip_pattern = re.compile(r"^radar-.+-\d{8}-\d{6}\.zip$")
+
+# Database created for the "PostgreSQL data only" case, matching the documented
+# `radar -d mydatabase --skip-system` invocation.
+radar_test_database = os.getenv("RADAR_TEST_DATABASE", "mydatabase")
+
 
 def get_container_config(container_type):
     """Get configuration based on container type (rhel or deb)"""
@@ -88,6 +99,131 @@ def get_container_config(container_type):
             "radar_package": deb_radar_package,
             "server_package": deb_server_package,
         }
+
+
+def _ensure_unzip(container):
+    """Make sure `unzip` is available; the prerequisites step does not install it."""
+    exit_code, _ = container.exec_run(["/bin/sh", "-c", "command -v unzip"], user="root")
+    if exit_code == 0:
+        return
+
+    print("   unzip not present, installing it...")
+    container.exec_run(
+        ["/bin/sh", "-c",
+         "if command -v dnf >/dev/null 2>&1; then dnf install -y unzip; "
+         "elif command -v apt-get >/dev/null 2>&1; then "
+         "DEBIAN_FRONTEND=noninteractive apt-get update -qq && "
+         "DEBIAN_FRONTEND=noninteractive apt-get install -y unzip; fi"],
+        user="root",
+    )
+    exit_code, _ = container.exec_run(["/bin/sh", "-c", "command -v unzip"], user="root")
+    assert exit_code == 0, "unzip is required to inspect the radar bundle but could not be installed"
+
+
+def _run_radar(container, case, args):
+    """Run `radar <args>` in a clean scratch directory and return (workdir, zip_path).
+
+    radar writes its bundle to the current working directory, so each case gets
+    its own directory and the single .zip that lands there is the bundle. PGPORT
+    is exported because the test cluster does not necessarily listen on 5432.
+    """
+    workdir = f"{radar_workdir_base}/{case}"
+
+    exit_code, output = container.exec_run(
+        ["/bin/sh", "-c", f"rm -rf {workdir} && mkdir -p {workdir}"], user="root"
+    )
+    assert exit_code == 0, f"Failed to create {workdir}: {output.decode().strip()}"
+
+    print(f"   Running: radar {args}   (cwd={workdir})")
+    exit_code, output = container.exec_run(
+        ["/bin/sh", "-c", f"cd {workdir} && PGPORT={pgport} {component_binary} {args} 2>&1"],
+        user="root",
+    )
+    run_output = output.decode().strip()
+    print(f"   Output:\n{run_output}")
+    assert exit_code == 0, f"'radar {args}' failed (exit {exit_code}):\n{run_output}"
+
+    # Exactly one bundle should have been produced.
+    _, listing = container.exec_run(
+        ["/bin/sh", "-c", f"cd {workdir} && ls -1 *.zip 2>/dev/null"], user="root"
+    )
+    zips = [z.strip() for z in listing.decode().strip().splitlines() if z.strip()]
+    assert len(zips) == 1, (
+        f"Expected exactly one .zip in {workdir} after 'radar {args}', found {zips}\n"
+        f"radar output:\n{run_output}"
+    )
+
+    zip_name = zips[0]
+    assert radar_zip_pattern.match(zip_name), (
+        f"Bundle name {zip_name!r} does not match the expected "
+        f"radar-<hostname>-<YYYYMMDD>-<HHMMSS>.zip form"
+    )
+    print(f"   ✅ Bundle created: {zip_name}")
+
+    return workdir, f"{workdir}/{zip_name}"
+
+
+def _extract_radar_bundle(container, workdir, zip_path):
+    """Extract the bundle and return the directory holding radar.out.
+
+    Some builds nest the payload one level under a directory named after the
+    bundle, so the payload root is located by finding radar.out rather than
+    assuming it sits at the archive root.
+    """
+    extract_dir = f"{workdir}/extracted"
+    exit_code, output = container.exec_run(
+        ["/bin/sh", "-c", f"mkdir -p {extract_dir} && unzip -q -o {zip_path} -d {extract_dir}"],
+        user="root",
+    )
+    assert exit_code == 0, f"Failed to unzip {zip_path}: {output.decode().strip()}"
+
+    _, found = container.exec_run(
+        ["/bin/sh", "-c", f"find {extract_dir} -maxdepth 3 -name radar.out -type f | head -1"],
+        user="root",
+    )
+    radar_out = found.decode().strip()
+    assert radar_out, (
+        f"radar.out not found anywhere under {extract_dir} after extracting {zip_path}"
+    )
+
+    payload_root = os.path.dirname(radar_out)
+    _, listing = container.exec_run(["/bin/sh", "-c", f"ls -la {payload_root}"], user="root")
+    print(f"   Bundle contents ({payload_root}):\n{listing.decode().rstrip()}")
+
+    return payload_root
+
+
+def _assert_bundle_contents(container, payload_root, expected_dirs, unexpected_dirs):
+    """Assert the bundle holds exactly the collectors the flags asked for.
+
+    The unexpected_dirs check is the part that gives --skip-postgres and
+    --skip-system their meaning: without it the tests would still pass if the
+    skip flags were ignored entirely.
+    """
+    exit_code, _ = container.exec_run(
+        ["/bin/sh", "-c", f"test -f {payload_root}/radar.out"], user="root"
+    )
+    assert exit_code == 0, f"radar.out missing from bundle at {payload_root}"
+    print("   ✅ radar.out present")
+
+    for name in expected_dirs:
+        exit_code, _ = container.exec_run(
+            ["/bin/sh", "-c", f"test -d {payload_root}/{name}"], user="root"
+        )
+        assert exit_code == 0, (
+            f"Expected directory '{name}' missing from bundle at {payload_root}"
+        )
+        print(f"   ✅ {name}/ present")
+
+    for name in unexpected_dirs:
+        exit_code, _ = container.exec_run(
+            ["/bin/sh", "-c", f"test -e {payload_root}/{name}"], user="root"
+        )
+        assert exit_code != 0, (
+            f"Directory '{name}' should have been skipped but is present in the "
+            f"bundle at {payload_root}"
+        )
+        print(f"   ✅ {name}/ correctly absent")
 
 
 # ============================================================================
@@ -467,6 +603,133 @@ def test_check_connection(container_name, container_type):
         print(f"✅ {message}")
     except Exception as e:
         pytest.fail(f"Failed to check PostgreSQL connection: {str(e)}")
+
+
+@pytest.mark.parametrize("container_name,container_type", all_containers)
+def test_radar_collect_system_and_postgres(container_name, container_type):
+    """Functional 1: `radar -d postgres -U postgres` collects system + PostgreSQL data.
+
+    The bundle must contain every collector: system/, databases/, postgresql/
+    and radar.out.
+    """
+    container_name = container_name.strip()
+    if not container_name:
+        pytest.skip("No container defined in env")
+
+    try:
+        container = client.containers.get(container_name)
+    except docker.errors.NotFound:
+        pytest.skip(f"Container {container_name} not found or not running.")
+
+    assert container.status == "running"
+
+    config = get_container_config(container_type)
+    pguser = config["pguser"]
+
+    print(f"\n--- radar full collection on {container_name} ({container_type}) ---")
+
+    _ensure_unzip(container)
+
+    workdir, zip_path = _run_radar(container, "full", f"-d postgres -U {pguser}")
+    payload_root = _extract_radar_bundle(container, workdir, zip_path)
+    _assert_bundle_contents(
+        container,
+        payload_root,
+        expected_dirs=["system", "databases", "postgresql"],
+        unexpected_dirs=[],
+    )
+
+
+@pytest.mark.parametrize("container_name,container_type", all_containers)
+def test_radar_collect_system_only(container_name, container_type):
+    """Functional 2: `radar --skip-postgres` collects system data only.
+
+    The bundle must contain system/ and radar.out, and must NOT contain the
+    PostgreSQL collectors.
+    """
+    container_name = container_name.strip()
+    if not container_name:
+        pytest.skip("No container defined in env")
+
+    try:
+        container = client.containers.get(container_name)
+    except docker.errors.NotFound:
+        pytest.skip(f"Container {container_name} not found or not running.")
+
+    assert container.status == "running"
+
+    print(f"\n--- radar system-only collection on {container_name} ({container_type}) ---")
+
+    _ensure_unzip(container)
+
+    workdir, zip_path = _run_radar(container, "system-only", "--skip-postgres")
+    payload_root = _extract_radar_bundle(container, workdir, zip_path)
+    _assert_bundle_contents(
+        container,
+        payload_root,
+        expected_dirs=["system"],
+        unexpected_dirs=["postgresql", "databases"],
+    )
+
+
+@pytest.mark.parametrize("container_name,container_type", all_containers)
+def test_radar_collect_postgres_only(container_name, container_type):
+    """Functional 3: `radar -d <db> --skip-system` collects PostgreSQL data only.
+
+    The bundle must contain postgresql/, databases/ and radar.out, and must NOT
+    contain system/. The target database is created first so the run exercises a
+    real non-default database rather than falling back to 'postgres'.
+    """
+    container_name = container_name.strip()
+    if not container_name:
+        pytest.skip("No container defined in env")
+
+    try:
+        container = client.containers.get(container_name)
+    except docker.errors.NotFound:
+        pytest.skip(f"Container {container_name} not found or not running.")
+
+    assert container.status == "running"
+
+    config = get_container_config(container_type)
+    pgbin = config["pgbin"]
+    pguser = config["pguser"]
+
+    print(f"\n--- radar postgres-only collection on {container_name} ({container_type}) ---")
+
+    _ensure_unzip(container)
+
+    # Create the target database if it is not already there. createdb exits
+    # non-zero when the database exists, which is fine on a re-run.
+    exit_code, output = container.exec_run(
+        ["/bin/sh", "-c",
+         f"{pgbin}/psql -p {pgport} -U {pguser} -d postgres -tAc "
+         f"\"SELECT 1 FROM pg_database WHERE datname='{radar_test_database}'\""],
+        user=pguser,
+    )
+    if output.decode().strip() != "1":
+        exit_code, output = container.exec_run(
+            ["/bin/sh", "-c", f"{pgbin}/createdb -p {pgport} -U {pguser} {radar_test_database}"],
+            user=pguser,
+        )
+        assert exit_code == 0, (
+            f"Failed to create database {radar_test_database}: {output.decode().strip()}"
+        )
+        print(f"   Created database {radar_test_database}")
+    else:
+        print(f"   Database {radar_test_database} already exists")
+
+    workdir, zip_path = _run_radar(
+        container, "postgres-only", f"-d {radar_test_database} -U {pguser} --skip-system"
+    )
+    payload_root = _extract_radar_bundle(container, workdir, zip_path)
+    _assert_bundle_contents(
+        container,
+        payload_root,
+        expected_dirs=["postgresql", "databases"],
+        unexpected_dirs=["system"],
+    )
+
 
 @pytest.mark.parametrize("container_name,container_type", all_containers)
 def test_binary_version(container_name, container_type):

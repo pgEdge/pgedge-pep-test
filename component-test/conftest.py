@@ -60,7 +60,7 @@ def detect_component_from_test_file(config):
         'test_pep_safesession': {
             'name': 'SafeSession',
             'version_env': 'PGEDGE_SAFESESSION_18_VERSION',
-            'version_default': '1.0-beta1',
+            'version_default': '1.0',
             'rhel_package_env': 'SAFESESSION_PACKAGE',
             'rhel_package_default': 'pgedge-safesession_18',
             'deb_package_env': 'DEB_SAFESESSION_PACKAGE',

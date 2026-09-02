@@ -176,8 +176,7 @@ DEB_PACKAGE_VERSION_MAP = {
     "pgedge-coldfront":                                       os.getenv("PGEDGE_COLDFRONT_SERVER_VERSION"),
     "pgedge-coldfront-duckdb-extensions":                     os.getenv("PGEDGE_COLDFRONT_DUCKDB_EXTENSIONS_VERSION"),
     "pgedge-lakekeeper":                                      os.getenv("PGEDGE_LAKEKEEPER_VERSION"),
-    # SafeSession: RPM is '1.0-beta1', DEB '1.0~beta1' — one variable covers
-    # both, since normalize_version folds the Debian tilde into a hyphen.
+    # SafeSession: 1.0 GA, same version string on both platforms.
     f"pgedge-postgresql-{pg_major_version}-safesession":      os.getenv(f"PGEDGE_SAFESESSION_{pg_major_version}_VERSION"),
     f"pgedge-postgresql-{pg_major_version}-pgmq":             os.getenv(f"PGEDGE_PGMQ_{pg_major_version}_VERSION"),
     "pgedge-pgbouncer":                                       os.getenv("PGEDGE_PGBOUNCER_VERSION"),

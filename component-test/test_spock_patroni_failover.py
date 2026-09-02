@@ -10,7 +10,7 @@ from dotenv import load_dotenv
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 from aspects import (
     configure_repository, package_management, pg_server_management,
-    machine_prereq_setup, container_management
+    machine_prereq_setup, container_management, machine_cleanup
 )
 
 load_dotenv()
@@ -165,7 +165,15 @@ def _copy_file_to_container(container, local_path, remote_path, msg=""):
 
 @pytest.mark.parametrize("container_name,container_type", all_containers)
 def test_install_prerequisites(container_name, container_type):
-    """Step 1: Install prerequisites"""
+    """Step 1: Install prerequisites and clear any pip-installed Patroni.
+
+    The pip cleanup runs here, after the prerequisites, for two reasons: pip
+    itself may only exist once the prerequisites are installed, and this test
+    drives patroni/patronictl straight off PATH. A leftover pip install in
+    /usr/local/bin would be the binary actually running the cluster — a
+    different build than the one under test. Distro-owned files are detected
+    and left untouched, so this is a no-op on a clean machine.
+    """
     container_name = container_name.strip()
     if not container_name:
         pytest.skip("No container defined in env")
@@ -179,6 +187,16 @@ def test_install_prerequisites(container_name, container_type):
     success, os_info, message = machine_prereq_setup.install_prerequisites_on_container(container)
     assert success, f"Prerequisites installation failed: {message}"
     print(f"Prerequisites installed on {container_name} ({os_info}): {message}")
+
+    success, cleanup_summary, message = machine_cleanup.cleanup_pip_patroni(container)
+    assert success, f"pip Patroni cleanup failed: {message}"
+    print(message)
+    for removed in cleanup_summary["pip_installs_removed"]:
+        print(f"   Removed pip install: {removed}")
+    for script in cleanup_summary["scripts_removed"]:
+        print(f"   Removed orphaned script: {script}")
+    for kept in cleanup_summary["package_owned_skipped"]:
+        print(f"   Left intact: {kept}")
 
 
 # ============================================================================

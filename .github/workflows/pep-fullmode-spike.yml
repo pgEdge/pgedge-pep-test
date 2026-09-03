@@ -18,7 +18,7 @@ jobs:
   # checkpoint. The two optional DockerHub secrets are forwarded EXPLICITLY (not
   # `secrets: inherit`) so image pulls are authenticated.
   full:
-    uses: pgEdge/pgedge-pep-test/.github/workflows/pep-integration.yml@cf7c917c7b63b9d8c026a6c4aed720b42cb1debe
+    uses: pgEdge/pgedge-pep-test/.github/workflows/pep-integration.yml@ba5157acf3de9ab7e0c9e25151d03035c6d4cc6b
     with:
       component: rag
       package_name: pgedge-rag-server
@@ -36,7 +36,7 @@ jobs:
       mode: observe
       execution_mode: full
       invocation_id: rpm-exact-amd64
-      pep_implementation_ref: cf7c917c7b63b9d8c026a6c4aed720b42cb1debe
+      pep_implementation_ref: ba5157acf3de9ab7e0c9e25151d03035c6d4cc6b
     secrets:
       DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
       DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}

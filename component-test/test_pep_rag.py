@@ -42,18 +42,42 @@ deb_rag_components = [c.strip() for c in os.getenv("DEB_RAG_COMPONENTS", "").spl
 # RAG Component versions
 rag_server_version = os.getenv("PGEDGE_RAG_SERVER_VERSION", "")
 
+# Every RAG package follows the same layout: the binary is /usr/bin/<package>,
+# the SBOM lives under /usr/share/<package>/, and the expected-output file is
+# the package name minus the 'pgedge-' prefix. Both maps are therefore keyed off
+# the configured component list rather than hardcoded names, so switching
+# RAG_COMPONENTS / DEB_RAG_COMPONENTS between pgedge-rag-server and
+# pgedge-rag-server2 needs no edit here.
+#
+# Hardcoding "pgedge-rag-server" previously meant a server2 run silently skipped
+# the package-version, binary-version and binary-stripped checks — the map
+# lookups missed, and each test skips on an empty value.
+_rag_components_all = list(dict.fromkeys(rhel_rag_components + deb_rag_components))
+
+# pgedge-rag-server and pgedge-rag-server2 are the same component and share
+# PGEDGE_RAG_SERVER_VERSION. Give a future RAG package that versions
+# independently its own env var and list it here.
+_rag_version_overrides = {}
+
 # Version mapping for RAG components
 rag_version_map = {
-    "pgedge-rag-server": rag_server_version,
+    component: _rag_version_overrides.get(component, rag_server_version)
+    for component in _rag_components_all
 }
 
 # Binary path mapping for RAG components
 rag_binary_map = {
-    "pgedge-rag-server": "/usr/bin/pgedge-rag-server",
+    component: f"/usr/bin/{component}"
+    for component in _rag_components_all
 }
 
 # Decoupled components SBOM path
 decoupled_sbom_path = os.getenv("DECOUPLED_COMPONENTS_SBOM", "")
+
+# The SBOM directory is package-specific (/usr/share/pgedge-rag-server2/) but
+# the file inside keeps the pgedge-rag-server basename even in the server2
+# package — confirmed against expected-output/{rpm,deb}/rag-server2.
+rag_sbom_basename = os.getenv("RAG_SBOM_BASENAME", "pgedge-rag-server-sbom.json")
 
 
 def get_container_config(container_type):
@@ -305,12 +329,18 @@ def test_verify_bundled_files(container_name, container_type, component):
             pytest.fail(f"Failed to verify bundled files: {str(e)}")
 
 
-@pytest.mark.parametrize("container_name,container_type", all_containers)
-def test_verify_sbom(container_name, container_type):
-    """Verify SBOM signature files located under the decoupled components SBOM directory"""
+@pytest.mark.parametrize("container_name,container_type,component", all_container_component_combinations)
+def test_verify_sbom(container_name, container_type, component):
+    """Verify SBOM signature files located under the decoupled components SBOM directory
+
+    Parametrized per component: each RAG package ships its SBOM under
+    /usr/share/<package>/, so the directory has to follow the configured
+    package name rather than a fixed pgedge-rag-server.
+    """
     container_name = container_name.strip()
-    if not container_name:
-        pytest.skip("No container defined in env")
+    component = component.strip()
+    if not container_name or not component:
+        pytest.skip("Invalid container or component")
 
     if not decoupled_sbom_path:
         pytest.skip("DECOUPLED_COMPONENTS_SBOM not defined in env, skipping SBOM verification")
@@ -322,7 +352,7 @@ def test_verify_sbom(container_name, container_type):
 
     assert container.status == "running"
 
-    sbom_dir = f"{decoupled_sbom_path}/pgedge-rag-server"
+    sbom_dir = f"{decoupled_sbom_path}/{component}"
 
     if container_type == "rhel":
         print(f"\n--- Verifying SBOM on {container_name} (RHEL) in {sbom_dir} ---")
@@ -338,9 +368,9 @@ def test_verify_sbom(container_name, container_type):
         # Verify SBOM signature
         exit_code, output = container.exec_run(
             f"sh -c 'cd {sbom_dir} && sq verify "
-            f"--signature-file pgedge-rag-server-sbom.json.asc "
+            f"--signature-file {rag_sbom_basename}.asc "
             f"--signer-file pgedge-rsa.pub "
-            f"pgedge-rag-server-sbom.json'",
+            f"{rag_sbom_basename}'",
             user="root",
         )
         output_str = output.decode().replace('\xa0', ' ')
@@ -362,8 +392,8 @@ def test_verify_sbom(container_name, container_type):
         exit_code, output = container.exec_run(
             f"sh -c 'cd {sbom_dir} && sq verify "
             f"{_sq_signer_flag} /etc/apt/keyrings/pgedge-rsa.gpg "
-            f"{_sq_sig_flag} pgedge-rag-server-sbom.json.asc "
-            f"pgedge-rag-server-sbom.json'",
+            f"{_sq_sig_flag} {rag_sbom_basename}.asc "
+            f"{rag_sbom_basename}'",
             user="root",
         )
         output_str = output.decode().replace('\xa0', ' ')

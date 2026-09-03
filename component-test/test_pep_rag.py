@@ -528,9 +528,13 @@ def test_rag_identity(container_name, container_type, component):
     }
 
     # record_identity_verdict persists the evidence BEFORE returning problems, so a
-    # failing assertion below never loses it.
+    # failing assertion below never loses it. It also writes an audit-only
+    # observed-identity.json (the actual package/binary observed) to PEP_OBSERVED_OUT
+    # -- a SEPARATE file that never affects the verdict; identity_out stays strict.
+    observed_out = os.getenv("PEP_OBSERVED_OUT", "test-logs/observed-identity.json")
     ev, problems = pep_evidence.record_identity_verdict(
-        observed, req, identity_out, binary_missing=binary_missing)
+        observed, req, identity_out, binary_missing=binary_missing,
+        run_token=run_token, observed_out=observed_out)
     print(f"identity evidence ({component}): {ev}")
 
     assert not problems, "; ".join(problems)

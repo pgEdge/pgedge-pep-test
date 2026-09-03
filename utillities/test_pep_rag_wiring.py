@@ -176,7 +176,8 @@ def test_identity_delegates_observations_and_fails_on_problems(monkeypatch, tmp_
 
     captured = {}
 
-    def spy_record(observed, request, out_path, *, binary_missing=False):
+    def spy_record(observed, request, out_path, *, binary_missing=False,
+                   run_token=None, observed_out=None):
         captured["observed"] = observed
         captured["request"] = request
         captured["binary_missing"] = binary_missing
@@ -207,7 +208,8 @@ def test_identity_passes_when_helper_returns_no_problems(monkeypatch, tmp_path):
 
     seen = {"called": 0}
 
-    def ok_record(observed, request, out_path, *, binary_missing=False):
+    def ok_record(observed, request, out_path, *, binary_missing=False,
+                  run_token=None, observed_out=None):
         seen["called"] += 1
         return ({"l2a": "not_attempted", "l2b": "not_attempted", "l1": "proven"}, [])
 
@@ -236,6 +238,9 @@ def _wire_integration(monkeypatch, tmp_path, req, run_token="run-A"):
     ident = str(tmp_path / "identity-evidence.json")
     monkeypatch.setenv("PEP_INSTALL_OUT", inst)
     monkeypatch.setenv("PEP_IDENTITY_OUT", ident)
+    # Route the audit-only observed-identity file to tmp too, so no wiring test
+    # writes into the repo's test-logs/.
+    monkeypatch.setenv("PEP_OBSERVED_OUT", str(tmp_path / "observed-identity.json"))
     monkeypatch.setenv("PEP_RUN_TOKEN", run_token)
     return inst, ident
 
@@ -261,6 +266,18 @@ def test_install_writes_scope_marker_then_identity_passes(monkeypatch, tmp_path)
     rag.test_rag_identity("c1", "deb", "pgedge-rag-server")   # must NOT raise
     ev = json.loads(open(ident).read())
     assert set(ev) == {"l2a", "l2b", "l1"} and ev["l2a"] == "proven" and ev["l1"] == "proven"
+
+    # The REAL path passes PEP_OBSERVED_OUT through to record_identity_verdict, so
+    # the audit-only observed-identity.json is written with the actual observations
+    # (binary as the PARSED token), while identity-evidence.json stays strict above.
+    observed = json.loads(open(str(tmp_path / "observed-identity.json")).read())
+    assert observed["run_token"] == "run-A"
+    assert observed["target"]["package_name"] == "pgedge-rag-server"
+    assert observed["observed"] == {
+        "package_manager_version": "1.0.0~beta1-1.trixie",
+        "binary_version": "1.0.0",                 # parsed from "Version: 1.0.0"
+        "component_version": "1.0.0~beta1-1.trixie",
+    }
 
 
 def _assert_precondition_failure(ident_path, excinfo, needle):

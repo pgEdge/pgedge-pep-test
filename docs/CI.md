@@ -408,6 +408,13 @@ jobs:
 
 Every call **always** uploads the `test-logs/` directory, but **its contents vary by outcome**. A `preview`/validation call produces a subset (e.g. `summary.json`, `provenance.json`, and — once the resolver runs — `resolved-config.json`), with no install/identity evidence or product reports. A **successful full run** additionally supplies `install-evidence.json`, `identity-evidence.json`, the `current-run.json` manifest, and the JUnit/HTML test reports. The artifact name is built from the target dimensions; when a single GitHub run calls this workflow more than once with otherwise-identical dimensions (e.g. two calls differing only by `mode`), give each call a distinct `invocation_id` — `upload-artifact` forbids duplicate names within one run, and `invocation_id` is the discriminator folded into the name (charset `A-Za-z0-9._-`, ≤64).
 
+**`identity-evidence.json` vs `observed-identity.json`.** These are two different files with two different jobs:
+
+- **`identity-evidence.json`** is the **authoritative verdict**: exactly `{l2a, l2b, l1}`, each `proven` / `not_proven` / `not_attempted`. This is what the run's identity outcome is judged on.
+- **`observed-identity.json`** is **audit-only** — it never affects the verdict, execution status, or rung calculation. It records, for later inspection, the raw run and complete target scope (`run_token` + the same target fields as `install-evidence.json`), the package-manager identity actually observed, the parsed binary version, and the value used for the L1 component comparison. It exists so you can see *which exact package was installed* — especially in an L1-only run, where no `expected_*` pins are supplied and the rung verdict alone doesn't name the build.
+
+`observed-identity.json` is written once a **full** run reaches identity observation — including an **identity-mismatch** run (the observations are recorded before the verdict, so a failing match still leaves them). A `preview` run, an early validation/setup failure, or any run that never reaches identity observation may not produce it.
+
 ### What L1 / L2a / L2b actually prove
 
 - **L2a — exact package-manager version-release identity (strong):** the installed package's exact NVR (RPM) or `Version` (DEB) string equals the caller's `expected_rpm`/`expected_deb`. Proves the exact package-manager version-release was installed.

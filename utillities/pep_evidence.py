@@ -15,8 +15,17 @@ _pv_spec = _ilu.spec_from_file_location(
 _pv = _ilu.module_from_spec(_pv_spec)
 _pv_spec.loader.exec_module(_pv)
 
+# pep_identity is loaded by path (mirrors the pep_verify load above) so the
+# observed-identity writer can record the PARSED binary token via the same
+# parser identity verification uses -- never a re-implementation, never raw output.
+_pid_spec = _ilu.spec_from_file_location(
+    "pep_identity", str(_Path(__file__).with_name("pep_identity.py")))
+_pid = _ilu.module_from_spec(_pid_spec)
+_pid_spec.loader.exec_module(_pid)
 
-def record_identity_verdict(observed, request, out_path, *, binary_missing=False):
+
+def record_identity_verdict(observed, request, out_path, *, binary_missing=False,
+                            run_token=None, observed_out=None):
     """Assert per-rung identity, PERSIST it, and return (evidence, problems).
 
     evidence is the {l2a, l2b, l1} dict from pep_verify.assert_identity. problems
@@ -37,6 +46,13 @@ def record_identity_verdict(observed, request, out_path, *, binary_missing=False
     p = _Path(out_path)
     p.parent.mkdir(parents=True, exist_ok=True)
     p.write_text(_json.dumps(ev))
+    # Audit-only observed identity values, written to a SEPARATE file BEFORE problems
+    # are computed (same durability guarantee as the strict evidence above), so a
+    # failing assertion never loses the actual package/binary that was observed.
+    # This file NEVER feeds ev/problems -- it is written from `observed`, which was
+    # already frozen into `ev` on the line above.
+    if observed_out is not None:
+        write_observed_identity(observed, request, run_token or "", observed_out)
     now = request["attemptable_now"]
     problems = []
     if binary_missing and now["l2b"]:
@@ -83,6 +99,51 @@ def build_install_evidence(request, run_token, install_kind, install_token):
 def write_install_evidence(request, run_token, install_kind, install_token, out_path):
     """Build + persist the install scope marker; returns the written object."""
     obj = build_install_evidence(request, run_token, install_kind, install_token)
+    p = _Path(out_path)
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text(_json.dumps(obj))
+    return obj
+
+
+# --- Audit-only observed identity (SEPARATE from strict identity-evidence.json) ---
+# Records the observed identity values gathered during a FULL integration identity
+# run so the exact package/binary that was installed is auditable -- including L1-only
+# runs where no expected_* pins were supplied. Its contents are purely for audit:
+# they never influence the verdict, execution status, or rung calculation, and
+# identity-evidence.json stays exactly {l2a,l2b,l1}.
+
+
+def build_observed_identity(observed, request, run_token):
+    """Build the audit-only observed-identity object, bound to this run + target.
+
+    Records exactly the three values identity verification consumes, and nothing
+    else: the exact package-manager identity (the L2a input), the PARSED binary
+    version token (via the same parser L2b uses -- not the raw command output),
+    and the value used for the L1 component comparison. Reuses `_target_of` so the
+    complete target scope matches install-evidence.json rather than duplicating a
+    partial copy."""
+    fam = request["family"]
+    pm_identity = observed.get("rpm") if fam == "rpm" else observed.get("deb")
+    raw_binary = observed.get("binary")
+    return {
+        "run_token": run_token,
+        "target": _target_of(request),
+        "observed": {
+            # exact package-manager identity string (rpm NVR / deb Version) -- the
+            # same observation L2a compares; not arbitrary command output.
+            "package_manager_version": pm_identity,
+            # parsed binary version token via pep_identity.parse_binary_version --
+            # the same token L2b compares; None if absent or unparseable.
+            "binary_version": _pid.parse_binary_version(raw_binary) if raw_binary is not None else None,
+            # the value L1's component_version_matches() is run against.
+            "component_version": observed.get("component_version"),
+        },
+    }
+
+
+def write_observed_identity(observed, request, run_token, out_path):
+    """Build + persist the audit-only observed-identity file; returns the object."""
+    obj = build_observed_identity(observed, request, run_token)
     p = _Path(out_path)
     p.parent.mkdir(parents=True, exist_ok=True)
     p.write_text(_json.dumps(obj))

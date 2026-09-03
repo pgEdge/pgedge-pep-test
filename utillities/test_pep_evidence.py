@@ -93,6 +93,80 @@ def test_non_attemptable_rungs_do_not_fail(tmp_path):
     assert problems == [] and ev["l2a"] == "not_attempted"
 
 
+# --- Audit-only observed-identity.json (separate from strict identity-evidence) -----
+
+def _scoped_req(**o):
+    # A request carrying the FULL target scope, so observed-identity's target can be
+    # checked against _target_of (not a partial duplicate).
+    return _req(arch="amd64", pg_major="17", container_alias="rocky9-amd64",
+                channel="staging", **o)
+
+
+def test_observed_identity_persists_scoped_observations_and_leaves_evidence_strict(tmp_path):
+    ident = tmp_path / "identity.json"
+    obsv = tmp_path / "observed.json"
+    r = _scoped_req(attemptable_now={"l2a": True, "l2b": True, "l1": True},
+                    expected_rpm="1.0.0-beta1_1.el9", expected_binary="1.0.0-beta1")
+    obs = _observed(rpm="1.0.0-beta1_1.el9", binary="Version: 1.0.0-beta1",
+                    component_version="1.0.0-beta1_1.el9")
+    ev, problems = ev_mod.record_identity_verdict(
+        obs, r, str(ident), run_token="run-1", observed_out=str(obsv))
+    assert problems == [] and ev == {"l2a": "proven", "l2b": "proven", "l1": "proven"}
+    # identity-evidence.json stays EXACTLY {l2a,l2b,l1} -- no observed data leaks in.
+    assert json.loads(ident.read_text()) == {"l2a": "proven", "l2b": "proven", "l1": "proven"}
+    # observed-identity.json carries run_token, the complete target scope, and the
+    # three consumed observations -- the binary as the PARSED token, not raw output.
+    doc = json.loads(obsv.read_text())
+    assert doc["run_token"] == "run-1"
+    assert doc["target"] == ev_mod._target_of(r)
+    assert doc["observed"] == {
+        "package_manager_version": "1.0.0-beta1_1.el9",
+        "binary_version": "1.0.0-beta1",              # parsed, NOT "Version: 1.0.0-beta1"
+        "component_version": "1.0.0-beta1_1.el9",
+    }
+
+
+def test_observed_identity_is_audit_only_and_does_not_change_verdict(tmp_path):
+    # Writing the audit file must not alter ev/problems vs. not writing it.
+    r = _scoped_req(attemptable_now={"l2a": True, "l2b": False, "l1": True},
+                    expected_rpm="1.0.0-beta1_1.el9")
+    obs = _observed(rpm="1.0.0-beta1_1.el9", component_version="1.0.0-beta1_1.el9")
+    ev_a, prob_a = ev_mod.record_identity_verdict(obs, r, str(tmp_path / "a.json"))
+    ev_b, prob_b = ev_mod.record_identity_verdict(
+        obs, r, str(tmp_path / "b.json"), run_token="t", observed_out=str(tmp_path / "obs.json"))
+    assert (ev_a, prob_a) == (ev_b, prob_b)
+
+
+def test_observed_identity_survives_identity_mismatch(tmp_path):
+    obsv = tmp_path / "observed.json"
+    r = _scoped_req(attemptable_now={"l2a": True, "l2b": False, "l1": True},
+                    expected_rpm="1.0.0-beta1_1.el9")
+    obs = _observed(rpm="9.9.9-9.el9", component_version="9.9.9-9.el9")   # mismatch
+    ev, problems = ev_mod.record_identity_verdict(
+        obs, r, str(tmp_path / "id.json"), run_token="t", observed_out=str(obsv))
+    assert problems, "a mismatch must produce a problem"
+    # The audit file is written BEFORE the verdict, so the actual observed package
+    # is preserved even though identity failed.
+    assert json.loads(obsv.read_text())["observed"]["package_manager_version"] == "9.9.9-9.el9"
+
+
+def test_observed_identity_l1_only_records_actual_package_while_l2_not_attempted(tmp_path):
+    # Scenario 3: no expected_* pins -> l2a/l2b not_attempted, but the actual package
+    # selected by a latest install must still be recorded for audit.
+    obsv = tmp_path / "observed.json"
+    r = _scoped_req(attemptable_now={"l2a": False, "l2b": False, "l1": True},
+                    expected_version="2.0.0")
+    obs = _observed(rpm="2.0.0-beta1_1.el9", binary="Version: 2.0.0-beta1",
+                    component_version="2.0.0-beta1_1.el9")
+    ev, problems = ev_mod.record_identity_verdict(
+        obs, r, str(tmp_path / "id.json"), run_token="t", observed_out=str(obsv))
+    assert problems == []
+    assert ev["l2a"] == "not_attempted" and ev["l2b"] == "not_attempted" and ev["l1"] == "proven"
+    doc = json.loads(obsv.read_text())["observed"]
+    assert doc["package_manager_version"] == "2.0.0-beta1_1.el9"   # the ACTUAL package
+    assert doc["binary_version"] == "2.0.0-beta1"                  # parsed token, still recorded
+
+
 # --------------------------------------------------------------------------- Task 9:
 # install-before-identity scope marker + precondition + truthful precondition failure.
 

@@ -309,10 +309,13 @@ if [[ -n "${EXPECTED_VERSION:-}" || "${INTEGRATION_FLAG:-}" == "true" ]]; then
     export PEP_RUN_TOKEN="$(date +%s)-$$"
   fi
   # Remove the EFFECTIVE marker paths, honoring the same PEP_INSTALL_OUT /
-  # PEP_IDENTITY_OUT overrides the component test reads -- so the reset and the
-  # writer/reader always agree on which files count for this run.
+  # PEP_IDENTITY_OUT / PEP_OBSERVED_OUT overrides the component test reads -- so the
+  # reset and the writer/reader always agree on which files count for this run.
+  # (PEP_OBSERVED_OUT is the audit-only observed-identity.json; clearing it here
+  # keeps a previous run's observations from surviving into this one.)
   rm -f "${PEP_INSTALL_OUT:-test-logs/install-evidence.json}" \
-        "${PEP_IDENTITY_OUT:-test-logs/identity-evidence.json}"
+        "${PEP_IDENTITY_OUT:-test-logs/identity-evidence.json}" \
+        "${PEP_OBSERVED_OUT:-test-logs/observed-identity.json}"
 else
   unset PEP_INTEGRATION_MODE
 fi

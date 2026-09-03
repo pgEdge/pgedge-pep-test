@@ -95,7 +95,8 @@ def test_standalone_run_triggers_no_integration_behavior():
     # tests, run a pure standalone dry-run (NO integration flags), and assert
     # this run created none of them. Relies on serial execution of the unit
     # layer, which is how the plan runs it: `pytest utillities/test_pep_*.py`.
-    for f in ("test-logs/resolved-config.json", "test-logs/current-run.json"):
+    for f in ("test-logs/resolved-config.json", "test-logs/current-run.json",
+              "test-logs/observed-identity.json"):
         try:
             os.remove(f)
         except FileNotFoundError:
@@ -104,6 +105,7 @@ def test_standalone_run_triggers_no_integration_behavior():
     assert proc.returncode == 0, proc.stderr
     assert not os.path.exists("test-logs/resolved-config.json"), "standalone wrote resolved-config.json"
     assert not os.path.exists("test-logs/current-run.json"), "standalone wrote current-run.json"
+    assert not os.path.exists("test-logs/observed-identity.json"), "standalone wrote observed-identity.json"
     assert "[integration]" not in (proc.stdout + proc.stderr)
     # PEP_INTEGRATION_MODE must not appear as set in the standalone dry-run output
     assert "PEP_INTEGRATION_MODE" not in (proc.stdout + proc.stderr)
@@ -294,24 +296,32 @@ def test_reset_removes_default_install_and_identity_evidence():
     tl.mkdir(exist_ok=True)
     inst = tl / "install-evidence.json"
     ident = tl / "identity-evidence.json"
+    observed = tl / "observed-identity.json"
     inst.write_text('{"stale": true}')
     ident.write_text('{"l2a": "proven", "l2b": "proven", "l1": "proven"}')
+    observed.write_text('{"stale": true}')
     proc = _run(_BASE_ARGS)
     assert proc.returncode == 0, f"stdout:\n{proc.stdout}\nstderr:\n{proc.stderr}"
     assert not inst.exists(), "stale default install-evidence.json not removed by RESET"
     assert not ident.exists(), "stale default identity-evidence.json not removed by RESET"
+    assert not observed.exists(), "stale default observed-identity.json not removed by RESET"
 
 
 @_needs_tools
 def test_reset_respects_overridden_marker_paths(tmp_path):
-    # The runtime contract advertises PEP_INSTALL_OUT / PEP_IDENTITY_OUT overrides;
-    # RESET must clear the EFFECTIVE (overridden) paths, not just the defaults.
+    # The runtime contract advertises PEP_INSTALL_OUT / PEP_IDENTITY_OUT /
+    # PEP_OBSERVED_OUT overrides; RESET must clear the EFFECTIVE (overridden) paths,
+    # not just the defaults.
     inst = tmp_path / "install-evidence.json"
     ident = tmp_path / "identity-evidence.json"
+    observed = tmp_path / "observed-identity.json"
     inst.write_text('{"stale": true}')
     ident.write_text('{"l2a": "proven", "l2b": "proven", "l1": "proven"}')
+    observed.write_text('{"stale": true}')
     proc = _run(_BASE_ARGS, extra_env={
-        "PEP_INSTALL_OUT": str(inst), "PEP_IDENTITY_OUT": str(ident)})
+        "PEP_INSTALL_OUT": str(inst), "PEP_IDENTITY_OUT": str(ident),
+        "PEP_OBSERVED_OUT": str(observed)})
     assert proc.returncode == 0, f"stdout:\n{proc.stdout}\nstderr:\n{proc.stderr}"
     assert not inst.exists(), "RESET ignored PEP_INSTALL_OUT override"
     assert not ident.exists(), "RESET ignored PEP_IDENTITY_OUT override"
+    assert not observed.exists(), "RESET ignored PEP_OBSERVED_OUT override"

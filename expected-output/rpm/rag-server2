@@ -1,0 +1,11 @@
+/etc/logrotate.d/pgedge-rag-server2
+/etc/pgedge/pgedge-rag-server2.yaml
+/usr/pgedge/rag-server2/bin/pgedge-rag-server
+/usr/lib/systemd/system/pgedge-rag-server2.service
+/usr/lib/tmpfiles.d/pgedge-rag-server2.conf
+/usr/share/doc/pgedge-rag-server2/README.md
+/usr/share/licenses/pgedge-rag-server2/LICENCE.md
+/usr/pgedge/rag-server2/sbom/pgedge-rag-server-sbom.json
+/usr/pgedge/rag-server2/sbom/pgedge-rag-server-sbom.json.asc
+/var/lib/pgedge/rag-server2
+/var/log/pgedge/rag-server2

@@ -337,3 +337,208 @@ def test_certification_upgrade_guard_skips_when_upgrade_off(monkeypatch):
     monkeypatch.delenv("UPGRADE", raising=False)                     # == "false"
     with pytest.raises(pytest.skip.Exception):
         rag.test_rag_component_upgrade("c1", "deb", "pgedge-rag-server")
+
+
+# ------------------------------------------------ RAG2 caller-authority + fixture layout
+#
+# These drive the REAL functions with a normalized pgedge-rag-server2 integration
+# request. The binary/SBOM paths come from upstream's fixture-derived helpers
+# (get_rag_binary / get_rag_sbom) reading expected-output/{rpm,deb}/rag-server2 --
+# there is no parallel hardcoded layout map. Final RAG2 identities: RPM
+# 2.0.0-1.el9, binary/component version 2.0.0.
+
+
+def _rag2_rpm_req(**over):
+    """A REAL normalized RAG2 RPM integration request via the production adapter."""
+    base = {
+        "PEP_PACKAGE_NAME": "pgedge-rag-server2",
+        "PEP_EXPECTED_VERSION": "2.0.0",
+        "PEP_FAMILY": "rpm",
+        "PEP_CONTAINER_ALIAS": "rocky9-amd64",
+    }
+    base.update(over)
+    return _int_req(**base)
+
+
+def test_rag2_binary_layout_is_versioned_root():
+    # server2's binary lives under the versioned root; the basename stays
+    # pgedge-rag-server (only the directory carries the '2'). Both families agree.
+    assert rag.get_rag_binary("pgedge-rag-server2", "rhel") == \
+        "/usr/pgedge/rag-server2/bin/pgedge-rag-server"
+    assert rag.get_rag_binary("pgedge-rag-server2", "deb") == \
+        "/usr/pgedge/rag-server2/bin/pgedge-rag-server"
+
+
+def test_rag2_sbom_layout_is_versioned_root_with_shared_basename():
+    # SBOM directory carries the '2'; the file keeps the pgedge-rag-server basename.
+    for ctype in ("rhel", "deb"):
+        sbom_dir, sbom_name = rag.get_rag_sbom("pgedge-rag-server2", ctype)
+        assert sbom_dir == "/usr/pgedge/rag-server2/sbom"
+        assert sbom_name == "pgedge-rag-server-sbom.json"
+
+
+def test_integration_rag2_install_pins_request_package_not_config(monkeypatch):
+    # Caller-authoritative install: an integration request for pgedge-rag-server2
+    # with an explicit expected RPM installs the REQUEST package at the REQUEST
+    # identity. The parametrized component arg (a stale predecessor name) cannot leak.
+    req = _rag2_rpm_req(PEP_EXPECTED_RPM="2.0.0-1.el9")
+    assert req["package_name"] == "pgedge-rag-server2"
+    assert rag.pep_verify.choose_install(req)[0] == "pinned"
+    monkeypatch.setattr(rag, "INTEGRATION_REQUEST", req)
+    monkeypatch.setattr(rag, "client", _Client())
+    pinned = _Spy((True, "ok"))
+    ip = _Spy((True, "rhel", "installed"))
+    monkeypatch.setattr(rag.package_management, "install_pinned", pinned)
+    monkeypatch.setattr(rag.package_management, "install_package", ip)
+
+    # Stale predecessor passed as the parametrized component -- must NOT be installed.
+    rag.test_rag_component_install("c1", "rhel", "pgedge-rag-server")
+
+    assert len(pinned.calls) == 1
+    (a, _k) = pinned.calls[0]
+    assert a[1] == "pgedge-rag-server2"            # request package, not the config arg
+    assert a[2] == "2.0.0-1.el9"                   # exact request identity
+    assert ip.calls == []                          # latest path NOT used when pinned
+
+
+def test_integration_rag2_identity_queries_versioned_binary_and_records_evidence(
+        monkeypatch, tmp_path):
+    # Identity resolves the binary for the REQUEST package via the fixture-derived
+    # helper, so query_binary_version receives the versioned-root path. The gathered
+    # observations reach the existing evidence helper verbatim.
+    req = _rag2_rpm_req(PEP_EXPECTED_RPM="2.0.0-1.el9", PEP_EXPECTED_BINARY="2.0.0")
+    inst, _ident = _wire_integration(monkeypatch, tmp_path, req)
+    rag.pep_evidence.write_install_evidence(req, "run-A", "pinned", "2.0.0-1.el9", inst)
+    monkeypatch.setattr(rag.package_management, "query_installed_version",
+                        lambda c, pkg: "2.0.0-1.el9")
+
+    seen = {}
+
+    def qbv(c, path):
+        seen["path"] = path
+        return "Version: 2.0.0"
+
+    monkeypatch.setattr(rag.package_management, "query_binary_version", qbv)
+
+    captured = {}
+
+    def spy_record(observed, request, out_path, *, binary_missing=False,
+                   run_token=None, observed_out=None):
+        captured["observed"] = observed
+        captured["binary_missing"] = binary_missing
+        return ({"l2a": "proven", "l2b": "proven", "l1": "proven"}, [])
+
+    monkeypatch.setattr(rag.pep_evidence, "record_identity_verdict", spy_record)
+
+    # Stale predecessor as the parametrized component; the request drives resolution.
+    rag.test_rag_identity("c1", "rhel", "pgedge-rag-server")
+
+    assert seen["path"] == "/usr/pgedge/rag-server2/bin/pgedge-rag-server"
+    assert captured["binary_missing"] is False
+    assert captured["observed"]["rpm"] == "2.0.0-1.el9"
+    assert captured["observed"]["binary"] == "Version: 2.0.0"
+    assert captured["observed"]["component_version"] == "2.0.0-1.el9"
+
+
+def test_standalone_selection_stays_config_driven(monkeypatch):
+    # No integration request: the config-parametrized component IS the package
+    # installed -- legacy install_package receives that exact name, unpinned.
+    monkeypatch.setattr(rag, "INTEGRATION_REQUEST", None)
+    monkeypatch.setattr(rag, "client", _Client())
+    ip = _Spy((True, "rhel", "installed"))
+    pinned = _Spy((True, "out"))
+    monkeypatch.setattr(rag.package_management, "install_package", ip)
+    monkeypatch.setattr(rag.package_management, "install_pinned", pinned)
+
+    rag.test_rag_component_install("c1", "rhel", "pgedge-rag-server2")
+
+    assert len(ip.calls) == 1
+    assert ip.calls[0][0][1] == "pgedge-rag-server2"   # the config component, verbatim
+    assert pinned.calls == []                          # standalone never pins
+
+
+# ---------------------------------- caller-authoritative MATRIX (central selection)
+#
+# The whole package-scoped matrix is scoped to the caller in integration mode by a
+# single central override (_integration_component_lists), so bundled-file / SBOM /
+# stripping / uninstall combinations cannot target a config-named package or the
+# wrong platform. These prove the central mechanism, not per-test overrides.
+
+
+def test_integration_matrix_is_caller_package_and_family_only(monkeypatch):
+    # RPM request for server2 while the loaded config names the PREDECESSOR on BOTH
+    # platforms: the component lists collapse to server2/rhel-only, and the REAL
+    # matrix generator yields only (rhel_container, "rhel", "pgedge-rag-server2") --
+    # no deb combination, no predecessor. This scopes every package-scoped product
+    # test at once.
+    req = _rag2_rpm_req()
+    rhel, deb = rag._integration_component_lists(
+        req, ["pgedge-rag-server"], ["pgedge-rag-server"])
+    assert rhel == ["pgedge-rag-server2"]
+    assert deb == []
+
+    monkeypatch.setattr(rag, "rhel_rag_components", rhel)
+    monkeypatch.setattr(rag, "deb_rag_components", deb)
+    monkeypatch.setattr(rag, "all_containers", [("rocky9", "rhel"), ("debian13", "deb")])
+    combos = rag.generate_container_component_combinations()
+    assert combos == [("rocky9", "rhel", "pgedge-rag-server2")]
+
+
+def test_integration_l1_latest_installs_request_package(monkeypatch, tmp_path):
+    # L1/latest request (no explicit expected identity). Even with the predecessor
+    # passed as the parametrized component, install_package receives the REQUEST
+    # package -- the L1 branch is caller-authoritative, not config-driven.
+    req = _rag2_rpm_req()                                   # no expected_rpm -> latest
+    assert rag.pep_verify.choose_install(req) == ("latest", None)
+    monkeypatch.setattr(rag, "INTEGRATION_REQUEST", req)
+    monkeypatch.setattr(rag, "client", _Client())
+    monkeypatch.setenv("PEP_INSTALL_OUT", str(tmp_path / "install-evidence.json"))
+    ip = _Spy((True, "rhel", "installed"))
+    pinned = _Spy((True, "out"))
+    monkeypatch.setattr(rag.package_management, "install_package", ip)
+    monkeypatch.setattr(rag.package_management, "install_pinned", pinned)
+
+    rag.test_rag_component_install("c1", "rhel", "pgedge-rag-server")   # predecessor arg
+
+    assert len(ip.calls) == 1
+    assert ip.calls[0][0][1] == "pgedge-rag-server2"       # request package, not the arg
+    assert pinned.calls == []                              # latest path, never pinned
+
+
+def test_standalone_matrix_stays_config_driven(monkeypatch):
+    # No request: the central helper returns the configured lists unchanged, and the
+    # REAL matrix reflects config across both platforms.
+    rhel, deb = rag._integration_component_lists(
+        None, ["pgedge-rag-server"], ["pgedge-rag-server"])
+    assert rhel == ["pgedge-rag-server"]
+    assert deb == ["pgedge-rag-server"]
+
+    monkeypatch.setattr(rag, "rhel_rag_components", rhel)
+    monkeypatch.setattr(rag, "deb_rag_components", deb)
+    monkeypatch.setattr(rag, "all_containers", [("rocky9", "rhel"), ("debian13", "deb")])
+    combos = rag.generate_container_component_combinations()
+    assert combos == [
+        ("rocky9", "rhel", "pgedge-rag-server"),
+        ("debian13", "deb", "pgedge-rag-server"),
+    ]
+
+
+# ------------------------------------ caller-authoritative PLATFORM (family -> platform)
+#
+# The request family overrides any configured PLATFORM_FILTER, so container
+# selection — including the container-scoped prerequisite/repository steps — is
+# confined to the requested platform. Standalone keeps the configured value.
+
+
+def test_integration_family_overrides_configured_platform_filter():
+    # rpm request wins over a conflicting configured PLATFORM_FILTER=deb, and vice versa.
+    assert rag._effective_platform_filter(_rag2_rpm_req(), "deb") == "rpm"
+    assert rag._effective_platform_filter(_int_req(), "rpm") == "deb"   # _int_req is deb
+
+
+def test_standalone_honors_configured_platform_filter():
+    # No request: the configured env value is used verbatim (lowercased); empty means
+    # no filter (all platforms), preserving existing standalone behavior.
+    assert rag._effective_platform_filter(None, "deb") == "deb"
+    assert rag._effective_platform_filter(None, "RPM") == "rpm"
+    assert rag._effective_platform_filter(None, "") == ""

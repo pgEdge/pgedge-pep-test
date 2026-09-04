@@ -4,5 +4,5 @@
 /usr/share/doc/pgedge-nla-cli/LICENSE.md
 /usr/share/doc/pgedge-nla-cli/README.md.gz
 /usr/share/doc/pgedge-nla-cli/changelog.Debian.gz
-/usr/share/pgedge-nla-cli-sbom.json
-/usr/share/pgedge-nla-cli-sbom.json.asc
+/usr/share/pgedge-nla-cli/pgedge-nla-cli-sbom.json
+/usr/share/pgedge-nla-cli/pgedge-nla-cli-sbom.json.asc

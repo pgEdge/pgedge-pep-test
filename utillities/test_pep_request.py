@@ -131,6 +131,25 @@ def test_package_name_not_matching_component_rejected():
         pr.normalize_request(_base(package_name="pgedge-wrong"))
 
 
+def test_rag_canonical_package_server2_accepted():
+    # RAG 2.x: pgedge-rag-server2 is the canonical active package for component rag.
+    req = pr.normalize_request(_base(package_name="pgedge-rag-server2", expected_version="2.0.0"))
+    assert req["package_name"] == "pgedge-rag-server2"
+    assert req["expected_version"] == "2.0.0"
+
+
+def test_rag_predecessor_package_still_accepted():
+    # The predecessor pgedge-rag-server is not formally EOL and stays accepted.
+    req = pr.normalize_request(_base(package_name="pgedge-rag-server"))
+    assert req["package_name"] == "pgedge-rag-server"
+
+
+def test_rag_unrelated_package_rejected():
+    # An unrelated package for component rag is rejected.
+    with pytest.raises(pr.RequestError):
+        pr.normalize_request(_base(package_name="pgedge-postgres-mcp"))
+
+
 def test_expected_deb_with_rpm_family_rejected():
     # family is rpm (from _base); a DEB expected string is contradictory.
     with pytest.raises(pr.RequestError):

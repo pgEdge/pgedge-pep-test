@@ -3,8 +3,8 @@
 Implements the request rules from the design spec (sections 3 and 5):
 `expected_version` is REQUIRED and build-authoritative (never falls back to
 config); the scalar target fields (family/arch/pg_major/container_alias) are required.
-`component` must be known and `package_name` must be the package it maps to
-(COMPONENT_PACKAGES); an expected package-manager string must match the target
+`component` must be known and `package_name` must be one of the packages it maps
+to (COMPONENT_PACKAGES); an expected package-manager string must match the target
 family (`expected_rpm`->rpm, `expected_deb`->deb) or the request is rejected.
 
 Identity-rung classification is deliberately CONSERVATIVE about decision gate G6
@@ -40,10 +40,13 @@ VALID_FAMILIES = ("rpm", "deb")
 VALID_ARCHES = ("amd64", "arm64")
 VALID_MODES = ("observe", "gate")
 VALID_SCENARIOS = ("certification", "upgrade")
-# Known component -> canonical package mapping. The POC only wires 'rag'; extend
-# this table (not the call sites) as components are added. Validating the pair
-# rejects an unknown component or a package_name that does not belong to it.
-COMPONENT_PACKAGES = {"rag": "pgedge-rag-server"}
+# Known component -> accepted physical package name(s). The POC only wires 'rag';
+# extend this table (not the call sites) as components are added. Validating the
+# pair rejects an unknown component or a package_name that is not one of that
+# component's packages. For 'rag' the CANONICAL active package is
+# 'pgedge-rag-server2' (RAG 2.x); the predecessor 'pgedge-rag-server' is still
+# accepted (not formally EOL). The first entry is the canonical/active package.
+COMPONENT_PACKAGES = {"rag": ("pgedge-rag-server2", "pgedge-rag-server")}
 _BUILDNUM_RE = re.compile(r"^[A-Za-z0-9._]+$")   # e.g. 1, test1_1, beta3_1
 _PG_MAJOR_RE = re.compile(r"^\d+$")
 
@@ -94,14 +97,14 @@ def normalize_request(raw: dict, *, catalog_path=None) -> dict:
     if not isinstance(raw, dict):
         raise RequestError(f"request must be a dict, got {type(raw).__name__}")
 
-    # component must be known, and package_name must be the package that
-    # component maps to (rejects unknown components and mismatched pairs).
+    # component must be known, and package_name must be one of the packages that
+    # component maps to (rejects unknown components and unrelated package names).
     component = _enum(_require(raw, "component"), tuple(COMPONENT_PACKAGES), "component")
     package_name = _require(raw, "package_name")
-    if package_name != COMPONENT_PACKAGES[component]:
+    if package_name not in COMPONENT_PACKAGES[component]:
         raise RequestError(
             f"package_name {package_name!r} does not match component {component!r} "
-            f"(expected {COMPONENT_PACKAGES[component]!r})")
+            f"(expected one of {list(COMPONENT_PACKAGES[component])})")
     channel = _enum(_require(raw, "channel"), VALID_CHANNELS, "channel")
 
     # REQUIRED and build-authoritative — never fall back to config.

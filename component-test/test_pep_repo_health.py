@@ -1,5 +1,6 @@
 import json
 import os
+import re
 import sys
 import subprocess
 from pathlib import Path
@@ -231,6 +232,44 @@ def get_preload_libraries(container_type):
     return libs
 
 
+# Packaging-release comparison.
+#
+# package_management.normalize_version() deliberately drops the packaging
+# release, so '16.15-2', '16.15-3' and a bare '16.15' all normalize to
+# '16.15.0'. That is the right default for components whose configured value
+# tracks only the upstream version, but it silently ignores a release the
+# config does pin — PGEDGE_ENTERPRISE_ALL_16_VERSION=16.15-2 names one specific
+# rebuild of 16.15, and without this check any rebuild would satisfy it.
+#
+# repo_health therefore opts in by the shape of the configured value: when it
+# ends in -<digits> the release is compared as well. Values with no release, and
+# pre-release forms like '1.0.0-beta2', keep the existing looser behaviour.
+_RELEASE_PINNED_RE = re.compile(r'^\d+(?:\.\d+)*-\d+$')
+
+
+def _packaging_release(version):
+    """Return the packaging release from a version string, or None if it has none.
+
+    Copes with both platforms' shapes:
+        RPM  '16.15-2.el9'   -> '2'
+        DEB  '16.15-2.jammy' -> '2'
+        DEB  '16.15-2'       -> '2'
+        any  '16.15'         -> None
+        any  '1.0.0-beta2'   -> None  (pre-release, not a packaging release)
+    """
+    if not version:
+        return None
+
+    trimmed = version.strip()
+    # Drop the RPM dist tag (.el9, .rocky9, ...) then any Debian codename
+    # suffix (.jammy, .trixie, ...), leaving <upstream>-<release>.
+    trimmed = re.sub(r'\.(?:el|rhel|centos|rocky|alma|fc|oel)\w*$', '', trimmed)
+    trimmed = re.sub(r'\.[a-z]+$', '', trimmed)
+
+    match = re.search(r'-(\d+(?:\.\d+)*)$', trimmed)
+    return match.group(1) if match else None
+
+
 def get_container_config(container_type):
     """Get configuration based on container type (rhel or deb)"""
     if container_type == "rhel":
@@ -440,11 +479,31 @@ def test_verify_package_versions(container_name, container_type):
             success, platform, installed_version, message = package_management.verify_package_version(
                 container, pkg, expected_version
             )
-            if success:
-                print(f"   ✅ {pkg}: {message}")
-            else:
+            if not success:
                 print(f"   ❌ {pkg}: {message}")
                 failed_verifications.append(f"{pkg} (expected: {expected_version})")
+                continue
+
+            # The comparison above ignores the packaging release. When the
+            # configured value pins one, hold the install to it as well.
+            if _RELEASE_PINNED_RE.match(expected_version.strip()):
+                expected_release = _packaging_release(expected_version)
+                installed_release = _packaging_release(installed_version)
+                if installed_release != expected_release:
+                    print(
+                        f"   ❌ {pkg}: release mismatch — expected release "
+                        f"{expected_release!r} (from {expected_version}), got "
+                        f"{installed_release!r} (from {installed_version})"
+                    )
+                    failed_verifications.append(
+                        f"{pkg} (expected release {expected_release} from "
+                        f"{expected_version}, installed {installed_version})"
+                    )
+                    continue
+                print(f"   ✅ {pkg}: {message} (release {installed_release} matches)")
+                continue
+
+            print(f"   ✅ {pkg}: {message}")
         except Exception as e:
             print(f"   ❌ {pkg}: {str(e)}")
             failed_verifications.append(f"{pkg} ({str(e)})")

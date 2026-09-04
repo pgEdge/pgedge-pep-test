@@ -42,16 +42,12 @@ deb_rag_components = [c.strip() for c in os.getenv("DEB_RAG_COMPONENTS", "").spl
 # RAG Component versions
 rag_server_version = os.getenv("PGEDGE_RAG_SERVER_VERSION", "")
 
-# Every RAG package follows the same layout: the binary is /usr/bin/<package>,
-# the SBOM lives under /usr/share/<package>/, and the expected-output file is
-# the package name minus the 'pgedge-' prefix. Both maps are therefore keyed off
-# the configured component list rather than hardcoded names, so switching
-# RAG_COMPONENTS / DEB_RAG_COMPONENTS between pgedge-rag-server and
-# pgedge-rag-server2 needs no edit here.
-#
-# Hardcoding "pgedge-rag-server" previously meant a server2 run silently skipped
-# the package-version, binary-version and binary-stripped checks — the map
-# lookups missed, and each test skips on an empty value.
+# Keyed off the configured component list rather than hardcoded names, so
+# switching RAG_COMPONENTS / DEB_RAG_COMPONENTS between pgedge-rag-server and
+# pgedge-rag-server2 needs no edit here. Hardcoding "pgedge-rag-server"
+# previously meant a server2 run silently skipped the package-version,
+# binary-version and binary-stripped checks — the map lookups missed, and each
+# of those tests skips on an empty value.
 _rag_components_all = list(dict.fromkeys(rhel_rag_components + deb_rag_components))
 
 # pgedge-rag-server and pgedge-rag-server2 are the same component and share
@@ -65,19 +61,60 @@ rag_version_map = {
     for component in _rag_components_all
 }
 
-# Binary path mapping for RAG components
-rag_binary_map = {
-    component: f"/usr/bin/{component}"
-    for component in _rag_components_all
-}
-
-# Decoupled components SBOM path
+# Decoupled components SBOM path (fallback only — see below)
 decoupled_sbom_path = os.getenv("DECOUPLED_COMPONENTS_SBOM", "")
 
-# The SBOM directory is package-specific (/usr/share/pgedge-rag-server2/) but
-# the file inside keeps the pgedge-rag-server basename even in the server2
-# package — confirmed against expected-output/{rpm,deb}/rag-server2.
-rag_sbom_basename = os.getenv("RAG_SBOM_BASENAME", "pgedge-rag-server-sbom.json")
+# The two RAG packages do NOT share a filesystem layout:
+#
+#   pgedge-rag-server   binary /usr/bin/pgedge-rag-server
+#                       sbom   /usr/share/pgedge-rag-server/
+#   pgedge-rag-server2  binary /usr/pgedge/rag-server2/bin/pgedge-rag-server
+#                       sbom   /usr/pgedge/rag-server2/sbom/
+#
+# Note server2's binary basename is still 'pgedge-rag-server' — only the
+# directory carries the '2'. Any rule derived from the package name alone gets
+# this wrong, so the paths are read out of the expected-output file for the
+# package instead. That file is already the authority on what the package
+# ships, and test_verify_bundled_files checks it against the real install, so a
+# stale entry fails loudly there rather than silently mistargeting these tests.
+
+
+def _expected_output_entries(component, container_type):
+    """Return the recorded file list for a package, or [] if there is none.
+
+    Mirrors the expected-output name derivation in file_management so both look
+    up the same file: strip the 'pgedge-' prefix and any trailing _<PG> suffix.
+    """
+    platform_dir = "rpm" if container_type == "rhel" else "deb"
+    base_name = component.replace("pgedge-", "").rsplit('_', 1)[0]
+    path = Path(__file__).parent.parent / "expected-output" / platform_dir / base_name
+    if not path.exists():
+        return []
+    return [line.strip() for line in path.read_text().splitlines() if line.strip()]
+
+
+def get_rag_binary(component, container_type):
+    """Resolve the installed binary path for a RAG package.
+
+    Falls back to the flat /usr/bin/<package> layout when the package has no
+    expected-output file to read.
+    """
+    for entry in _expected_output_entries(component, container_type):
+        if "/bin/" in entry and os.path.basename(entry).startswith("pgedge-rag"):
+            return entry
+    return f"/usr/bin/{component}"
+
+
+def get_rag_sbom(component, container_type):
+    """Resolve (sbom_directory, sbom_filename) for a RAG package.
+
+    The filename is read rather than assumed: server2 ships its SBOM as
+    pgedge-rag-server-sbom.json despite being the server2 package.
+    """
+    for entry in _expected_output_entries(component, container_type):
+        if entry.endswith("-sbom.json"):
+            return os.path.dirname(entry), os.path.basename(entry)
+    return f"{decoupled_sbom_path}/{component}", "pgedge-rag-server-sbom.json"
 
 
 def get_container_config(container_type):
@@ -342,8 +379,9 @@ def test_verify_sbom(container_name, container_type, component):
     if not container_name or not component:
         pytest.skip("Invalid container or component")
 
-    if not decoupled_sbom_path:
-        pytest.skip("DECOUPLED_COMPONENTS_SBOM not defined in env, skipping SBOM verification")
+    sbom_dir, rag_sbom_basename = get_rag_sbom(component, container_type)
+    if not sbom_dir:
+        pytest.skip(f"No SBOM path resolved for {component}, skipping SBOM verification")
 
     try:
         container = client.containers.get(container_name)
@@ -352,7 +390,6 @@ def test_verify_sbom(container_name, container_type, component):
 
     assert container.status == "running"
 
-    sbom_dir = f"{decoupled_sbom_path}/{component}"
 
     if container_type == "rhel":
         print(f"\n--- Verifying SBOM on {container_name} (RHEL) in {sbom_dir} ---")
@@ -413,7 +450,7 @@ def test_rag_binary_version(container_name, container_type, component):
     if not container_name or not component:
         pytest.skip("No container or component defined")
 
-    binary_path = rag_binary_map.get(component, "")
+    binary_path = get_rag_binary(component, container_type)
     if not binary_path:
         pytest.skip(f"No binary path defined for {component}")
 
@@ -466,7 +503,7 @@ def test_rag_binary_stripped(container_name, container_type, component):
     if not container_name or not component:
         pytest.skip("No container or component defined")
 
-    binary_path = rag_binary_map.get(component, "")
+    binary_path = get_rag_binary(component, container_type)
     if not binary_path:
         pytest.skip(f"No binary path defined for {component}")
 

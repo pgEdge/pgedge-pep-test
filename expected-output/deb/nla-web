@@ -1,11 +1,13 @@
 /etc/nginx/sites-available/pgedge-nla-web
+/etc/nginx/conf.d/pgedge-nla-web.conf
+/usr/share/pgedge/nla-web/index.html
 /usr/share/doc/pgedge-nla-web/LICENSE.md
 /usr/share/doc/pgedge-nla-web/README.md.gz
 /usr/share/doc/pgedge-nla-web/changelog.Debian.gz
 /usr/share/pgedge/nla-web/favicon.ico
 /usr/share/pgedge/nla-web/index.html
-/usr/share/pgedge-nla-web-sbom.json
-/usr/share/pgedge-nla-web-sbom.json.asc
+/usr/share/pgedge-nla-web/pgedge-nla-web-sbom.json
+/usr/share/pgedge-nla-web/pgedge-nla-web-sbom.json.asc
 /var/log/pgedge/nla-web
 
 

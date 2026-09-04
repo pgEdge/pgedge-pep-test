@@ -1,6 +1,7 @@
 import os
 import sys
 import subprocess
+import importlib.util as _ilu
 from pathlib import Path
 from datetime import datetime
 
@@ -12,8 +13,28 @@ from dotenv import load_dotenv
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 from aspects import configure_repository, package_management, machine_cleanup, machine_prereq_setup, file_management, container_management
 
+
+def _load_util(name):
+    """Load a utillities/ module by path (no package __init__ there), so these
+    imports work however this file is loaded."""
+    spec = _ilu.spec_from_file_location(
+        name, os.path.join(os.path.dirname(__file__), '..', 'utillities', name + '.py'))
+    mod = _ilu.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+pep_request_env = _load_util('pep_request_env')
+pep_verify = _load_util('pep_verify')
+pep_evidence = _load_util('pep_evidence')
+
 load_dotenv()
 client = docker.from_env()
+
+# Integration request built from the PEP_* env contract. It is None in standalone
+# mode (marker unset), which keeps every legacy code path below unchanged; when it
+# is set, the install decision and the consolidated identity test take over.
+INTEGRATION_REQUEST = pep_request_env.build_request_from_env()
 
 # Load values from env
 rhel_containers = [c.strip() for c in os.getenv("CONTAINERS", "").split(",") if c.strip()]
@@ -22,8 +43,22 @@ deb_containers = [c.strip() for c in os.getenv("DEB_CONTAINERS", "").split(",") 
 # Combine all containers with their type
 all_containers = [(c, "rhel") for c in rhel_containers] + [(c, "deb") for c in deb_containers]
 
-# Filter containers based on platform filter (if set)
-platform_filter = os.getenv("PLATFORM_FILTER", "").lower()
+def _effective_platform_filter(request, env_value):
+    """Platform filter for container selection.
+
+    In integration mode the request family is authoritative for the platform
+    (rpm -> rhel containers, deb -> deb) and OVERRIDES any configured
+    PLATFORM_FILTER, confining EVERY test — including the container-scoped
+    prerequisite/repository steps — to the requested platform. Standalone uses the
+    configured PLATFORM_FILTER env value unchanged.
+    """
+    if request is not None:
+        return request["family"]                           # "rpm" | "deb"
+    return (env_value or "").lower()
+
+
+# Filter containers based on the effective platform filter.
+platform_filter = _effective_platform_filter(INTEGRATION_REQUEST, os.getenv("PLATFORM_FILTER", ""))
 if platform_filter == "rpm":
     all_containers = [(c, t) for c, t in all_containers if t == "rhel"]
 elif platform_filter == "deb":
@@ -38,6 +73,33 @@ skip_cleanup = os.getenv("SKIP_CLEANUP", "false").lower() == "true"
 # RAG Components - standalone packages (no PG version suffix)
 rhel_rag_components = [c.strip() for c in os.getenv("RAG_COMPONENTS", "").split(",") if c.strip()]
 deb_rag_components = [c.strip() for c in os.getenv("DEB_RAG_COMPONENTS", "").split(",") if c.strip()]
+
+
+def _integration_component_lists(request, rhel_cfg, deb_cfg):
+    """Caller-authoritative RAG package/platform selection for integration mode.
+
+    Standalone (request is None) returns the configured lists unchanged. In
+    integration mode the request is authoritative for BOTH the physical package
+    and the platform: the sole package under test is request["package_name"], and
+    the family selects the platform (rpm -> rhel containers, deb -> deb). Collapsing
+    the lists here — once, before the parametrization matrix is built — makes every
+    package-scoped combination (install, bundled-files, SBOM, stripping, uninstall,
+    identity) target only the caller's package on the requested family, so no
+    product test can fall back to a config-named package or the wrong platform.
+    """
+    if request is None:
+        return rhel_cfg, deb_cfg
+    pkg = request["package_name"]
+    if request["family"] == "rpm":
+        return [pkg], []
+    return [], [pkg]
+
+
+# Apply the caller-authoritative selection once, so the matrix below (and every
+# product test parametrized from it) is already scoped to the request in
+# integration mode. Standalone leaves RAG_COMPONENTS / DEB_RAG_COMPONENTS intact.
+rhel_rag_components, deb_rag_components = _integration_component_lists(
+    INTEGRATION_REQUEST, rhel_rag_components, deb_rag_components)
 
 # RAG Component versions
 rag_server_version = os.getenv("PGEDGE_RAG_SERVER_VERSION", "")
@@ -224,12 +286,36 @@ def test_rag_component_install(container_name, container_type, component):
 
     print(f"\n--- Installing {component} on {container_name} ({container_type}) ---")
 
-    # Use the package_management module to install the package
     try:
-        success, platform, message = package_management.install_package(container, component)
-        assert success, f"Package installation failed: {message}"
-        print(f"✅ {message}")
-        print(f"✅ Platform detected: {platform}")
+        if INTEGRATION_REQUEST is not None:
+            # Integration mode: install per the request's decision.
+            req = INTEGRATION_REQUEST
+            kind, exact = pep_verify.choose_install(req)
+            if kind == "pinned":
+                # EXACT / L2a -- assert the result so a failed exact-version install
+                # fails loudly here instead of being papered over by identity later.
+                ok, out = package_management.install_pinned(container, req["package_name"], exact)
+                assert ok, f"pinned install of {req['package_name']}={exact} failed: {out}"
+                print(f"✅ pinned install: {req['package_name']}={exact}")
+            else:
+                # L1 degraded path -- latest, not pinned. Install the REQUEST
+                # package (caller-authoritative), never the parametrized config
+                # component, so an L1 run cannot install a config-named package.
+                ok, platform, message = package_management.install_package(container, req["package_name"])
+                assert ok, f"Package installation failed: {message}"
+                print(f"✅ {message} (L1/latest -- degraded, not pinned)")
+            # Record the install scope marker AFTER a successful install: binds this
+            # run + target so the identity test can enforce install-before-identity
+            # (a failed install raises above, so no marker is written -> identity fails).
+            install_out = os.getenv("PEP_INSTALL_OUT", "test-logs/install-evidence.json")
+            pep_evidence.write_install_evidence(
+                req, os.environ.get("PEP_RUN_TOKEN", ""), kind, exact, install_out)
+        else:
+            # Standalone mode: unchanged legacy behavior.
+            success, platform, message = package_management.install_package(container, component)
+            assert success, f"Package installation failed: {message}"
+            print(f"✅ {message}")
+            print(f"✅ Platform detected: {platform}")
     except Exception as e:
         pytest.fail(f"Failed to install {component}: {str(e)}")
 
@@ -277,6 +363,8 @@ def test_rag_component_upgrade(container_name, container_type, component):
 @pytest.mark.parametrize("container_name,container_type,component", all_container_component_combinations)
 def test_rag_component_version(container_name, container_type, component):
     """Step 3: Check the RAG component version using package_management module"""
+    if INTEGRATION_REQUEST is not None:
+        pytest.skip("integration mode: superseded by test_rag_identity")
     container_name = container_name.strip()
     component = component.strip()
 
@@ -444,6 +532,8 @@ def test_verify_sbom(container_name, container_type, component):
 @pytest.mark.parametrize("container_name,container_type,component", all_container_component_combinations)
 def test_rag_binary_version(container_name, container_type, component):
     """Verify RAG binary -version output matches expected version"""
+    if INTEGRATION_REQUEST is not None:
+        pytest.skip("integration mode: superseded by test_rag_identity")
     container_name = container_name.strip()
     component = component.strip()
 
@@ -492,6 +582,75 @@ def test_rag_binary_version(container_name, container_type, component):
         print(f"✅ Binary version matches: {actual_version}")
     except Exception as e:
         pytest.fail(f"Failed to verify {component} binary version: {str(e)}")
+
+
+@pytest.mark.parametrize("container_name,container_type,component", all_container_component_combinations)
+def test_rag_identity(container_name, container_type, component):
+    """Integration mode: one consolidated identity verdict. Gather every
+    observation in one place (so no test marks another's unobserved rung), persist
+    the evidence, then fail on any unmet attemptable rung. Skipped in standalone
+    mode, where the legacy version/binary tests above cover identity instead."""
+    req = INTEGRATION_REQUEST
+    if req is None:
+        pytest.skip("integration mode only")
+
+    container_name = container_name.strip()
+    component = component.strip()
+    if not container_name or not component:
+        pytest.skip("No container or component defined")
+
+    try:
+        container = client.containers.get(container_name)
+    except docker.errors.NotFound:
+        pytest.skip(f"Container {container_name} not found or not running.")
+
+    assert container.status == "running"
+
+    identity_out = os.getenv("PEP_IDENTITY_OUT", "test-logs/identity-evidence.json")
+
+    # Install-before-identity precondition: trust identity only if THIS run installed
+    # THIS target (scope marker written by test_rag_component_install). On any failure
+    # -- absent/stale/mismatched marker -- persist schema-valid zero-observation
+    # identity evidence (L2 rungs may be not_proven while L1 is not_attempted, since
+    # identity was never queried), so the run reports a truthful completed/fail rather
+    # than a masked infra_failure, and fail WITHOUT querying identity, so no
+    # post-replacement state can be certified.
+    install_out = os.getenv("PEP_INSTALL_OUT", "test-logs/install-evidence.json")
+    run_token = os.environ.get("PEP_RUN_TOKEN", "")
+    pre = pep_evidence.install_precondition_problems(
+        pep_evidence.load_json_object(install_out), req, run_token)
+    if pre:
+        reason = "; ".join(pre)
+        pep_evidence.record_precondition_failure(req, identity_out)
+        pytest.fail(f"install-before-identity precondition failed: {reason}")
+
+    fam = req["family"]
+    # Gather ALL observations together (read-only helpers from package_management).
+    pm_ver = package_management.query_installed_version(container, req["package_name"])
+    # Caller-authoritative: resolve the binary for the REQUEST package (not the
+    # config-parametrized component) via upstream's fixture-derived helper, using
+    # the actual container type so the right expected-output file is read.
+    binary_path = get_rag_binary(req["package_name"], container_type)
+    binary_missing = not binary_path
+    bin_ver = None if binary_missing else package_management.query_binary_version(container, binary_path)
+    observed = {
+        "rpm": pm_ver if fam == "rpm" else None,
+        "deb": pm_ver if fam == "deb" else None,
+        "binary": bin_ver,
+        "component_version": pm_ver,
+    }
+
+    # record_identity_verdict persists the evidence BEFORE returning problems, so a
+    # failing assertion below never loses it. It also writes an audit-only
+    # observed-identity.json (the actual package/binary observed) to PEP_OBSERVED_OUT
+    # -- a SEPARATE file that never affects the verdict; identity_out stays strict.
+    observed_out = os.getenv("PEP_OBSERVED_OUT", "test-logs/observed-identity.json")
+    ev, problems = pep_evidence.record_identity_verdict(
+        observed, req, identity_out, binary_missing=binary_missing,
+        run_token=run_token, observed_out=observed_out)
+    print(f"identity evidence ({component}): {ev}")
+
+    assert not problems, "; ".join(problems)
 
 
 @pytest.mark.parametrize("container_name,container_type,component", all_container_component_combinations)

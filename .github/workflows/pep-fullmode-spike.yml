@@ -1,25 +1,28 @@
 name: PEP full-mode spike (temporary)
 
 # TEMPORARY, THROWAWAY validation. It exercises the real reusable workflow in
-# FULL mode against the verified staging RAG2 fixtures, on a dedicated branch
-# only. This file now covers exactly TWO independent full-mode caller/assert
-# pairs against the reconciled feature merge (cfacd15):
+# FULL mode against the staging RAG2 DEB package, on a dedicated branch only.
 #
-#   1. Exact RAG2 RPM amd64  -> completed/pass, l2a/l2b/l1 proven.
-#   2. Exact RAG2 DEB amd64  -> completed/FAIL, l2a/l2b/l1 proven. The DEB run is
-#      EXPECTED to report a truthful product fail. This pair asserts ONLY that the
-#      caller stayed green in observe mode, execution completed with a product
-#      fail, all three identity rungs were proven, and an artifact was produced.
-#      The expected cause is the two package-confirmed bundled-file fixture
-#      differences (the .service path and the LICENCE.md case); the exact
-#      failing-test attribution and the SBOM result are NOT asserted here -- they
-#      will be established by inspecting the uploaded JUnit artifact after the run.
+# The exact RAG2 RPM amd64 pair is already proven by run 33907939659 (completed/
+# pass, l2a/l2b/l1 proven) and is intentionally NOT re-run here. This file now
+# covers a single scenario:
 #
-# Each pair is INDEPENDENT (if: always(), needs only its own caller) so one
-# failure never hides the other's evidence. Both the job-level `uses` ref and
-# pep_implementation_ref are pinned to the full feature SHA
-# cfacd1500b9f057cbc8fac85cc87751952a7979e. Delete this file and the branch after
-# review -- nothing here is meant to reach main.
+#   Exact RAG2 DEB amd64 -> completed/PASS, l2a/l2b/l1 proven.
+#
+# This CONFIRMS the actual current verifier result for the DEB package under the
+# pinned implementation. It asserts only that the caller stayed green in observe
+# mode, execution completed, the product verdict was pass, all three identity
+# rungs were proven, the channel resolved to staging, and an artifact was
+# produced. It does NOT prove byte/path/case-exact package contents: PEP's
+# bundled-file check normalizes paths to lowercase (case-insensitive) and accepts
+# the /lib vs /usr/lib service path via a Debian basename heuristic, so a pass
+# here is the verifier's current result, not an exact path-and-case match. Exact
+# package contents are established separately by inspecting the .deb with
+# dpkg-deb (see the follow-up note).
+#
+# Both the job-level `uses` ref and pep_implementation_ref are pinned to the full
+# feature SHA cfacd1500b9f057cbc8fac85cc87751952a7979e. Delete this file and the
+# branch after review -- nothing here is meant to reach main.
 on:
   push:
     branches:
@@ -29,98 +32,7 @@ permissions:
   contents: read
 
 jobs:
-  # ── Scenario 1: EXACT RAG2 RPM amd64 ───────────────────────────────────────
-  rag2-rpm-exact-amd64:
-    uses: pgEdge/pgedge-pep-test/.github/workflows/pep-integration.yml@cfacd1500b9f057cbc8fac85cc87751952a7979e
-    with:
-      component: rag
-      package_name: pgedge-rag-server2
-      channel: staging
-      expected_version: "2.0.0"
-      expected_rpm: "2.0.0-1.el9"
-      expected_binary: "2.0.0"
-      family: rpm
-      arch: amd64
-      pg_major: "17"
-      container_alias: rocky9-amd64
-      scenario: certification
-      mode: observe
-      execution_mode: full
-      invocation_id: rag2-rpm-exact-amd64
-      pep_implementation_ref: cfacd1500b9f057cbc8fac85cc87751952a7979e
-    secrets:
-      DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
-      DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
-
-  assert-rag2-rpm-exact-amd64:
-    needs: rag2-rpm-exact-amd64
-    if: ${{ always() }}
-    runs-on: ubuntu-24.04
-    env:
-      RESULT: ${{ needs.rag2-rpm-exact-amd64.result }}
-      EXEC: ${{ needs.rag2-rpm-exact-amd64.outputs.execution_status }}
-      VERDICT: ${{ needs.rag2-rpm-exact-amd64.outputs.test_verdict }}
-      IDENT: ${{ needs.rag2-rpm-exact-amd64.outputs.identity_evidence }}
-      CHANNEL: ${{ needs.rag2-rpm-exact-amd64.outputs.resolved_channel }}
-      ARTIFACT: ${{ needs.rag2-rpm-exact-amd64.outputs.summary_artifact }}
-      EXPECT_VERDICT: pass
-      EXPECT_L2A: proven
-      EXPECT_L2B: proven
-      EXPECT_L1: proven
-    steps:
-      - name: Assert exact RAG2 RPM amd64 acceptance
-        run: |
-          python3 - <<'PY'
-          import json, os, sys
-          result = os.environ.get("RESULT", "")
-          exec_status = os.environ.get("EXEC", "")
-          verdict = os.environ.get("VERDICT", "")
-          try:
-              ident = json.loads(os.environ.get("IDENT") or "{}")
-          except ValueError:
-              ident = {}
-          try:
-              channel = json.loads(os.environ.get("CHANNEL") or "{}")
-          except ValueError:
-              channel = {}
-          artifact = os.environ.get("ARTIFACT", "")
-          exp_verdict = os.environ.get("EXPECT_VERDICT", "")
-          exp_rung = {"l2a": os.environ.get("EXPECT_L2A"),
-                      "l2b": os.environ.get("EXPECT_L2B"),
-                      "l1": os.environ.get("EXPECT_L1")}
-
-          print(f"caller job result: {result!r}")
-          print(f"execution_status : {exec_status!r}")
-          print(f"test_verdict     : {verdict!r} (expected {exp_verdict!r})")
-          print(f"identity_evidence: {ident} (expected {exp_rung})")
-          print(f"resolved_channel : {channel}")
-          print(f"summary_artifact : {artifact!r}")
-
-          problems = []
-          # Observe mode is report-only: the reusable caller job must stay green.
-          if result != "success":
-              problems.append(f"reusable caller job must be 'success' (observe is report-only), got {result!r}")
-          if exec_status != "completed":
-              problems.append(f"execution_status must be 'completed', got {exec_status!r}")
-          if verdict != exp_verdict:
-              problems.append(f"test_verdict must be {exp_verdict!r}, got {verdict!r}")
-          for rung in ("l2a", "l2b", "l1"):
-              if ident.get(rung) != exp_rung[rung]:
-                  problems.append(f"identity {rung} must be {exp_rung[rung]!r}, got {ident.get(rung)!r}")
-          if channel.get("value") != "staging":
-              problems.append(f"resolved channel must be 'staging', got {channel!r}")
-          if not artifact:
-              problems.append("summary_artifact must be non-empty")
-
-          if problems:
-              print("\nAcceptance FAILED:")
-              for p in problems:
-                  print(f"  - {p}")
-              sys.exit(1)
-          print("\nAcceptance PASSED: exact RAG2 RPM install + identity proven (l2a/l2b/l1).")
-          PY
-
-  # ── Scenario 2: EXACT RAG2 DEB amd64 (expected truthful product FAIL) ───────
+  # ── Exact RAG2 DEB amd64 ────────────────────────────────────────────────────
   rag2-deb-exact-amd64:
     uses: pgEdge/pgedge-pep-test/.github/workflows/pep-integration.yml@cfacd1500b9f057cbc8fac85cc87751952a7979e
     with:
@@ -154,12 +66,12 @@ jobs:
       IDENT: ${{ needs.rag2-deb-exact-amd64.outputs.identity_evidence }}
       CHANNEL: ${{ needs.rag2-deb-exact-amd64.outputs.resolved_channel }}
       ARTIFACT: ${{ needs.rag2-deb-exact-amd64.outputs.summary_artifact }}
-      EXPECT_VERDICT: fail
+      EXPECT_VERDICT: pass
       EXPECT_L2A: proven
       EXPECT_L2B: proven
       EXPECT_L1: proven
     steps:
-      - name: Assert exact RAG2 DEB amd64 truthful report-only fail
+      - name: Assert exact RAG2 DEB amd64 current verifier result
         run: |
           python3 - <<'PY'
           import json, os, sys
@@ -188,21 +100,22 @@ jobs:
           print(f"summary_artifact : {artifact!r}")
 
           problems = []
-          # Truthful report-only. This step asserts ONLY: the caller stayed green
-          # in observe mode, execution completed with a product fail, all three
-          # identity rungs were proven, and an artifact was produced. The expected
-          # cause is the two package-confirmed bundled-file fixture differences,
-          # but the exact failing-test attribution and the SBOM result are NOT
-          # asserted here -- inspect the uploaded JUnit artifact after the run.
+          # Confirms the CURRENT verifier result for RAG2 DEB: caller stays green in
+          # observe mode, execution completes, product verdict is pass, all three
+          # identity rungs are proven, channel is staging, and an artifact exists.
+          # A pass here is the verifier's current result -- it does NOT prove
+          # byte/path/case-exact package contents (PEP lowercases paths and accepts
+          # /lib vs /usr/lib via a Debian basename heuristic). Exact contents are
+          # established separately by dpkg-deb inspection of the .deb.
           if result != "success":
               problems.append(f"reusable caller job must be 'success' (observe is report-only), got {result!r}")
           if exec_status != "completed":
-              problems.append(f"execution_status must be 'completed' (a known product diff, NOT an infra failure), got {exec_status!r}")
+              problems.append(f"execution_status must be 'completed', got {exec_status!r}")
           if verdict != exp_verdict:
-              problems.append(f"test_verdict must be {exp_verdict!r} (bundled-file fixture diff), got {verdict!r}")
+              problems.append(f"test_verdict must be {exp_verdict!r}, got {verdict!r}")
           for rung in ("l2a", "l2b", "l1"):
               if ident.get(rung) != exp_rung[rung]:
-                  problems.append(f"identity {rung} must be {exp_rung[rung]!r} (identity is unaffected by the bundled-file diff), got {ident.get(rung)!r}")
+                  problems.append(f"identity {rung} must be {exp_rung[rung]!r}, got {ident.get(rung)!r}")
           if channel.get("value") != "staging":
               problems.append(f"resolved channel must be 'staging', got {channel!r}")
           if not artifact:
@@ -213,9 +126,8 @@ jobs:
               for p in problems:
                   print(f"  - {p}")
               sys.exit(1)
-          print("\nAcceptance PASSED: caller stayed green under observe, execution "
-                "completed with a product fail, l2a/l2b/l1 all proven, and an artifact "
-                "was produced. Expected cause is the two bundled-file fixture "
-                "differences; confirm the exact failing test and the SBOM result by "
-                "inspecting the uploaded JUnit artifact.")
+          print("\nAcceptance PASSED: RAG2 DEB current verifier result confirmed -- caller "
+                "green under observe, execution completed, product verdict pass, l2a/l2b/l1 "
+                "proven, channel staging, artifact produced. This is the verifier's current "
+                "result, NOT a byte/path/case-exact package match.")
           PY

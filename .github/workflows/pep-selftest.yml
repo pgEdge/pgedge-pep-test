@@ -1,0 +1,159 @@
+name: PEP Self-Test
+on: {pull_request: {}, workflow_dispatch: {}}
+# Least privilege: this self-test only checks out and runs unit/lint layers.
+# Read-only contents is all the GITHUB_TOKEN needs; safe for a public repo where
+# forks trigger PRs. The reusable workflow is public and self-checks-out without a
+# token, so the caller jobs below pass no secrets.
+permissions:
+  contents: read
+jobs:
+  unit:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803  # v6.1.0
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1  # v6.3.0
+        with: {python-version: "3.11"}
+      - run: pip install -r requirements.txt
+      - name: Lint workflows (before anything relies on them)
+        # Container image pinned by immutable DIGEST (not a mutable tag): rhysd/actionlint:1.7.7.
+        # Scoped to the two PEP workflows this self-test introduces/depends on (integration +
+        # selftest) rather than the whole .github/workflows/ dir, so this self-test isn't
+        # coupled to the unrelated pre-existing pep-regression.yml breaking independently.
+        run: docker run --rm -v "$PWD:/repo" -w /repo rhysd/actionlint@sha256:887a259a5a534f3c4f36cb02dca341673c6089431057242cdc931e9f133147e9 -color .github/workflows/pep-integration.yml .github/workflows/pep-selftest.yml
+      - name: Unit layer (globs so later modules are picked up automatically)
+        # Finding 5: also run the pre-existing container-resolver and
+        # consolidated-report regression suites. The bridge (run_pep_tf.sh) shells
+        # out to container_resolver.py, so a regression there would break the
+        # integration path without any test_pep_*.py failing — these two named
+        # suites are NOT matched by the test_pep_*.py glob and must be run too.
+        run: pytest utillities/test_pep_*.py utillities/test_container_resolver.py utillities/test_ci_consolidated_report.py -v
+        # Phase 2a: test_pep_{identity,request,result_summary,version_normalize,
+        # version_normalize_characterization,resolve,request_env,bridge}.py plus the
+        # two regression suites above. Phase 2b adds test_pep_{verify,install_pinned}.py.
+        # Docker/CLI-dependent tests (e.g. test_pep_bridge) skip cleanly when
+        # preconditions are absent (but the dry-run bridge test does NOT skip on
+        # Docker absence — Task 3 Step 6).
+
+  preview-call:                     # caller job — no steps allowed
+    uses: ./.github/workflows/pep-integration.yml
+    with:
+      component: rag
+      package_name: pgedge-rag-server
+      channel: daily
+      expected_version: "0.0.0-selftest"
+      container_alias: rocky9-amd64
+      pg_major: "17"
+      family: rpm
+      arch: amd64
+      execution_mode: preview
+      invocation_id: preview          # item 1: unique per call so artifact names can't collide
+      pep_implementation_ref: ${{ github.sha }}
+
+  assert-preview:                   # SEPARATE downstream job reads the outputs
+    needs: preview-call
+    runs-on: ubuntu-24.04
+    steps:
+      - run: |
+          test "${{ needs.preview-call.outputs.execution_status }}" = "preview" \
+            || { echo "expected preview, got '${{ needs.preview-call.outputs.execution_status }}'"; exit 1; }
+          test "${{ needs.preview-call.outputs.test_verdict }}" = "not_run" || exit 1
+
+  # issue #12: prove an EXPECTED request/policy rejection is classified as VALIDATION
+  # (incomplete/not_run) — NOT preview, NOT infra_failure. scenario=upgrade is rejected
+  # by the bridge (exit 3) before dry-run, so this exercises the FW_CODE==3 branch.
+  validation-call:                  # caller job — scenario=upgrade in preview/observe
+    uses: ./.github/workflows/pep-integration.yml
+    with:
+      component: rag
+      package_name: pgedge-rag-server
+      channel: daily
+      expected_version: "0.0.0-selftest"
+      container_alias: rocky9-amd64
+      pg_major: "17"
+      family: rpm
+      arch: amd64
+      execution_mode: preview
+      mode: observe                 # observe -> summarizer exit 0, job still succeeds
+      scenario: upgrade             # unsupported in the POC -> expected rejection
+      invocation_id: validation-upgrade   # item 1: unique per call
+      pep_implementation_ref: ${{ github.sha }}
+
+  assert-validation:                # SEPARATE downstream job asserts the classification
+    needs: validation-call
+    runs-on: ubuntu-24.04
+    steps:
+      - run: |
+          st="${{ needs.validation-call.outputs.execution_status }}"
+          tv="${{ needs.validation-call.outputs.test_verdict }}"
+          test "$st" = "incomplete" \
+            || { echo "expected incomplete (validation), got '$st'"; exit 1; }
+          test "$tv" = "not_run" || { echo "expected not_run, got '$tv'"; exit 1; }
+          # explicit negative assertions: rejection must NOT masquerade as preview or infra
+          test "$st" != "preview"      || { echo "validation wrongly reported as preview"; exit 1; }
+          test "$st" != "infra_failure" || { echo "validation wrongly reported as infra_failure"; exit 1; }
+
+  # Finding 2 (negative workflow case): an unknown execution_mode must be
+  # classified as a VALIDATION rejection (incomplete/not_run) — never a
+  # false-green preview. mode=observe keeps the summarizer exit 0 so the caller
+  # job succeeds and this downstream job can read+assert the classification.
+  bad-execmode-call:
+    uses: ./.github/workflows/pep-integration.yml
+    with:
+      component: rag
+      package_name: pgedge-rag-server
+      channel: daily
+      expected_version: "0.0.0-selftest"
+      container_alias: rocky9-amd64
+      pg_major: "17"
+      family: rpm
+      arch: amd64
+      execution_mode: bogus         # invalid -> must be rejected, not treated as preview
+      mode: observe
+      invocation_id: bad-execmode    # item 1: unique per call
+      pep_implementation_ref: ${{ github.sha }}
+
+  assert-bad-execmode:
+    needs: bad-execmode-call
+    runs-on: ubuntu-24.04
+    steps:
+      - run: |
+          st="${{ needs.bad-execmode-call.outputs.execution_status }}"
+          tv="${{ needs.bad-execmode-call.outputs.test_verdict }}"
+          test "$st" = "incomplete" \
+            || { echo "expected incomplete (validation) for bad execution_mode, got '$st'"; exit 1; }
+          test "$tv" = "not_run" || { echo "expected not_run, got '$tv'"; exit 1; }
+          test "$st" != "preview" || { echo "invalid execution_mode wrongly reported as preview"; exit 1; }
+
+  # Finding 4 (negative workflow case, mode reaches the request): an invalid
+  # enforcement mode must be rejected on the REAL CI path — the workflow forwards
+  # inputs.mode to the bridge (--mode), which rejects it via normalize_request
+  # (exit 3 -> FW_CODE==3 -> validation). Proves the wiring, not just the unit
+  # test. execution_mode=preview is valid so the preflight passes and the fw step
+  # actually runs the bridge; mode=observe would be the normal path, so we send a
+  # bogus mode and assert it is classified as a validation rejection.
+  bad-mode-call:
+    uses: ./.github/workflows/pep-integration.yml
+    with:
+      component: rag
+      package_name: pgedge-rag-server
+      channel: daily
+      expected_version: "0.0.0-selftest"
+      container_alias: rocky9-amd64
+      pg_major: "17"
+      family: rpm
+      arch: amd64
+      execution_mode: preview       # valid -> fw runs the bridge
+      mode: bogus                   # invalid enforcement mode -> must be rejected
+      invocation_id: bad-mode        # item 1: unique per call (else collides with preview-call)
+      pep_implementation_ref: ${{ github.sha }}
+
+  assert-bad-mode:
+    needs: bad-mode-call
+    runs-on: ubuntu-24.04
+    steps:
+      - run: |
+          st="${{ needs.bad-mode-call.outputs.execution_status }}"
+          test "$st" = "incomplete" \
+            || { echo "expected incomplete (validation) for bad enforcement mode, got '$st'"; exit 1; }
+          test "$st" != "preview"      || { echo "bad mode wrongly reported as preview"; exit 1; }
+          test "$st" != "infra_failure" || { echo "bad mode wrongly reported as infra_failure (summarizer crash?)"; exit 1; }

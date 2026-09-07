@@ -4,6 +4,33 @@ Generic package management module for installing packages on containers.
 Supports both RHEL-based and Debian-based distributions.
 """
 
+import importlib.util as _ilu
+from pathlib import Path as _Path
+
+_nz_spec = _ilu.spec_from_file_location(
+    "pep_version_normalize",
+    str(_Path(__file__).resolve().parent.parent / "utillities" / "pep_version_normalize.py"))
+_nz = _ilu.module_from_spec(_nz_spec)
+_nz_spec.loader.exec_module(_nz)
+
+# Pure install-decision/assertion module (owns assert_safe_version); imported by path.
+_pv_spec = _ilu.spec_from_file_location(
+    "pep_verify",
+    str(_Path(__file__).resolve().parent.parent / "utillities" / "pep_verify.py"))
+_pv = _ilu.module_from_spec(_pv_spec)
+_pv_spec.loader.exec_module(_pv)
+
+# Sibling module (same aspects/ dir) loaded BY PATH -- mirrors the _nz/_pv shims
+# above. This repo has no package __init__, so `from aspects.configure_repository
+# import ...` only resolves when the repo root happens to be on sys.path/PYTHONPATH;
+# loading by path makes install_pinned's apt-lock dependency work whenever
+# package_management.py itself is loadable (e.g. loaded by path in unit tests).
+_cr_spec = _ilu.spec_from_file_location(
+    "configure_repository",
+    str(_Path(__file__).resolve().parent / "configure_repository.py"))
+_cr = _ilu.module_from_spec(_cr_spec)
+_cr_spec.loader.exec_module(_cr)
+
 
 def install_package(container, package_name, pg_major_version=None, install_pg_server=False):
     """
@@ -222,55 +249,11 @@ def normalize_version(version_string, package_name=""):
     Returns:
         str: Normalized version string in format "1.0.0.beta2" (dots as separators) or "1.0.0" for non-beta
     """
-    import re
-
-    # Convert to lowercase for case-insensitive comparison
-    version = version_string.lower().strip()
-    package_lower = package_name.lower()
-
-    # Debian encodes pre-releases with a tilde (1.0.0~beta2) so they sort before
-    # the final release, whereas RPM and the config env files use a hyphen
-    # (1.0.0-beta2). Fold the tilde into a hyphen up front so a deb-installed
-    # version compares equal to the expected value from the env file.
-    version = version.replace('~', '-')
-
-    # Strip RPM dist suffixes (e.g., .el9, .el8, .rocky9, .alma9, .fc39, .oel9)
-    # These appear at the end of RPM VERSION-RELEASE strings
-    version = re.sub(r'\.(?:el|rhel|centos|rocky|alma|fc|oel)\w*$', '', version)
-
-    # Strip Debian/Ubuntu packaging suffixes like -1.bullseye, -2.jammy, etc.
-    # Pattern: -<digit>[.<distro>] at the end of version string
-    version = re.sub(r'-\d+\.[a-z]+$', '', version)
-    version = re.sub(r'-\d+$', '', version)
-
-    # Check if this is a beta package
-    beta_package_keywords = ['vectorizer', 'anonymizer', 'rag', 'mcp', 'nla']
-    is_beta_package = any(keyword in package_lower for keyword in beta_package_keywords)
-    has_beta_in_version = 'beta' in version
-
-    # Only apply beta normalization if it's a beta package or version contains 'beta'
-    beta_suffix = ""
-    if is_beta_package or has_beta_in_version:
-        # Handle beta versions with hyphen separator: 1.0-beta2 -> 1.0.beta2
-        version = re.sub(r'-beta', '.beta', version)
-
-        # Split into version parts and beta suffix
-        beta_match = re.search(r'\.?beta(\d*)', version)
-        if beta_match:
-            beta_suffix = f".beta{beta_match.group(1)}"
-            version = version[:beta_match.start()]
-
-    # Split version by dots
-    version_parts = version.split('.')
-
-    # Pad to 3 parts (major.minor.patch)
-    while len(version_parts) < 3:
-        version_parts.append('0')
-
-    # Reconstruct normalized version
-    normalized = '.'.join(version_parts[:3]) + beta_suffix
-
-    return normalized
+    # Delegates to the shared normalizer (utillities/pep_version_normalize.py),
+    # which handles RPM/deb packaging suffixes and folds the Debian pre-release
+    # tilde (1.0.0~beta2 -> 1.0.0-beta2) so a deb-installed pre-release compares
+    # equal to the hyphenated value from the config env files.
+    return _nz.normalize_version(version_string, package_name)
 
 
 def verify_package_version(container, package_name, expected_version):
@@ -386,3 +369,83 @@ def validate_bundled_file(container, file_path):
 
     return True, file_info, message
 
+
+
+def install_pinned(container, package_name, exact_version):
+    """Install an EXACT version (L2a) via ARGUMENT-VECTOR exec — no `sh -c` around
+    caller data, so shell metacharacters in exact_version can never become commands.
+    exact_version is validated (allowlist) before use; the package spec is a single
+    argv element.
+
+    Repository-freshness/error handling mirrors install_package so a just-published
+    exact package is resolvable and a failed preparation never falls through to an
+    install:
+      * DNF: `dnf clean expire-cache` before the install (stale cache otherwise
+        reports "No match" for RPMs published after the last refresh); if that
+        refresh fails, return (False, msg) WITHOUT attempting the install;
+      * APT: wait out the apt/dpkg lock (if that preparation raises, return
+        (False, msg) and do NOT refresh or install), then `apt-get update`; if that
+        refresh fails, return (False, msg) WITHOUT attempting the install;
+      * no supported package manager -> (False, msg), no install attempted.
+
+    Returns (success: bool, output: str) for OPERATIONAL outcomes. Programming/request
+    errors are NOT converted to tuples: assert_safe_version raises UnsafeVersionError
+    on an unsafe/malformed version (and choose_install raises InstallDecisionError
+    upstream on an inconsistent request); those propagate."""
+    _pv.assert_safe_version(exact_version)          # RAISES UnsafeVersionError (programming/safety)
+    ec, _ = container.exec_run(["/bin/sh", "-c", "command -v dnf"], user="root")  # constant probe
+    if ec == 0:
+        # Expire cached repo metadata so a newly-published exact RPM resolves
+        # (mirrors install_package's dnf refresh; constant command, no caller data).
+        rec, rout = container.exec_run(["/bin/sh", "-c", "dnf clean expire-cache"], user="root")
+        if rec != 0:
+            return False, f"dnf clean expire-cache failed before pinned install: {rout.decode(errors='replace')}"
+        argv = ["dnf", "install", "-y", f"{package_name}-{exact_version}"]
+        env = None
+    else:
+        ec, _ = container.exec_run(["/bin/sh", "-c", "command -v apt-get"], user="root")
+        if ec != 0:
+            return False, "No supported package manager found (dnf or apt-get)"
+        # Preserve install_package's Debian preparation: wait out the apt/dpkg lock,
+        # then refresh the index. Loaded by path (_cr) so it works without the repo
+        # root on sys.path. A raised lock failure or a failed refresh must NOT fall
+        # through to an install against a stale/incomplete index.
+        try:
+            _cr._wait_for_apt_lock(container)
+        except Exception as exc:                     # operational: lock never freed / prep failed
+            return False, f"apt/dpkg lock preparation failed before pinned install: {exc}"
+        uec, uout = container.exec_run(["apt-get", "update"], user="root")
+        if uec != 0:
+            return False, f"apt-get update failed before pinned install: {uout.decode(errors='replace')}"
+        argv = ["apt-get", "install", "-y", f"{package_name}={exact_version}"]
+        env = {"DEBIAN_FRONTEND": "noninteractive"}
+    ec, out = container.exec_run(argv, user="root", environment=env)   # list argv, NOT a shell string
+    return ec == 0, out.decode(errors="replace")
+
+
+def query_installed_version(container, package_name):
+    """Read-only: return the installed package-manager identity string — RPM
+    VERSION-RELEASE or DEB Version — or None if not installed / unqueryable.
+    (package_name is a known component package, not caller free-text; mirrors the
+    query used by verify_package_version.)"""
+    ec, _ = container.exec_run(["/bin/sh", "-c", "command -v dnf"], user="root")
+    if ec == 0:
+        cmd = f"rpm -q --queryformat '%{{VERSION}}-%{{RELEASE}}' {package_name}"
+    else:
+        ec, _ = container.exec_run(["/bin/sh", "-c", "command -v apt-get"], user="root")
+        if ec != 0:
+            return None
+        cmd = f"dpkg-query --showformat='${{Version}}' --show {package_name}"
+    ec, out = container.exec_run(["/bin/sh", "-c", cmd], user="root")
+    if ec != 0:
+        return None
+    return out.decode(errors="replace").strip() or None
+
+
+def query_binary_version(container, binary_path):
+    """Read-only: return the raw `<binary> -version` output (contains a 'Version:'
+    line for a real tag build), or None if the binary can't be run."""
+    ec, out = container.exec_run([binary_path, "-version"], user="root")
+    if ec != 0:
+        return None
+    return out.decode(errors="replace").strip() or None

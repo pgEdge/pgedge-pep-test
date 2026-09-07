@@ -4,6 +4,8 @@ This repository ships a GitHub Actions workflow at `.github/workflows/pep-regres
 
 The workflow wraps the existing `run_pep_tf.sh` framework without changing its behavior. Each matrix target spins up one GitHub-hosted runner and invokes the same script you'd run locally, just with matrix target-specific flags.
 
+> A second, **caller-facing** workflow — `.github/workflows/pep-integration.yml` — lets another repository’s release pipeline call PEP to install and certify **one** published package as a `workflow_call` job. See [PEP Integration reusable workflow](#pep-integration-reusable-workflow-pep-integrationyml) at the end of this document.
+
 ## Quick start
 
 1. Open the **Actions** tab.
@@ -336,3 +338,101 @@ The workflow is designed to:
 - Keep `preview` mode the default so accidental cost is bounded
 
 Framework-level findings — the kinds of issues regression testing surfaces (OS-specific test failures, version mismatches, SBOM tool gaps) — are uploaded as part of the per-target reports and remain the framework team's domain to triage. The workflow's job is to make them visible across the matrix, not to fix them.
+
+---
+
+## PEP Integration reusable workflow (`pep-integration.yml`)
+
+`.github/workflows/pep-integration.yml` is a `workflow_call` reusable workflow. A build/release pipeline in another repo (e.g. a component that just published a package) calls it to install **one** already-published target and report a truthful, per-rung identity result — without failing the caller's release (in the default `observe` mode). It is single-target: one component / family / arch / PG major / container per call.
+
+Because `pgedge-pep-test` is public, cross-repo callers need **no read token** — the workflow checks itself out with the built-in `GITHUB_TOKEN`. Pin the implementation you call with an **immutable commit SHA** via `pep_implementation_ref`.
+
+### Minimal cross-repo caller
+
+```yaml
+# in the caller repo, e.g. .github/workflows/release.yml
+jobs:
+  pep-certify:
+    uses: pgEdge/pgedge-pep-test/.github/workflows/pep-integration.yml@<PEP_COMMIT_SHA>
+    with:
+      # what to install
+      component: rag
+      package_name: pgedge-rag-server
+      channel: staging                 # release | staging | daily
+      pg_major: "17"
+      family: deb                      # rpm | deb
+      arch: amd64                      # amd64 | arm64
+      container_alias: debian13-amd64  # catalog target (see containers_list.json)
+      # caller-supplied build identity
+      expected_version: "2.0.0"        # required (component version -> L1)
+      expected_deb: "2.0.0~beta1-1.trixie"   # optional, explicit -> L2a
+      expected_binary: "2.0.0-beta1"         # optional, explicit -> L2b
+      # run controls
+      scenario: certification          # POC scenario (see limitations)
+      mode: observe                    # observe | gate
+      execution_mode: full             # preview | full
+      invocation_id: rag-deb-amd64-pg17   # unique per call within one run
+      pep_implementation_ref: <PEP_COMMIT_SHA>   # use the SAME full SHA as in uses:
+    secrets:                           # optional — authenticated image pulls
+      DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+      DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+```
+
+### Inputs
+
+**Required:** `component`, `package_name`, `channel` (`release`/`staging`/`daily`), `expected_version`, `container_alias`, `pg_major`, `family` (`rpm`/`deb`), `arch` (`amd64`/`arm64`), and `pep_implementation_ref`.
+
+**Pinning responsibility (caller-owned):** use the **same immutable full commit SHA** in *both* the job-level `uses:` reference and `pep_implementation_ref` — `uses:` selects which workflow definition GitHub loads, and `pep_implementation_ref` is the ref the workflow then checks out and runs. The workflow records both the requested ref and the resolved SHA (`git rev-parse HEAD`) into `provenance.json` for audit, but it does **not** enforce that the ref is a full SHA (versus a branch/tag) and does **not** verify that the two caller references match. Keeping them identical and immutable is the caller's responsibility.
+
+**Optional exact-identity inputs** (default `""`): `expected_rpm`, `expected_deb`, `expected_binary`, plus `expected_buildnum` and `effective_tag`. Supplying an explicit `expected_rpm`/`expected_deb` makes **L2a** attemptable; an explicit `expected_binary` makes **L2b** attemptable. `expected_buildnum`/`effective_tag` are accepted and validated and currently mark the corresponding rung as *derivation-pending*, but they do **not** by themselves make L2 attemptable and are **not** currently surfaced as dedicated fields in provenance or the result summary (deriving exact strings from them is a deliberate, still-open decision). So the run stays at L1 unless you pass the explicit `expected_*` strings.
+
+**Run controls** (optional): `scenario` (default `certification`), `mode` (`observe`/`gate`, default `observe`), `execution_mode` (`preview`/`full`, default `preview`), `invocation_id` (default `""`).
+
+**Caller-supplied build identity vs PEP defaults:** the caller is authoritative for *what build is being certified*. PEP's `configuration/config{PG}.env` and repo-root `.env` continue to supply framework/standalone test settings (prereqs, paths, and the like), but the integration `expected_version` and the `expected_*` identity fields remain **caller-controlled** and are **not** backfilled from those files. The resolved channel and scenario the run actually used are reported back in `resolved-config.json` with their source.
+
+### preview vs full
+
+- **`preview`** (default): `--dry-run` only — no Docker, no install, no pytest. Fast wiring/validation check; `execution_status=preview`, `test_verdict=not_run`.
+- **`full`**: real install + identity + component tests inside a container for the chosen `container_alias`.
+
+### observe vs gate
+
+- **`observe`** (default, and the POC mode): the job stays green even when the summarizer records a handled `infra_failure` or a `test_verdict=fail` — the caller's release is never blocked. Read the outcome from the outputs/artifact.
+- **`gate`**: the summarize step exits non-zero (fails the job) unless the run is `completed` + `pass`. Gate is implemented but **not yet exercised on live CI** — treat production gating as deferred (see limitations).
+
+### Outputs
+
+`execution_status` (`completed` / `preview` / `incomplete` / `infra_failure`), `test_verdict` (`pass` / `fail` / `not_run`), `enforcement_mode`, `identity_evidence` (JSON `{l2a,l2b,l1}`, each `proven`/`not_proven`/`not_attempted`), `resolved_channel` (`{value,source}`), and `summary_artifact` (the uploaded artifact name).
+
+### Artifacts + `invocation_id` uniqueness
+
+Every call **always** uploads the `test-logs/` directory, but **its contents vary by outcome**. A `preview`/validation call produces a subset (e.g. `summary.json`, `provenance.json`, and — once the resolver runs — `resolved-config.json`), with no install/identity evidence or product reports. A **successful full run** additionally supplies `install-evidence.json`, `identity-evidence.json`, the `current-run.json` manifest, and the JUnit/HTML test reports. The artifact name is built from the target dimensions; when a single GitHub run calls this workflow more than once with otherwise-identical dimensions (e.g. two calls differing only by `mode`), give each call a distinct `invocation_id` — `upload-artifact` forbids duplicate names within one run, and `invocation_id` is the discriminator folded into the name (charset `A-Za-z0-9._-`, ≤64).
+
+**`identity-evidence.json` vs `observed-identity.json`.** These are two different files with two different jobs:
+
+- **`identity-evidence.json`** is the **authoritative verdict**: exactly `{l2a, l2b, l1}`, each `proven` / `not_proven` / `not_attempted`. This is what the run's identity outcome is judged on.
+- **`observed-identity.json`** is **audit-only** — it never affects the verdict, execution status, or rung calculation. It records, for later inspection, the raw run and complete target scope (`run_token` + the same target fields as `install-evidence.json`), the package-manager identity actually observed, the parsed binary version, and the value used for the L1 component comparison. It exists so you can see *which exact package was installed* — especially in an L1-only run, where no `expected_*` pins are supplied and the rung verdict alone doesn't name the build.
+
+`observed-identity.json` is written once a **full** run reaches identity observation — including an **identity-mismatch** run (the observations are recorded before the verdict, so a failing match still leaves them). A `preview` run, an early validation/setup failure, or any run that never reaches identity observation may not produce it.
+
+### What L1 / L2a / L2b actually prove
+
+- **L2a — exact package-manager version-release identity (strong):** the installed package's exact NVR (RPM) or `Version` (DEB) string equals the caller's `expected_rpm`/`expected_deb`. Proves the exact package-manager version-release was installed.
+- **L2b — exact binary version identity (strong):** the binary's self-reported version string equals `expected_binary`.
+- **L1 — component version (weak / degraded):** the component's reported version *contains* the normalized `expected_version`. This is a coarse substring/containment check — it confirms the right version line, **not** the exact build. A run that proves only L1 must not be described as exact-build.
+
+L2a and L2b are **exact version-string** matches, not a byte-level or checksum/content assertion (there is no L3 content proof in this POC). Each rung is independent and reported separately; a rung that is attemptable but unproven (mismatch or missing observation) makes `test_verdict=fail`. L2 is reachable only when the corresponding explicit `expected_*` string is supplied.
+
+### DockerHub credentials (optional)
+
+`DOCKERHUB_USERNAME` / `DOCKERHUB_TOKEN` are optional secrets. Pass them **explicitly** (as above) — not `secrets: inherit` — to authenticate base-image pulls in `full` mode and avoid anonymous rate limits. Omit them to rely on anonymous pulls. No read token of any kind is required.
+
+### Current limitations (POC)
+
+- **`certification` is the only wired scenario.** It is a no-replacement run: certification forces the effective upgrade off, resolved once as `upgrade={value:"false", source:"scenario_policy"}` and read back by the runtime, so no package replacement or channel switch happens around the identity being certified.
+- **`scenario=upgrade` is rejected** (validation error → `incomplete`/`not_run`). The upgrade-replacement flow is not implemented yet.
+- **Production gating is deferred.** `mode=gate` exists but has not been run on live CI; the POC runs `observe`.
+- **Single target per call**, and L2 requires explicit `expected_*` strings (no automatic derivation from buildnum/tag yet).
+- The live full-mode path has been validated for a **DEB** target; the RPM full-mode path is covered by unit tests but not yet run live.
+
+The next step is a real cross-repo caller in a component's release pipeline (report-only), which exercises this workflow end-to-end from the publishing side.

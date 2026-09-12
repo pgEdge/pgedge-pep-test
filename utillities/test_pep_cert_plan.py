@@ -717,3 +717,144 @@ def test_sanitized_allowlist_in_output_dedups_and_drops_nonstrings():
     # emitted component_policy uses the same sanitized string-only value (never the raw list)
     plan = R.reduce(_set_pol(["pgedge-x", "pgedge-x", {}]))
     assert plan["component_policy"]["allowed_runtime_package_names"] == ["pgedge-x"]
+
+
+# ---- Stage 1.5: build-side PostgreSQL identity (nullable, validated) --------
+def _pg_cell(cid="rpm:el-9:amd64", *, coupled=True, major="17", version="17.5",
+            os="el-9", arch="amd64", artifact="art-c"):
+    """A cell with optional build-PG fields set explicitly (None => key omitted)."""
+    c = _cell(cid, os=os, arch=arch, artifact=artifact)
+    if coupled is not None:
+        c["pg_coupled"] = coupled
+    if major is not None:
+        c["build_pg_major"] = major
+    if version is not None:
+        c["build_pg_version"] = version
+    return c
+
+
+def _pg_run(cell):
+    return R.reduce(_inp([cell], [_job(cell["cell_id"], 1, 1, "success")],
+                         [{"name": cell["artifact_name"], "id": 1,
+                           "members": [_member("pgedge-x", "x86_64")]}],
+                         allowed=["pgedge-x"], pubs={"rpm": "success"}))
+
+
+def test_pg_fields_omitted_backward_compatible():
+    # legacy/RAG input omits all three -> pg_coupled=false + null build fields, still eligible.
+    plan = R.reduce(_valid_envelope())
+    c = cells_by_id(plan)["rpm:el-9:amd64"]
+    assert c["pg_coupled"] is False and c["build_pg_major"] is None and c["build_pg_version"] is None
+    t = c["targets"][0]
+    assert t["pg_coupled"] is False and t["build_pg_major"] is None and t["build_pg_version"] is None
+    assert plan["plan_resolved"] is True and t["eligibility"] == "eligible"
+
+
+def test_pg_independent_explicit_and_blank_tolerated():
+    # explicit PG-independent (false + null) AND blank detector metadata are both valid;
+    # representative PG metadata must not become coupling, and must not fail the plan.
+    for cell in (_pg_cell(coupled=False, major=None, version=None),
+                 _pg_cell(coupled=False, major="", version="")):
+        plan = _pg_run(cell)
+        assert plan["plan_resolved"] is True
+        c = cells_by_id(plan)["rpm:el-9:amd64"]
+        assert c["pg_coupled"] is False and c["build_pg_major"] is None and c["build_pg_version"] is None
+        assert c["targets"][0]["eligibility"] == "eligible"
+
+
+def test_pg_coupled_valid_echoed_into_cell_and_target():
+    plan = _pg_run(_pg_cell(coupled=True, major="17", version="17.5"))
+    assert plan["plan_resolved"] is True
+    c = cells_by_id(plan)["rpm:el-9:amd64"]
+    assert c["pg_coupled"] is True and c["build_pg_major"] == "17" and c["build_pg_version"] == "17.5"
+    t = c["targets"][0]
+    assert t["pg_coupled"] is True and t["build_pg_major"] == "17" and t["build_pg_version"] == "17.5"
+    assert t["eligibility"] == "eligible"        # PG identity is passthrough, not an eligibility gate
+    # version whose major equals build_pg_major with no minor is also valid
+    p2 = _pg_run(_pg_cell(coupled=True, major="18", version="18"))
+    assert p2["plan_resolved"] is True and p2["coverage_denominators"]["eligible_targets"] == 1
+
+
+def test_pg_coupled_invalid_combinations_fail_closed():
+    cases = {
+        "missing major":        _pg_cell(coupled=True, major=None, version="17.5"),
+        "nonnumeric major":     _pg_cell(coupled=True, major="abc", version="abc.5"),
+        "missing version":      _pg_cell(coupled=True, major="17", version=None),
+        "version major mismatch": _pg_cell(coupled=True, major="17", version="16.2"),
+        "pg fields with coupled=false": _pg_cell(coupled=False, major="17", version="17.5"),
+    }
+    for name, cell in cases.items():
+        plan = _pg_run(cell)
+        assert plan["plan_resolved"] is False, name
+        assert plan["coverage_denominators"]["eligible_targets"] == 0, name
+        assert any("pg identity" in e for e in plan["errors"]), name
+
+
+def test_pg_coupled_non_boolean_and_malformed_never_raise():
+    def cell_with(**over):
+        c = _cell("rpm:el-9:amd64", os="el-9", artifact="art-c")
+        c.update(over)
+        return c
+    cases = {
+        "coupled string true":   cell_with(pg_coupled="true"),
+        "coupled int":           cell_with(pg_coupled=1),
+        "coupled list":          cell_with(pg_coupled=[]),
+        "coupled dict":          cell_with(pg_coupled={}),
+        "major list (coupled)":  cell_with(pg_coupled=True, build_pg_major=["17"], build_pg_version="17.5"),
+        "major dict (coupled)":  cell_with(pg_coupled=True, build_pg_major={"m": 17}, build_pg_version="17.5"),
+        "version list (coupled)": cell_with(pg_coupled=True, build_pg_major="17", build_pg_version=["17.5"]),
+        "version dict (coupled)": cell_with(pg_coupled=True, build_pg_major="17", build_pg_version={"v": 1}),
+        "major list (coupled=false)": cell_with(pg_coupled=False, build_pg_major=["17"]),
+    }
+    for name, cell in cases.items():
+        plan = _pg_run(cell)
+        js = R.to_json(plan)                                    # must not raise
+        assert plan["plan_resolved"] is False, name
+        assert plan["coverage_denominators"]["eligible_targets"] == 0, name
+        assert plan["errors"], name
+        assert js == R.to_json(_pg_run(cell)), name             # deterministic
+        # malformed values collapse to a JSON-safe echo, never a raw list/dict
+        c = cells_by_id(plan)["rpm:el-9:amd64"]
+        assert isinstance(c["pg_coupled"], bool)
+        assert c["build_pg_major"] is None or isinstance(c["build_pg_major"], str)
+        assert c["build_pg_version"] is None or isinstance(c["build_pg_version"], str)
+
+
+def test_pg_identity_deterministic_under_cell_order():
+    a = _pg_cell("rpm:el-9:amd64", coupled=True, major="17", version="17.5",
+                 os="el-9", arch="amd64", artifact="art-a")
+    b = _pg_cell("rpm:el-10:amd64", coupled=True, major="18", version="18.1",
+                 os="el-10", arch="amd64", artifact="art-b")
+    jobs = [_job("rpm:el-9:amd64", 1, 1, "success"), _job("rpm:el-10:amd64", 2, 1, "success")]
+    arts = [{"name": "art-a", "id": 1, "members": [_member("pgedge-x", "x86_64", release="1.el9")]},
+            {"name": "art-b", "id": 2, "members": [_member("pgedge-x", "x86_64", release="1.el10")]}]
+    p1 = R.to_json(R.reduce(_inp([a, b], jobs, arts, allowed=["pgedge-x"], pubs={"rpm": "success"})))
+    p2 = R.to_json(R.reduce(_inp([b, a], list(reversed(jobs)), arts,
+                                 allowed=["pgedge-x"], pubs={"rpm": "success"})))
+    assert p1 == p2                                             # order-independent
+
+
+def test_pg_invalid_makes_plan_unresolved_regardless_of_cell_order():
+    # A valid+eligible cell and an invalid-PG cell: the global stop must be settled BEFORE
+    # any target eligibility is computed, so BOTH orders give 0 eligible (no valid cell may
+    # slip through as eligible just because it was processed first).
+    valid = _pg_cell("rpm:el-9:amd64", coupled=True, major="17", version="17.5",
+                     os="el-9", arch="amd64", artifact="art-a")
+    invalid = _pg_cell("rpm:el-10:amd64", coupled=True, major=None, version="18.1",   # missing major
+                       os="el-10", arch="amd64", artifact="art-b")
+    jobs = [_job("rpm:el-9:amd64", 1, 1, "success"), _job("rpm:el-10:amd64", 2, 1, "success")]
+    arts = [{"name": "art-a", "id": 1, "members": [_member("pgedge-x", "x86_64", release="1.el9")]},
+            {"name": "art-b", "id": 2, "members": [_member("pgedge-x", "x86_64", release="1.el10")]}]
+    for order in ([valid, invalid], [invalid, valid]):
+        plan = R.reduce(_inp(order, jobs, arts, allowed=["pgedge-x"], pubs={"rpm": "success"}))
+        assert plan["plan_resolved"] is False
+        assert plan["coverage_denominators"]["eligible_targets"] == 0
+        emitted = [t for c in plan["cells"] for t in c["targets"]]
+        assert emitted                                         # the valid cell still emits a target
+        assert all(t["eligibility"] == "ineligible" for t in emitted)
+        assert all(t["eligibility_reason"] == "plan_unresolved" for t in emitted)
+        # the valid cell keeps its correctly normalized PG identity (evidence not corrupted)
+        vc = cells_by_id(plan)["rpm:el-9:amd64"]
+        assert vc["pg_coupled"] is True and vc["build_pg_major"] == "17" and vc["build_pg_version"] == "17.5"
+        vt = vc["targets"][0]
+        assert vt["pg_coupled"] is True and vt["build_pg_major"] == "17" and vt["build_pg_version"] == "17.5"

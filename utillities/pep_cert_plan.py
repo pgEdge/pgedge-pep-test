@@ -63,6 +63,7 @@ _ARCH_NORMALIZE = {"x86_64": "amd64", "amd64": "amd64", "aarch64": "arm64", "arm
 _REQUIRED_CELL_KEYS = ("cell_id", "artifact_name", "family", "os", "normalized_arch")
 
 _SHA256_RE = re.compile(r"[0-9a-fA-F]{64}\Z")
+_PG_MAJOR_RE = re.compile(r"\A[0-9]+\Z")          # build_pg_major: nonblank, digits only
 
 
 def _parse_simulated(value):
@@ -351,7 +352,7 @@ def _package_identity_state(member, family, os_token, intended_version, intended
 
 
 # --- target selection -------------------------------------------------------
-def _make_target(cell, member, policy, release_intent, provenance, family):
+def _make_target(cell, member, policy, release_intent, provenance, family, pg_norm):
     physical = member.get("package_name")
     return {
         "target_id": "%s::%s" % (cell["cell_id"], physical),   # globally unique; incl noarch/all
@@ -363,6 +364,12 @@ def _make_target(cell, member, policy, release_intent, provenance, family):
         # from the cell); native_package_arch is the member's own arch (incl noarch/all).
         "execution_arch": cell["normalized_arch"],
         "native_package_arch": member.get("native_arch"),
+        # Build-side PostgreSQL identity, echoed verbatim for Stage 3 (nullable). NO
+        # eligibility is derived here: pg_coupled tells Stage 3 whether build_pg_major
+        # constrains certification (coupled) or is a test-policy choice (independent).
+        "build_pg_major": pg_norm["build_pg_major"],
+        "build_pg_version": pg_norm["build_pg_version"],
+        "pg_coupled": pg_norm["pg_coupled"],
         "package": {"name": physical, "epoch": member.get("epoch"),
                     "version": member.get("version"), "release": member.get("release"),
                     "sha256": member.get("sha256")},
@@ -375,7 +382,7 @@ def _make_target(cell, member, policy, release_intent, provenance, family):
     }
 
 
-def _select_targets(cell, art, policy, release_intent, provenance, family, allowed):
+def _select_targets(cell, art, policy, release_intent, provenance, family, allowed, pg_norm):
     """Return (targets, target_selection_state, members_out). `allowed` is the pre-sanitized
     string-only allowlist set. Every inspected member is retained with `selected` +
     exclusion_reasons; a candidate must carry the evidence required to justify eligibility
@@ -428,7 +435,7 @@ def _select_targets(cell, art, policy, release_intent, provenance, family, allow
     dup = Counter((c.get("package_name"), c.get("normalized_arch")) for c in candidates)
     if any(v > 1 for v in dup.values()):
         return [], "target_ambiguous", members_out
-    targets = [_make_target(cell, c, policy, release_intent, provenance, family) for c in candidates]
+    targets = [_make_target(cell, c, policy, release_intent, provenance, family, pg_norm) for c in candidates]
     targets.sort(key=lambda t: str(t["target_id"]))
     return targets, "resolved", members_out
 
@@ -468,6 +475,60 @@ def _entry_errors(c):
         if k not in c or not isinstance(v, str) or v == "":
             reasons.append("missing_or_blank:" + k)
     return reasons
+
+
+# --- build-side PostgreSQL identity (optional, nullable) --------------------
+def _pg_build_identity(cell):
+    """Normalize + validate a planned cell's OPTIONAL build-side PostgreSQL identity.
+
+    Returns (normalized, errors). `normalized` always carries the three keys
+    (build_pg_major, build_pg_version, pg_coupled) in a JSON-safe canonical form;
+    `errors` is a deterministic list (empty == valid). This parses NOTHING from
+    cell_id and is TOTAL (never raises for JSON-compatible input).
+
+    Legal states (anything else is contradictory/malformed -> a global stop):
+      * PG-INDEPENDENT: pg_coupled false/absent AND no non-blank build PG field
+        (blank/absent/null representative detector metadata is tolerated -> null).
+      * PG-COUPLED:     pg_coupled true, build_pg_major a nonblank numeric string,
+        build_pg_version a nonblank string whose major agrees with build_pg_major.
+
+    This is pure passthrough for Stage 3: NO eligibility behavior is derived here.
+    """
+    normalized = {"build_pg_major": None, "build_pg_version": None, "pg_coupled": False}
+    if not isinstance(cell, dict):
+        return normalized, []
+    raw_coupled = cell.get("pg_coupled", False)
+    raw_major = cell.get("build_pg_major")
+    raw_version = cell.get("build_pg_version")
+    # Canonical JSON-safe echo: only a nonblank string survives as a value; a real
+    # bool survives as pg_coupled; everything else collapses to null / false.
+    normalized = {
+        "build_pg_major": raw_major if _nonblank_str(raw_major) else None,
+        "build_pg_version": raw_version if _nonblank_str(raw_version) else None,
+        "pg_coupled": raw_coupled if isinstance(raw_coupled, bool) else False,
+    }
+    errors = []
+    if not isinstance(raw_coupled, bool):
+        errors.append("pg_coupled must be a boolean")
+        return normalized, errors                # coupling unknown -> fail closed
+    # "supplied" = a usable nonblank string OR a present-but-wrong-typed value
+    # (a non-null non-string). Blank / null / absent counts as NOT supplied.
+    major_supplied = _nonblank_str(raw_major) or (raw_major is not None and not isinstance(raw_major, str))
+    version_supplied = _nonblank_str(raw_version) or (raw_version is not None and not isinstance(raw_version, str))
+    if not raw_coupled:
+        # PG-INDEPENDENT: representative/detector PG metadata must NOT leak in as coupling.
+        if major_supplied or version_supplied:
+            errors.append("pg_coupled=false cell must not carry build_pg_major/build_pg_version")
+        return normalized, errors
+    # PG-COUPLED.
+    if not (_nonblank_str(raw_major) and _PG_MAJOR_RE.match(raw_major)):
+        errors.append("pg_coupled=true requires build_pg_major as a nonblank numeric string")
+    if not _nonblank_str(raw_version):
+        errors.append("pg_coupled=true requires build_pg_version as a nonblank string")
+    elif _nonblank_str(raw_major) and _PG_MAJOR_RE.match(raw_major):
+        if raw_version.split(".", 1)[0] != raw_major:      # major agreement only when both usable
+            errors.append("build_pg_version major must agree with build_pg_major")
+    return normalized, errors
 
 
 # --- top-level reducer ------------------------------------------------------
@@ -545,10 +606,24 @@ def reduce(inp):
         plan_resolved = False
         errors.append("duplicate artifact_name: %s" % sorted(dup_ans))
 
+    # Build-PG identity is validated in a PRE-PASS (like entry_reasons/dups) so the global
+    # plan_resolved stop is fully settled BEFORE any target eligibility is computed. Doing it
+    # inside the cell loop made the stop order-dependent (a valid cell processed before a
+    # later invalid-PG cell could be marked eligible). Cache the normalized identity for reuse.
+    pg_norms = []
+    for i, c in enumerate(planned_list):
+        pg_norm, pg_errs = _pg_build_identity(c)
+        pg_norms.append(pg_norm)
+        if pg_errs:                                 # contradictory/malformed PG => global stop
+            plan_resolved = False
+            for r in pg_errs:
+                errors.append("planned_cells[%d] pg identity invalid: %s" % (i, r))
+
     cells_out = []
     for i, c in enumerate(planned_list):
         header = _cell_header(c)
-        base = {**header, "_index": i, "planned": True}
+        pg_norm = pg_norms[i]                        # reuse cached normalized PG identity
+        base = {**header, **pg_norm, "_index": i, "planned": True}
         if entry_reasons[i]:                        # malformed entry: fail closed, never eligible
             cells_out.append({**base, "build_state": "ambiguous", "invalid_reasons": entry_reasons[i],
                               "build_evidence": _empty_evidence(), "members": [],
@@ -567,7 +642,7 @@ def reduce(inp):
         family = header["family"]
         build_state, ev, art = _resolve_build(c, jobs, artifacts)
         pub_state, pub_reason = _resolve_publication(family, build_state, pubs, simulated)
-        targets, sel_state, members_out = _select_targets(c, art, policy, ri, provenance, family, allowed_set)
+        targets, sel_state, members_out = _select_targets(c, art, policy, ri, provenance, family, allowed_set, pg_norm)
         for t in targets:
             elig, reason = _eligibility(build_state, pub_state, t["package_identity_state"],
                                         simulated, family, channel, plan_resolved, context_ok)

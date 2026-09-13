@@ -1,10 +1,12 @@
-# cert-plan reducer fixtures
+# cert-plan reducer & adapter fixtures
 
-Compact, self-contained reducer-input JSON for `utillities/pep_cert_plan.py`
-(`test_pep_cert_plan.py`). Each file is a complete `reduce()` input. These are
-**derived from** preserved evidence but carry no runtime dependency on it — the
-raw RPMs/DEBs/ZIPs and raw GitHub API dumps are **not** committed; only the
-structured fields the reducer consumes.
+Compact, self-contained JSON for `utillities/pep_cert_plan.py`
+(`test_pep_cert_plan.py`) and the evidence adapter `utillities/pep_cert_adapter.py`
+(`test_pep_cert_adapter.py`). The `spike0_*` and `rag2_members` files are complete
+`reduce()` inputs; `rag_detector_matrix.json` is an adapter input (a captured
+detector matrix). All are **derived from** preserved evidence but carry no runtime
+dependency on it — the raw RPMs/DEBs/ZIPs and raw GitHub API dumps are **not**
+committed; only the structured fields consumed downstream.
 
 ## Files & SHA-256
 
@@ -13,6 +15,7 @@ structured fields the reducer consumes.
 | `spike0_attempt2.json` | `07c96206ec62529d3439e965e1b4b222d1d74d792945d14d645d594db34b3959` |
 | `spike0_attempt3.json` | `ceeeddfedc2ae7e11b92900a53c42e7daec4c218a0e7e54d326e69db2381b10f` |
 | `rag2_members.json`    | `42a4e9d3e8b281d0b9bd78a51a9e596fa0119eef273cbaeed895ece2c6337687` |
+| `rag_detector_matrix.json` | `30511ee3ed51f7940610b85d335325cc7b08ed9f76e710d48182d6aa5ed79508` |
 
 ## Provenance
 
@@ -31,6 +34,19 @@ structured fields the reducer consumes.
   and one DEB cell (`deb:bookworm:amd64`, binary member). Job records are minimal
   synthesized `available` records; member `sha256` values are the real per-file
   checksums.
+- **rag_detector_matrix** — the real RPM+DEB detector matrix for `pgedge-rag-server`
+  (component `pkg`, PG-decoupled: 4 RPM + 12 DEB cells), produced by the
+  `pgEdge/pgedge-detect-build-matrix` composite action at merged-`main` commit
+  `3fb36518ee7ed2f626a7a8cffd7d68d11fdf25c4`. It is a snapshot for tests, not an
+  authoritative contract. Reproduce with the detector's own harness against a
+  `pgedge-rag-server` checkout:
+
+  ```
+  bash test/run_detector.sh <detector_dir> <rag-server_checkout> pkg "" \
+    '["almalinux:9","almalinux:10"]' \
+    '["ubuntu:jammy","ubuntu:noble","ubuntu:resolute","debian:bullseye","debian:bookworm","debian:trixie"]' \
+    '["amd64","arm64"]' | jq -S '{rpm_matrix, deb_matrix}'
+  ```
 
 ## Source checksums (what the fixtures were derived from)
 

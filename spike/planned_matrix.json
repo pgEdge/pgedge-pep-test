@@ -1,0 +1,43 @@
+{
+  "_note": "TEMPORARY mechanics-spike fixture (branch spike/pep-mechanics only). A 2-cell subset of the committed utillities/cert_plan_fixtures/rag_detector_matrix.json (real pgedge-detect-build-matrix output @ detector main 3fb36518). Consumed by spike/capture.py via planned_cells_from_detector(rpm_matrix, deb_matrix). Delete with the spike branch; NOT an authoritative contract.",
+  "rpm_matrix": {
+    "include": [
+      {
+        "arch": "amd64",
+        "build_pg_major": null,
+        "build_pg_version": null,
+        "cell_id": "pepcell.v1.rpm.el-9.amd64.pkg",
+        "component": "pkg",
+        "family": "rpm",
+        "image": "almalinux:9",
+        "normalized_arch": "amd64",
+        "os": "el-9",
+        "per_pg": "false",
+        "pg_coupled": false,
+        "pg_in_name": "false",
+        "pg_major": "",
+        "pg_version": ""
+      }
+    ]
+  },
+  "deb_matrix": {
+    "include": [
+      {
+        "arch": "amd64",
+        "build_pg_major": null,
+        "build_pg_version": null,
+        "cell_id": "pepcell.v1.deb.bookworm.amd64.pkg",
+        "component": "pkg",
+        "family": "deb",
+        "image": "debian:bookworm",
+        "normalized_arch": "amd64",
+        "os": "bookworm",
+        "per_pg": "false",
+        "pg_coupled": false,
+        "pg_in_name": "false",
+        "pg_major": "",
+        "pg_version": ""
+      }
+    ]
+  }
+}

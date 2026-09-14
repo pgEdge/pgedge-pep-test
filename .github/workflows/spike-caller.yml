@@ -1,0 +1,102 @@
+name: PEP Mechanics Spike (caller)
+# TEMPORARY mechanics spike — branch spike/pep-mechanics ONLY. Branch-scoped push
+# trigger (no workflow_dispatch, so no default-branch copy is needed; no tags; no
+# pull_request). It uploads ONLY ephemeral GitHub Actions artifacts and pushes
+# nothing to any package repository. Delete with the branch.
+on:
+  push:
+    branches:
+      - spike/pep-mechanics
+concurrency:
+  group: spike-mechanics
+  cancel-in-progress: false
+permissions:
+  contents: read
+jobs:
+  produce:
+    # The [pep-cell:<id>] marker lives in the job display name (colon form).
+    name: "cell ${{ matrix.cell_id }} [pep-cell:${{ matrix.cell_id }}]"
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        # Flow (JSON-compatible) style so spike/capture.py selftest can extract this
+        # bracketed block and json.loads it with the stdlib only (no PyYAML) for the
+        # fixture-drift check. Same two cells/dimensions as before.
+        include: [
+          {"cell_id": "pepcell.v1.rpm.el-9.amd64.pkg", "family": "rpm", "os": "el-9", "arch": "amd64", "probe": "true"},
+          {"cell_id": "pepcell.v1.deb.bookworm.amd64.pkg", "family": "deb", "os": "bookworm", "arch": "amd64", "probe": "false"}
+        ]
+    steps:
+      - name: Intentional pre-upload failure (DEB, attempt 1 only)
+        if: ${{ matrix.family == 'deb' && github.run_attempt == '1' }}
+        run: |
+          echo "attempt 1: DEB leg fails before upload -> truthful partial plan"
+          exit 1
+      - name: Checkout spike branch (pinned) at github.sha
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803  # v6.1.0
+        with:
+          ref: ${{ github.sha }}
+      - name: Verify checkout HEAD equals github.sha
+        env:
+          WANT_SHA: ${{ github.sha }}
+        run: |
+          got="$(git rev-parse HEAD)"
+          echo "HEAD=$got want=$WANT_SHA"
+          [ "$got" = "$WANT_SHA" ] || { echo "HEAD != github.sha" >&2; exit 1; }
+      - name: Set up Python (pinned)
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1  # v6.3.0
+        with:
+          python-version: "3.11"
+      - name: Build fake package + synthetic member metadata
+        env:
+          CELL: ${{ matrix.cell_id }}
+          FAMILY: ${{ matrix.family }}
+          OS_TOKEN: ${{ matrix.os }}
+          ARCH: ${{ matrix.arch }}
+        run: |
+          python3 spike/produce.py make-pkg \
+            --cell "$CELL" --family "$FAMILY" --os "$OS_TOKEN" --arch "$ARCH" \
+            --pkg-out pkgout --member-out work/member.json
+      - name: Upload package artifact (producer-natural name, NO marker)
+        id: up
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
+        with:
+          name: pkg-${{ matrix.cell_id }}-${{ github.run_id }}
+          path: pkgout/
+          if-no-files-found: error
+      - name: Write pep-receipt/1 (immutable artifact id -> cell)
+        env:
+          CELL: ${{ matrix.cell_id }}
+          ART_ID: ${{ steps.up.outputs.artifact-id }}
+          ART_NAME: pkg-${{ matrix.cell_id }}-${{ github.run_id }}
+          ART_DIGEST: ${{ steps.up.outputs.artifact-digest }}
+        run: |
+          python3 spike/produce.py make-receipt \
+            --cell "$CELL" --artifact-id "$ART_ID" --artifact-name "$ART_NAME" \
+            --archive-digest "$ART_DIGEST" --member-in work/member.json \
+            --out receiptout/receipt.json
+      - name: Upload receipt artifact
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
+        with:
+          name: pep-receipt-${{ matrix.cell_id }}
+          path: receiptout/
+          if-no-files-found: error
+      - name: Bracket-name probe (UNPLANNED sentinel, isolated, non-fatal)
+        if: ${{ matrix.probe == 'true' }}
+        continue-on-error: true
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
+        with:
+          name: "probe-[pep-cell.__sentinel__]"
+          path: pkgout/
+          if-no-files-found: error
+  capture:
+    needs: [produce]
+    # Runs even when the DEB leg failed (truthful partial); a real cancel still stops it.
+    if: ${{ !cancelled() }}
+    permissions:
+      contents: read
+      actions: read
+    uses: ./.github/workflows/spike-capture.yml

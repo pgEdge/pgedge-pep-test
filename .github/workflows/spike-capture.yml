@@ -1,0 +1,72 @@
+name: PEP Mechanics Spike (capture)
+# TEMPORARY mechanics spike — branch spike/pep-mechanics ONLY. Reusable
+# (workflow_call) capture workflow, the SHIPPING topology. Reduced permissions
+# (never elevated beyond the caller): contents:read to check out the adapter,
+# actions:read to list + download the caller run's jobs/artifacts. Delete with
+# the branch.
+on:
+  workflow_call: {}
+permissions:
+  contents: read
+  actions: read
+jobs:
+  plan:
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      actions: read
+    steps:
+      - name: Checkout PEP (pinned) at caller github.sha
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803  # v6.1.0
+        with:
+          ref: ${{ github.sha }}
+      - name: Verify checkout HEAD equals github.sha
+        env:
+          WANT_SHA: ${{ github.sha }}
+        run: |
+          got="$(git rev-parse HEAD)"
+          echo "HEAD=$got want=$WANT_SHA"
+          [ "$got" = "$WANT_SHA" ] || { echo "HEAD != github.sha" >&2; exit 1; }
+      - name: Set up Python (pinned)
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1  # v6.3.0
+        with:
+          python-version: "3.11"
+      - name: Download run artifacts (pinned action route; observed acceptance)
+        id: dl
+        continue-on-error: true          # keep going so the REST capture still runs
+        uses: actions/download-artifact@fa0a91b85d4f404e444e00e005971372dc801d16  # v4.1.8
+        with:
+          path: dl
+      - name: Capture jobs+artifacts and run adapter+reducer (writes evidence)
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          DL_OUTCOME: ${{ steps.dl.outcome }}
+        run: |
+          python3 spike/capture.py capture \
+            --matrix spike/planned_matrix.json \
+            --downloads dl \
+            --evidence evidence \
+            --download-outcome "$DL_OUTCOME"
+      - name: Upload evidence bundle (ALWAYS, unique per attempt)
+        if: ${{ always() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
+        with:
+          name: spike-capture-a${{ github.run_attempt }}
+          path: evidence/
+          if-no-files-found: error
+      - name: Gate (LAST — intentional nonzero on partial/errors)
+        run: |
+          python3 - <<'PY'
+          import json, sys
+          r = json.load(open("evidence/result.json"))
+          print(json.dumps(r, indent=2))
+          if r.get("gate") == "PASS":
+              print("GATE PASS"); sys.exit(0)
+          if r.get("intentional_partial"):
+              print("GATE FAIL (INTENTIONAL attempt-1 partial): %s; rerun failed jobs to continue."
+                    % r.get("expectation_reason"))
+              sys.exit(1)
+          print("GATE FAIL (REAL): expectation_met=%s download_route_ok=%s errors=%s"
+                % (r.get("expectation_met"), r.get("download_route_ok"), r.get("errors")))
+          sys.exit(1)
+          PY

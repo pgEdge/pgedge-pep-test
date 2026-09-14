@@ -28,6 +28,8 @@ import os
 import re
 import sys
 import tempfile
+import urllib.error
+import urllib.parse
 import urllib.request
 import zipfile
 from collections import Counter
@@ -39,6 +41,8 @@ import pep_cert_adapter as A   # noqa: E402
 import pep_cert_plan as R      # noqa: E402
 
 API_VERSION = "2022-11-28"
+GITHUB_API_HOST = "api.github.com"
+MAX_REDIRECTS = 5
 PER_PAGE = 1                   # force multi-page listings even for a handful of records
 RECEIPT_SCHEMA = "pep-receipt/1"
 RPM = "pepcell.v1.rpm.el-9.amd64.pkg"
@@ -241,9 +245,93 @@ def _api_get(url, token):
         return json.loads(resp.read().decode("utf-8"))
 
 
+# --- safe artifact-zip download (auth never forwarded cross-origin) -----------
+# GitHub's archive_download_url (on api.github.com) answers an authenticated
+# request with a 302 to a short-lived, pre-signed blob URL on a SEPARATE storage
+# host. The GITHUB_TOKEN must reach ONLY the api.github.com origin; the signed
+# blob is fetched with NO credentials. urllib's default opener re-sends
+# Authorization across the redirect, which the storage host rejects (HTTP 401) —
+# so redirects are followed manually with per-hop header control.
+_GITHUB_ONLY_HEADERS = ("authorization", "accept", "x-github-api-version")
+
+
+def _is_github_api_url(url):
+    """True only for an HTTPS URL on the GitHub API host — the sole origin the
+    GITHUB_TOKEN may be sent to."""
+    p = urllib.parse.urlsplit(url)
+    return p.scheme == "https" and (p.hostname or "").lower() == GITHUB_API_HOST
+
+
+def _same_origin(u1, u2):
+    a, b = urllib.parse.urlsplit(u1), urllib.parse.urlsplit(u2)
+    return ((a.scheme, (a.hostname or "").lower(), a.port)
+            == (b.scheme, (b.hostname or "").lower(), b.port))
+
+
+def _initial_archive_headers(token):
+    return {"Authorization": "Bearer %s" % token,
+            "Accept": "application/vnd.github+json",
+            "X-GitHub-Api-Version": API_VERSION}
+
+
+def _next_hop_headers(from_url, to_url, headers):
+    """Headers for a redirect target. Reject an HTTPS->non-HTTPS downgrade. Keep
+    headers on a same-origin hop; on any cross-origin hop drop Authorization and
+    the GitHub-API-specific headers so credentials never leave the API origin."""
+    src, dst = urllib.parse.urlsplit(from_url), urllib.parse.urlsplit(to_url)
+    if src.scheme == "https" and dst.scheme != "https":
+        raise A.AdapterError("refusing HTTPS->non-HTTPS redirect: %s -> %s" % (from_url, to_url))
+    if _same_origin(from_url, to_url):
+        return dict(headers)
+    return {k: v for k, v in headers.items() if k.lower() not in _GITHUB_ONLY_HEADERS}
+
+
+class _NoAutoRedirect(urllib.request.HTTPRedirectHandler):
+    """Suppress urllib's automatic redirect following so each hop's headers can be
+    chosen explicitly (a 3xx is surfaced as HTTPError carrying Location)."""
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        return None
+
+
+_NOREDIR_OPENER = urllib.request.build_opener(_NoAutoRedirect)
+
+
 def _download_zip(url, token):
-    with urllib.request.urlopen(_req(url, token), timeout=120) as resp:   # nosec B310
-        return zipfile.ZipFile(io.BytesIO(resp.read()))
+    """Fetch an artifact ZIP by its GitHub API archive URL, following the redirect
+    to signed blob storage WITHOUT ever forwarding the token cross-origin."""
+    if not _is_github_api_url(url):    # validate BEFORE sending any credential
+        raise A.AdapterError("refusing to send credentials to a non-GitHub archive URL: %r" % (url,))
+    headers = _initial_archive_headers(token)
+    cur = url
+    for _ in range(MAX_REDIRECTS + 1):
+        req = urllib.request.Request(cur, headers=headers, method="GET")
+        try:
+            resp = _NOREDIR_OPENER.open(req, timeout=120)   # nosec B310 - origin validated, no cross-origin creds
+        except urllib.error.HTTPError as e:
+            if e.code in (301, 302, 303, 307, 308) and e.headers.get("Location"):
+                nxt = urllib.parse.urljoin(cur, e.headers["Location"])
+                headers = _next_hop_headers(cur, nxt, headers)   # strips creds cross-origin / rejects downgrade
+                cur = nxt
+                continue
+            raise
+        with resp:
+            return zipfile.ZipFile(io.BytesIO(resp.read()))
+    raise A.AdapterError("too many redirects fetching artifact zip from %r" % (url,))
+
+
+# --- ZIP content helpers (shared by capture + selftest) ----------------------
+def _zip_read_receipt(zf):
+    """Return (receipt_dict_or_None, json_count) from a receipt artifact ZIP."""
+    names = [n for n in zf.namelist() if n.endswith("receipt.json")]
+    if len(names) != 1:
+        return None, len(names)
+    return json.loads(zf.read(names[0]).decode("utf-8")), 1
+
+
+def _zip_member_sha(zf):
+    """SHA-256 of the single file in a package artifact ZIP, or None if not exactly one."""
+    files = [n for n in zf.namelist() if not n.endswith("/")]
+    return hashlib.sha256(zf.read(files[0])).hexdigest() if len(files) == 1 else None
 
 
 def _list_paginated(repo, run_id, kind, items_key, token, evidence_dir, extra=""):
@@ -332,9 +420,8 @@ def cmd_capture(a):
             continue
         try:
             zf = _download_zip(art.get("archive_download_url"), token)
-            jn = [n for n in zf.namelist() if n.endswith("receipt.json")]
-            rec = json.loads(zf.read(jn[0]).decode("utf-8")) if len(jn) == 1 else None
-            candidates.append({"receipt": rec, "json_count": len(jn), "receipt_artifact_name": name})
+            rec, jn = _zip_read_receipt(zf)
+            candidates.append({"receipt": rec, "json_count": jn, "receipt_artifact_name": name})
         except Exception as e:   # noqa: BLE001
             errors.append("receipt download failed for %r: %s" % (name, e))
     valid, verr = validate_receipts(candidates, arts_by_id, planned_ids)
@@ -368,10 +455,7 @@ def cmd_capture(a):
         art = arts_by_id.get(v["artifact_id"])
         recomputed = None
         try:
-            zf = _download_zip(art.get("archive_download_url"), token)
-            files = [n for n in zf.namelist() if not n.endswith("/")]
-            if len(files) == 1:
-                recomputed = hashlib.sha256(zf.read(files[0])).hexdigest()
+            recomputed = _zip_member_sha(_download_zip(art.get("archive_download_url"), token))
         except Exception as e:   # noqa: BLE001
             errors.append("package download failed for %s: %s" % (v["cell_id"], e))
         want = v["members"][0].get("sha256")
@@ -619,6 +703,49 @@ def cmd_selftest(a):
     check(g == "FAIL" and not it, "gate: attempt2 partial -> FAIL, never intentional")
     g, it = classify_gate(3, True, False, ["download-artifact route failed"], True)
     check(not it, "gate: attempt3 download failure -> never intentional")
+
+    # ---- redirect safety (credentials never forwarded cross-origin) ----
+    h0 = _initial_archive_headers("TKN")
+    check(h0.get("Authorization") == "Bearer TKN", "initial GitHub API archive request carries Authorization")
+    api_a, api_b = "https://api.github.com/x/y", "https://api.github.com/x/z"
+    check("Authorization" in _next_hop_headers(api_a, api_b, h0), "same-origin redirect may retain Authorization")
+    hx = _next_hop_headers(api_a, "https://blob.example.net/pkg.zip?sig=abc", h0)
+    check(not any(k.lower() in _GITHUB_ONLY_HEADERS for k in hx),
+          "cross-origin HTTPS redirect drops Authorization + GitHub API headers")
+    try:
+        _next_hop_headers(api_a, "http://blob.example.net/pkg.zip", h0)
+        dgok = False
+    except A.AdapterError:
+        dgok = True
+    check(dgok, "HTTPS->HTTP downgrade redirect rejected")
+    check(_is_github_api_url("https://api.github.com/x")
+          and not _is_github_api_url("https://evil.example/x")
+          and not _is_github_api_url("http://api.github.com/x"),
+          "_is_github_api_url requires https + the GitHub API host")
+    for bad in ("https://evil.example/x", "http://api.github.com/x", "ftp://api.github.com/x"):
+        try:
+            _download_zip(bad, "TKN")
+            rej = False
+        except A.AdapterError:
+            rej = True
+        check(rej, "download rejects non-GitHub/insecure initial URL before sending creds: %s" % bad)
+
+    # ---- ZIP path still supports receipt parsing + member SHA recompute ----
+    def mkzip(entries):
+        buf = io.BytesIO()
+        with zipfile.ZipFile(buf, "w") as z:
+            for n, b in entries.items():
+                z.writestr(n, b)
+        buf.seek(0)
+        return zipfile.ZipFile(buf)
+
+    rec, jn = _zip_read_receipt(mkzip({"receipt.json": json.dumps(_receipt(RPM, 11, "pkg-%s-9" % RPM, D1, [RM]))}))
+    check(jn == 1 and rec and rec.get("cell_id") == RPM, "zip receipt parsing works")
+    rec, jn = _zip_read_receipt(mkzip({"a.txt": "x"}))
+    check(rec is None and jn == 0, "zip without receipt.json -> json_count 0")
+    body = b"pkgbytes-xyz"
+    check(_zip_member_sha(mkzip({"p.rpm": body})) == hashlib.sha256(body).hexdigest(), "zip member SHA recompute works")
+    check(_zip_member_sha(mkzip({"a": "1", "b": "2"})) is None, "zip member SHA None when not exactly one file")
 
     # ---- fixture-drift: caller matrix vs planned_matrix.json (clarification #3) ----
     inc = _extract_caller_matrix(a.caller)          # stdlib-only; no PyYAML

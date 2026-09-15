@@ -330,6 +330,22 @@ def test_get_json_parses_and_caps(tmp_path, monkeypatch):
         IO.UrllibTransport("TKN").get_json(url)
 
 
+def test_urlopen_passes_timeout_as_keyword_not_body(monkeypatch):
+    # Regression: the REAL _urlopen must hand `timeout` to the opener as a KEYWORD. Passing it
+    # positionally lands it in urllib's `data` slot, which is then sent as the request body
+    # (an int -> TypeError in http.client). This drives the real _urlopen, faking only the opener.
+    seen = {}
+
+    class _FakeOpener:
+        def open(self, req, data=None, timeout=None):
+            seen["data"], seen["timeout"] = data, timeout
+            return _FakeResp(b'{"ok": 1}')
+    monkeypatch.setattr(IO, "_NOREDIR_OPENER", _FakeOpener())
+    assert IO.UrllibTransport("TKN", timeout=42).get_json("https://api.github.com/x") == {"ok": 1}
+    assert seen["data"] is None                 # timeout must NOT be sent as the request body
+    assert seen["timeout"] == 42
+
+
 # --------------------------------------------------------------------------- #
 # E. pagination through the strict adapter (total_count agreement + dup-id reject)
 # --------------------------------------------------------------------------- #

@@ -152,8 +152,10 @@ _NOREDIR_OPENER = urllib.request.build_opener(_NoAutoRedirect)
 
 
 def _urlopen(req, timeout):
-    """The single network seam (tests patch this). Returns an open response."""
-    return _NOREDIR_OPENER.open(req, timeout)   # nosec B310 - origin validated by caller
+    """The single network seam (tests patch this). Returns an open response. ``timeout`` is
+    passed as a KEYWORD so it can never land in the opener's positional ``data`` slot, which
+    would otherwise be sent as the request body (an int -> a TypeError deep in http.client)."""
+    return _NOREDIR_OPENER.open(req, timeout=timeout)   # nosec B310 - origin validated by caller
 
 
 def _initial_headers(token):

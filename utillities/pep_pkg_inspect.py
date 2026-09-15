@@ -152,6 +152,21 @@ def _detect_format(path):
     raise InspectError("unrecognized package format (not rpm/deb) for %r" % (path,))
 
 
+def detect_format(path):
+    """Public: return ``RPM`` or ``DEB`` from the file's MAGIC BYTES (never the
+    filename). Raises ``InspectError`` for an unreadable or unrecognized file."""
+    if not isinstance(path, str) or path == "":
+        raise InspectError("package path must be a non-empty string: %r" % (path,))
+    return _detect_format(path)
+
+
+def _check_expected_family(expected_family):
+    """``None`` (no enforcement) or exactly ``RPM``/``DEB``; else fail closed."""
+    if expected_family is not None and expected_family not in (RPM, DEB):
+        raise InspectError("expected_family must be None, %r or %r: %r" % (RPM, DEB, expected_family))
+    return expected_family
+
+
 def _run(argv, timeout=_TOOL_TIMEOUT_S):
     """Execute a tool with an argv list and ``shell=False`` (explicit).
 
@@ -387,35 +402,43 @@ def _member(package_name, epoch, version, release, native_arch, package_class, s
     }
 
 
-def inspect_package(path, artifact_member_path):
+def inspect_package(path, artifact_member_path, expected_family=None):
     """Inspect ONE package file at ``path`` and return its pep-members/1 record.
 
     ``artifact_member_path`` is the file's exact (case-preserving) relative path
     inside the artifact; it is validated as a safe flat filename. Both the
     filesystem path type and the member path are validated BEFORE any file is
-    opened. Format is detected from magic bytes. Raises ``InspectError`` on any
-    problem."""
+    opened. Format is detected from magic bytes. When ``expected_family`` is
+    ``RPM`` or ``DEB``, the magic-byte-detected format MUST equal it — a
+    mismatched (wrong-family) or unrecognized (sidecar) file fails closed. Raises
+    ``InspectError`` on any problem."""
     if not isinstance(path, str) or path == "":
         raise InspectError("package path must be a non-empty string: %r" % (path,))
+    _check_expected_family(expected_family)
     mp = validate_member_path(artifact_member_path)
     fmt = _detect_format(path)
+    if expected_family is not None and fmt != expected_family:
+        raise InspectError("package %r is family %r, expected %r" % (path, fmt, expected_family))
     if fmt == RPM:
         return _inspect_rpm(path, mp)
     return _inspect_deb(path, mp)
 
 
-def inspect_members(entries):
+def inspect_members(entries, expected_family=None):
     """Inspect a batch of package files, ALL-OR-NOTHING and order-independent.
 
     ``entries`` is a list of ``(path, artifact_member_path)`` pairs (one per
     package file in an artifact). Entry shape, filesystem path types and every
     member path are validated (and duplicates rejected) BEFORE any inspection
     runs; any failure raises ``InspectError`` and no partial result is returned.
-    The returned members are sorted by ``artifact_member_path`` so output is
-    deterministic regardless of caller order; field order within each member is
-    stable (``_MEMBER_ORDER``)."""
+    When ``expected_family`` is ``RPM``/``DEB``, EVERY file's magic-byte format
+    must equal it (so a wrong-family or non-package/sidecar file fails the whole
+    batch). The returned members are sorted by ``artifact_member_path`` so output
+    is deterministic regardless of caller order; field order within each member
+    is stable (``_MEMBER_ORDER``)."""
     if not isinstance(entries, list):
         raise InspectError("entries must be a list of (path, artifact_member_path) pairs")
+    _check_expected_family(expected_family)
     seen = set()
     prepared = []
     for e in entries:
@@ -429,6 +452,6 @@ def inspect_members(entries):
             raise InspectError("duplicate artifact_member_path: %r" % (vmp,))
         seen.add(vmp)
         prepared.append((path, vmp))
-    members = [inspect_package(path, mp) for path, mp in prepared]   # any failure -> no partial
+    members = [inspect_package(path, mp, expected_family) for path, mp in prepared]   # any failure -> no partial
     members.sort(key=lambda m: m["artifact_member_path"])
     return members

@@ -277,6 +277,61 @@ def test_detect_format(tmp_path):
         I._detect_format(str(tmp_path / "missing"))
 
 
+def test_public_detect_format(tmp_path):
+    r = tmp_path / "r.bin"
+    r.write_bytes(I._RPM_MAGIC + b"x")
+    d = tmp_path / "d.bin"
+    d.write_bytes(I._DEB_MAGIC + b"x")
+    assert I.detect_format(str(r)) == I.RPM
+    assert I.detect_format(str(d)) == I.DEB
+    for bad in ("", None, 123):
+        with pytest.raises(I.InspectError):
+            I.detect_format(bad)
+    b = tmp_path / "b.bin"
+    b.write_bytes(b"NOPE!!!!")
+    with pytest.raises(I.InspectError):
+        I.detect_format(str(b))
+
+
+# --- expected_family enforcement (single-source, magic-byte based) -----------
+def test_inspect_package_expected_family_ok_and_mismatch(tmp_path, monkeypatch):
+    c = _CASES["rpm_source_x86"]
+    monkeypatch.setattr(I, "RPM_BIN", _fake_tool(tmp_path, "rpm", c["tool_output"]))
+    rpm_path, _ = _fake_pkg(tmp_path, "pkg.rpm", I._RPM_MAGIC, b"RPMBODY")
+    # matching family: inspection proceeds
+    m = I.inspect_package(rpm_path, c["artifact_member_path"], expected_family=I.RPM)
+    assert m["package_class"] == "source"
+    # wrong family requested for an rpm-magic file: fail closed BEFORE running tools
+    with pytest.raises(I.InspectError):
+        I.inspect_package(rpm_path, c["artifact_member_path"], expected_family=I.DEB)
+    # a deb-magic file rejected when rpm is requested (sidecar/mixed-family case)
+    deb_path, _ = _fake_pkg(tmp_path, "pkg.deb", I._DEB_MAGIC, b"DEBBODY")
+    with pytest.raises(I.InspectError):
+        I.inspect_package(deb_path, "pkg.deb", expected_family=I.RPM)
+
+
+@pytest.mark.parametrize("bad", ["", "RPM", "src", "rpm ", 1, ["rpm"]])
+def test_expected_family_invalid_value_rejected(bad, tmp_path):
+    p, _ = _fake_pkg(tmp_path, "pkg.rpm", I._RPM_MAGIC, b"x")
+    with pytest.raises(I.InspectError):
+        I.inspect_package(p, "pkg.rpm", expected_family=bad)
+    with pytest.raises(I.InspectError):
+        I.inspect_members([(p, "pkg.rpm")], expected_family=bad)
+
+
+def test_inspect_members_expected_family_rejects_mixed(tmp_path, monkeypatch):
+    monkeypatch.setattr(I, "RPM_BIN", _fake_tool(tmp_path, "rpm", _CASES["rpm_runtime"]["tool_output"]))
+    rpm_path, _ = _fake_pkg(tmp_path, "a.rpm", I._RPM_MAGIC, b"AAA")
+    deb_path, _ = _fake_pkg(tmp_path, "b.deb", I._DEB_MAGIC, b"BBB")
+    # a mixed batch fails as a whole when a single family is enforced
+    with pytest.raises(I.InspectError):
+        I.inspect_members([(rpm_path, "a.rpm"), (deb_path, "b.deb")], expected_family=I.RPM)
+    # all-rpm batch with rpm enforced succeeds
+    rpm2, _ = _fake_pkg(tmp_path, "c.rpm", I._RPM_MAGIC, b"CCC")
+    members = I.inspect_members([(rpm_path, "a.rpm"), (rpm2, "c.rpm")], expected_family=I.RPM)
+    assert [m["artifact_member_path"] for m in members] == ["a.rpm", "c.rpm"]
+
+
 # --- _run: explicit argv + shell=False, bounded, strict UTF-8 ----------------
 def test_run_uses_list_argv_and_shell_false(monkeypatch):
     seen = {}

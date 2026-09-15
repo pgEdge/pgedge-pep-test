@@ -1,0 +1,159 @@
+name: PEP Capture
+# Reusable capture workflow (the SHIPPING topology). Runs INSIDE the caller's run,
+# reads that run's jobs + artifacts via the Actions REST API, downloads only the
+# associated receipt artifacts and the package artifacts they reference, and hands
+# the local bytes to the committed pure verifier (utillities/pep_capture.py). It
+# emits capture-evidence/1 + cert-plan/1 as artifacts and compact outputs.
+#
+# Least privilege: contents:read (self-checkout of the pinned PEP implementation)
+# and actions:read (list + download the caller run's jobs/artifacts). The caller
+# must grant at least these; a reusable workflow can never exceed the caller token.
+#
+# The consumer boundary is thin and GENERIC: detector matrices, release intent and
+# publication results are EVIDENCE the caller passes. Certification component_policy
+# is PEP-OWNED and resolved internally from utillities/pep_capture_policy.json
+# (schema pep-capture-policy/1) by the release's logical component — it is NOT a caller
+# input, and it is capture-time identity policy only, never a platform/target universe.
+on:
+  workflow_call:
+    inputs:
+      pep_implementation_ref: {required: true, type: string}   # full immutable PEP SHA
+      rpm_matrix:             {required: true, type: string}   # detector rpm_matrix JSON
+      deb_matrix:             {required: true, type: string}   # detector deb_matrix JSON
+      release_intent:         {required: true, type: string}   # release evidence JSON
+      publication_results:    {required: true, type: string}   # family push outcomes JSON
+    outputs:
+      capture_status:        {value: "${{ jobs.capture.outputs.capture_status }}"}
+      plan_schema:           {value: "${{ jobs.capture.outputs.plan_schema }}"}
+      plan_resolved:         {value: "${{ jobs.capture.outputs.plan_resolved }}"}
+      planned_cells:         {value: "${{ jobs.capture.outputs.planned_cells }}"}
+      available_build_cells: {value: "${{ jobs.capture.outputs.available_build_cells }}"}
+      eligible_targets:      {value: "${{ jobs.capture.outputs.eligible_targets }}"}
+      accepted_receipt_cells: {value: "${{ jobs.capture.outputs.accepted_receipt_cells }}"}
+      rejected_receipt_cells: {value: "${{ jobs.capture.outputs.rejected_receipt_cells }}"}
+      ambiguous_receipt_cells: {value: "${{ jobs.capture.outputs.ambiguous_receipt_cells }}"}
+      absent_receipt_cells:  {value: "${{ jobs.capture.outputs.absent_receipt_cells }}"}
+      capture_evidence_artifact_id:   {value: "${{ jobs.capture.outputs.evidence_id }}"}
+      capture_evidence_artifact_name: {value: "${{ jobs.capture.outputs.evidence_name }}"}
+      cert_plan_artifact_id:   {value: "${{ jobs.capture.outputs.plan_id }}"}
+      cert_plan_artifact_name: {value: "${{ jobs.capture.outputs.plan_name }}"}
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  capture:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      actions: read
+    outputs:
+      capture_status:        ${{ steps.capture.outputs.capture_status }}
+      plan_schema:           ${{ steps.capture.outputs.plan_schema }}
+      plan_resolved:         ${{ steps.capture.outputs.plan_resolved }}
+      planned_cells:         ${{ steps.capture.outputs.planned_cells }}
+      available_build_cells: ${{ steps.capture.outputs.available_build_cells }}
+      eligible_targets:      ${{ steps.capture.outputs.eligible_targets }}
+      accepted_receipt_cells: ${{ steps.capture.outputs.accepted_receipt_cells }}
+      rejected_receipt_cells: ${{ steps.capture.outputs.rejected_receipt_cells }}
+      ambiguous_receipt_cells: ${{ steps.capture.outputs.ambiguous_receipt_cells }}
+      absent_receipt_cells:  ${{ steps.capture.outputs.absent_receipt_cells }}
+      evidence_id:   ${{ steps.up_evidence.outputs.artifact-id }}
+      evidence_name: ${{ steps.names.outputs.evidence_name }}
+      plan_id:       ${{ steps.up_plan.outputs.artifact-id }}
+      plan_name:     ${{ steps.names.outputs.plan_name }}
+    steps:
+      - name: Checkout PEP implementation (self, pinned to the requested immutable SHA)
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803  # v6.1.0
+        with:
+          repository: pgEdge/pgedge-pep-test
+          ref: ${{ inputs.pep_implementation_ref }}
+
+      - name: Verify the checkout resolves EXACTLY to the requested ref
+        id: verify
+        env:
+          WANT_REF: ${{ inputs.pep_implementation_ref }}
+        run: |
+          set -euo pipefail
+          got="$(git rev-parse HEAD)"
+          echo "requested=$WANT_REF resolved=$got"
+          if [ "$got" != "$WANT_REF" ]; then
+            echo "resolved SHA does not match the requested implementation ref" >&2
+            exit 1
+          fi
+          echo "resolved_sha=$got" >> "$GITHUB_OUTPUT"
+
+      - name: Set up Python (pinned)
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1  # v6.3.0
+        with:
+          python-version: "3.11"
+
+      - name: Materialize evidence inputs (env-routed; never interpolated into the shell)
+        env:
+          IN_RPM_MATRIX: ${{ inputs.rpm_matrix }}
+          IN_DEB_MATRIX: ${{ inputs.deb_matrix }}
+          IN_RELEASE_INTENT: ${{ inputs.release_intent }}
+          IN_PUBLICATION_RESULTS: ${{ inputs.publication_results }}
+        run: |
+          set -euo pipefail
+          mkdir -p capture-in capture-out
+          printf '%s' "$IN_RPM_MATRIX"          > capture-in/rpm_matrix.json
+          printf '%s' "$IN_DEB_MATRIX"          > capture-in/deb_matrix.json
+          printf '%s' "$IN_RELEASE_INTENT"      > capture-in/release_intent.json
+          printf '%s' "$IN_PUBLICATION_RESULTS" > capture-in/publication_results.json
+
+      - name: Ensure package tooling for present families (rpm installed only if RPM cells exist)
+        run: |
+          set -euo pipefail
+          need_rpm="$(python3 -c "import json; print('1' if json.load(open('capture-in/rpm_matrix.json')).get('include') else '0')")"
+          if [ "$need_rpm" = "1" ] && ! command -v rpm >/dev/null 2>&1; then
+            sudo apt-get update -qq || true
+            sudo apt-get install -y -qq rpm || true
+          fi
+          # dpkg-deb ships on ubuntu runners; the capture preflight fails closed if a
+          # genuinely-needed tool is still absent (infrastructure failure, never an
+          # identity mismatch).
+
+      - name: Capture run evidence -> capture-evidence/1 + cert-plan/1
+        id: capture
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          PEP_IMPLEMENTATION_REF: ${{ inputs.pep_implementation_ref }}
+          PEP_RESOLVED_SHA: ${{ steps.verify.outputs.resolved_sha }}
+        run: |
+          set -euo pipefail
+          python3 utillities/pep_capture_io.py \
+            --rpm-matrix capture-in/rpm_matrix.json \
+            --deb-matrix capture-in/deb_matrix.json \
+            --release-intent capture-in/release_intent.json \
+            --publication-results capture-in/publication_results.json \
+            --policy utillities/pep_capture_policy.json \
+            --out-dir capture-out \
+            --tmp-root "${RUNNER_TEMP}/pep-capture-dl"
+
+      - name: Compute run-attempt-safe artifact names
+        id: names
+        run: |
+          set -euo pipefail
+          {
+            echo "evidence_name=pep-capture-evidence-r${GITHUB_RUN_NUMBER}-a${GITHUB_RUN_ATTEMPT}"
+            echo "plan_name=pep-cert-plan-r${GITHUB_RUN_NUMBER}-a${GITHUB_RUN_ATTEMPT}"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Upload capture evidence
+        id: up_evidence
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
+        with:
+          name: ${{ steps.names.outputs.evidence_name }}
+          path: capture-out/capture-evidence.json
+          if-no-files-found: error
+
+      - name: Upload certification plan
+        id: up_plan
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
+        with:
+          name: ${{ steps.names.outputs.plan_name }}
+          path: capture-out/cert-plan.json
+          if-no-files-found: error

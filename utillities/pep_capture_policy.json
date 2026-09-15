@@ -1,0 +1,10 @@
+{
+  "schema": "pep-capture-policy/1",
+  "_note": "PEP-OWNED capture-time policy, keyed by the release's logical component. It defines ONLY the component/package identity policy the capture stage checks: which runtime package names are certifiable for a component, and any expected binary version. It is NOT the set of platforms/OS/arch/PG versions PEP can execute. Detector evidence says what was BUILT; the later coordinator forms the execution set by INTERSECTING those built cells with PEP's own execution catalog. This file never carries a caller-owned platform list or a fixed target universe. It is the seed of the future centralized PEP policy source; today it carries only the capture-smoke fixture component.",
+  "components": {
+    "pgedge-capture-smoke": {
+      "allowed_runtime_package_names": ["pgedge-capture-smoke"],
+      "expected_binary_version": ""
+    }
+  }
+}

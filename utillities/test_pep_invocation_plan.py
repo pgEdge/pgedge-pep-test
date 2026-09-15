@@ -1,0 +1,752 @@
+"""Offline tests for the invocation planner (utillities/pep_invocation_plan.py).
+
+No network, no docker, no rpm/dpkg. The pure core is driven with synthetic cert-plans +
+synthetic execution data (so "changing supported OS/PG data changes output" is a data-only
+change), plus:
+  * one real-catalog integration path (container_resolver + the committed exec catalog) and a
+    RAG-derived cert-plan built from the committed detector-matrix fixture, and
+  * an end-to-end contract path that takes generated invocations through the REAL
+    pep_request.normalize_request + pep_verify.choose_install (still Docker-free) to prove the
+    exact-package (L2a) install is attemptable and pinned.
+
+Logical vs physical component: the RAG cert-plan uses the LOGICAL PEP component 'rag' while each
+target keeps the PHYSICAL package 'pgedge-rag-server2' — the same split pep_request enforces.
+"""
+import copy
+import json
+from pathlib import Path
+
+import pytest
+
+import pep_invocation_plan as P
+import pep_request
+import pep_verify
+
+HERE = Path(__file__).parent
+EXEC_CATALOG_FILE = HERE / "pep_exec_catalog.json"
+CONTAINERS_FILE = HERE.parent / "configuration" / "containers_list.json"
+RAG_DETECTOR_FIXTURE = HERE / "cert_plan_fixtures" / "rag_detector_matrix.json"
+
+# The reusable workflow contract for an invocation_id (pep-integration.yml preflight).
+INVOCATION_ID_RE = P._INVOCATION_ID_RE
+
+# The logical PEP component and its canonical physical package (from the authoritative registry).
+RAG_COMPONENT = "rag"
+RAG_PACKAGE = "pgedge-rag-server2"
+
+
+# --------------------------------------------------------------------------- #
+# builders
+# --------------------------------------------------------------------------- #
+def target(family, os_token, arch, *, package=RAG_PACKAGE, logical=RAG_COMPONENT, pg_coupled=False,
+           build_pg_major=None, version="2.0.0", release=None, epoch=None, ebv="",
+           native_arch=None, identity_state="confirmed", cell_id="c"):
+    rel = release if release is not None else ("1.el9" if family == "rpm" else "1.bookworm")
+    nat = native_arch if native_arch is not None else ("noarch" if family == "rpm" else arch)
+    return {
+        "target_id": "%s::%s" % (cell_id, package),
+        "eligibility": "eligible",
+        "logical_component": logical,
+        "physical_package": package,
+        "family": family, "os": os_token, "execution_arch": arch,
+        "native_package_arch": nat,
+        "pg_coupled": pg_coupled, "build_pg_major": build_pg_major, "build_pg_version": None,
+        "expected": {"intended_version": version, "intended_buildnum": "1", "expected_binary_version": ebv},
+        "package": {"name": package, "epoch": epoch, "version": version, "release": rel, "sha256": "ab" * 32},
+        "package_identity_state": identity_state,
+    }
+
+
+def cell(cell_id, targets):
+    for t in targets:
+        t.setdefault("target_id", "%s::%s" % (cell_id, t.get("physical_package")))
+    return {"cell_id": cell_id, "build_state": "available", "targets": targets}
+
+
+def cert_plan(cells, *, component=RAG_COMPONENT, channel="staging", version="2.0.0",
+              buildnum="1", tag="v2.0.0", resolved=True, schema="cert-plan/1"):
+    return {
+        "schema": schema, "plan_resolved": resolved, "errors": [],
+        "provenance": {"repository": "pgEdge/pgedge-pep-test", "run_id": "42", "run_attempt": "1",
+                       "sha": "deadbeef", "ref": "refs/heads/feature"},
+        "release_intent": {"logical_component": component, "channel": channel,
+                           "intended_version": version, "intended_buildnum": buildnum,
+                           "effective_tag": tag, "simulated": False},
+        "cells": cells,
+    }
+
+
+def exec_catalog(pgs=("16", "17", "18"), platforms=None):
+    if platforms is None:
+        platforms = [
+            {"os_token": "el-9", "family": "rpm", "catalog_os": ["rocky9", "alma9", "oel9"]},
+            {"os_token": "bookworm", "family": "deb", "catalog_os": ["debian12"]},
+        ]
+    return {"schema": P.EXEC_CATALOG_SCHEMA, "supported_pg_majors": list(pgs), "platforms": platforms}
+
+
+def enabled(*triples):
+    """triples of (family, arch, catalog_os) -> alias '<catalog_os>-<arch>'."""
+    return {(f, a, c): "%s-%s" % (c, a) for (f, a, c) in triples}
+
+
+def build(cells, *, ec=None, plats=None, **plan_kw):
+    return P.build_invocation_plan(cert_plan(cells, **plan_kw),
+                                   ec if ec is not None else exec_catalog(),
+                                   plats if plats is not None else enabled(("rpm", "amd64", "oel9")))
+
+
+def ids(plan):
+    return [i["invocation_id"] for i in plan["matrix"]["include"]]
+
+
+def gap_reasons(plan):
+    return sorted(g["reason"] for g in plan["coverage_gaps"])
+
+
+def _assert_ids_workflow_valid(plan):
+    for iid in ids(plan):
+        assert INVOCATION_ID_RE.match(iid), "id %r violates the workflow contract" % iid
+
+
+# --------------------------------------------------------------------------- #
+# A. selective single-family plans + broad mixed plan (req 2)
+# --------------------------------------------------------------------------- #
+def test_selective_rpm_only():
+    plan = build([cell("c1", [target("rpm", "el-9", "amd64", cell_id="c1")])],
+                 plats=enabled(("rpm", "amd64", "oel9")))
+    assert plan["plan_resolved"] is True and plan["errors"] == []
+    incl = plan["matrix"]["include"]
+    assert all(i["family"] == "rpm" and i["component"] == RAG_COMPONENT
+               and i["package_name"] == RAG_PACKAGE for i in incl)
+    assert sorted(i["pg_major"] for i in incl) == ["16", "17", "18"]
+    assert all(i["container_alias"] == "oel9-amd64" for i in incl)
+    _assert_ids_workflow_valid(plan)
+    assert plan["counts"] == {"eligible_targets": 1, "covered_targets": 1, "coverage_gaps": 0, "invocations": 3}
+
+
+def test_selective_deb_only():
+    plan = build([cell("c1", [target("deb", "bookworm", "arm64", cell_id="c1")])],
+                 plats=enabled(("deb", "arm64", "debian12")))
+    assert plan["plan_resolved"] is True
+    assert all(i["family"] == "deb" and i["container_alias"] == "debian12-arm64" for i in plan["matrix"]["include"])
+    assert len(ids(plan)) == 3 and plan["coverage_gaps"] == []
+    _assert_ids_workflow_valid(plan)
+
+
+def test_broad_mixed_family_plan():
+    plan = build(
+        [cell("r", [target("rpm", "el-9", "amd64", cell_id="r")]),
+         cell("d", [target("deb", "bookworm", "arm64", cell_id="d")])],
+        plats=enabled(("rpm", "amd64", "oel9"), ("deb", "arm64", "debian12")))
+    assert plan["plan_resolved"] is True
+    fams = {i["family"] for i in plan["matrix"]["include"]}
+    assert fams == {"rpm", "deb"} and plan["counts"]["invocations"] == 6 and plan["counts"]["coverage_gaps"] == 0
+    _assert_ids_workflow_valid(plan)
+
+
+# --------------------------------------------------------------------------- #
+# B. PG coupling (req 4)
+# --------------------------------------------------------------------------- #
+def test_pg_decoupled_expands_across_supported_majors():
+    plan = build([cell("c", [target("rpm", "el-9", "amd64", pg_coupled=False, cell_id="c")])])
+    assert sorted(i["pg_major"] for i in plan["matrix"]["include"]) == ["16", "17", "18"]
+
+
+def test_pg_coupled_stays_on_build_major():
+    plan = build([cell("c", [target("rpm", "el-9", "amd64", pg_coupled=True, build_pg_major="17", cell_id="c")])])
+    assert [i["pg_major"] for i in plan["matrix"]["include"]] == ["17"]
+    assert plan["counts"]["invocations"] == 1 and plan["coverage_gaps"] == []
+
+
+def test_pg_coupled_unsupported_major_is_gap():
+    plan = build([cell("c", [target("rpm", "el-9", "amd64", pg_coupled=True, build_pg_major="19", cell_id="c")])])
+    assert plan["matrix"]["include"] == []
+    assert gap_reasons(plan) == [P.GAP_PG_NOT_SUPPORTED] and plan["counts"]["eligible_targets"] == 1
+
+
+def test_pg_coupled_missing_major_is_gap():
+    plan = build([cell("c", [target("rpm", "el-9", "amd64", pg_coupled=True, build_pg_major=None, cell_id="c")])])
+    assert gap_reasons(plan) == [P.GAP_INVALID_PG_COUPLING]
+
+
+def test_pg_coupled_non_boolean_is_malformed_gap():
+    t = target("rpm", "el-9", "amd64", cell_id="c")
+    t["pg_coupled"] = "false"        # a string, not a bool -> strict type rejection
+    plan = build([cell("c", [t])])
+    assert plan["plan_resolved"] is True and gap_reasons(plan) == [P.GAP_MALFORMED_TARGET]
+
+
+# --------------------------------------------------------------------------- #
+# C. multiple compatible platforms (req 3)
+# --------------------------------------------------------------------------- #
+def test_multiple_compatible_platforms_expand():
+    ec = exec_catalog(platforms=[{"os_token": "el-9", "family": "rpm", "catalog_os": ["rocky9", "alma9", "oel9"]}])
+    plan = build([cell("c", [target("rpm", "el-9", "arm64", cell_id="c")])],
+                 ec=ec, plats=enabled(("rpm", "arm64", "rocky9"), ("rpm", "arm64", "alma9"),
+                                      ("rpm", "arm64", "oel9")))
+    aliases = sorted({i["container_alias"] for i in plan["matrix"]["include"]})
+    assert aliases == ["alma9-arm64", "oel9-arm64", "rocky9-arm64"]        # all three enabled -> all considered
+    assert plan["counts"]["invocations"] == 9                              # 3 platforms x 3 pg majors
+
+
+def test_only_enabled_platforms_are_used():
+    ec = exec_catalog(platforms=[{"os_token": "el-9", "family": "rpm", "catalog_os": ["rocky9", "alma9", "oel9"]}])
+    # only oel9 enabled -> the disabled/absent siblings must NOT appear
+    plan = build([cell("c", [target("rpm", "el-9", "arm64", cell_id="c")])],
+                 ec=ec, plats=enabled(("rpm", "arm64", "oel9")))
+    assert sorted({i["container_alias"] for i in plan["matrix"]["include"]}) == ["oel9-arm64"]
+
+
+# --------------------------------------------------------------------------- #
+# D. unsupported / EOL / unknown platforms + arch (req 5, 6, 9)
+# --------------------------------------------------------------------------- #
+def test_unsupported_os_is_coverage_gap_not_dropped():
+    # bullseye is intentionally NOT in the exec catalog (EOL); it must surface explicitly.
+    plan = build([cell("c", [target("deb", "bullseye", "arm64", cell_id="c")])],
+                 plats=enabled(("deb", "arm64", "debian11")))   # even though a container is enabled
+    assert plan["matrix"]["include"] == []
+    assert gap_reasons(plan) == [P.GAP_UNSUPPORTED_OS]
+    assert plan["coverage_gaps"][0]["os"] == "bullseye" and plan["counts"]["eligible_targets"] == 1
+
+
+def test_unknown_os_is_coverage_gap():
+    plan = build([cell("c", [target("deb", "plan9", "arm64", cell_id="c")])])
+    assert gap_reasons(plan) == [P.GAP_UNSUPPORTED_OS]
+
+
+def test_mapped_os_without_enabled_container_is_gap():
+    # bookworm is mapped, but no enabled debian12 for amd64 -> explicit no_enabled_platform gap.
+    plan = build([cell("c", [target("deb", "bookworm", "amd64", cell_id="c")])],
+                 plats=enabled(("deb", "arm64", "debian12")))   # only arm64 enabled
+    assert gap_reasons(plan) == [P.GAP_NO_ENABLED_PLATFORM]
+
+
+def test_unsupported_arch_is_gap():
+    plan = build([cell("c", [target("rpm", "el-9", "ppc64le", cell_id="c")])])
+    assert gap_reasons(plan) == [P.GAP_UNSUPPORTED_ARCH]
+
+
+def test_unsupported_family_is_gap():
+    t = target("rpm", "el-9", "amd64", cell_id="c")
+    t["family"] = "apk"
+    plan = build([cell("c", [t])])
+    assert gap_reasons(plan) == [P.GAP_UNSUPPORTED_FAMILY]
+
+
+# --------------------------------------------------------------------------- #
+# E. no eligible targets (req 7)
+# --------------------------------------------------------------------------- #
+def test_no_eligible_targets_is_empty_but_resolved():
+    inelig = target("rpm", "el-9", "amd64", cell_id="c")
+    inelig["eligibility"] = "ineligible"
+    plan = build([cell("c", [inelig])])
+    assert plan["plan_resolved"] is True and plan["matrix"]["include"] == []
+    assert plan["counts"] == {"eligible_targets": 0, "covered_targets": 0, "coverage_gaps": 0, "invocations": 0}
+
+
+def test_eligible_but_all_gapped_is_not_silent_empty():
+    # eligible targets exist but none map -> matrix empty AND coverage_gaps non-empty (never silent).
+    plan = build([cell("c", [target("deb", "bullseye", "arm64", cell_id="c")])])
+    assert plan["matrix"]["include"] == [] and plan["counts"]["eligible_targets"] == 1
+    assert plan["counts"]["coverage_gaps"] == 1
+
+
+# --------------------------------------------------------------------------- #
+# F. determinism + stable/unique IDs + carried identity (req 5, 6)
+# --------------------------------------------------------------------------- #
+def test_deterministic_and_stable_ids():
+    cells = [cell("d", [target("deb", "bookworm", "arm64", cell_id="d")]),
+             cell("r", [target("rpm", "el-9", "amd64", cell_id="r")])]
+    plats = enabled(("rpm", "amd64", "oel9"), ("deb", "arm64", "debian12"))
+    a = P.build_invocation_plan(cert_plan(copy.deepcopy(cells)), exec_catalog(), plats)
+    b = P.build_invocation_plan(cert_plan(copy.deepcopy(cells)), exec_catalog(), plats)
+    assert P.to_json(a) == P.to_json(b)                       # byte-identical across runs
+    assert ids(a) == sorted(ids(a)) and len(ids(a)) == len(set(ids(a)))   # sorted + unique
+    _assert_ids_workflow_valid(a)
+
+
+def test_invocation_carries_identity_and_channel():
+    plan = build([cell("c", [target("rpm", "el-9", "amd64", version="2.0.0", release="1.el9", cell_id="c")])],
+                 channel="daily")
+    inv = plan["matrix"]["include"][0]
+    assert inv["component"] == RAG_COMPONENT and inv["package_name"] == RAG_PACKAGE
+    assert inv["channel"] == "daily" and inv["expected_version"] == "2.0.0"
+    assert inv["package"] == {"name": RAG_PACKAGE, "version": "2.0.0", "release": "1.el9",
+                              "sha256": "ab" * 32, "native_arch": "noarch"}
+    for k in ("component", "package_name", "container_alias", "pg_major", "family", "arch"):
+        assert inv[k] not in (None, "")
+
+
+# --------------------------------------------------------------------------- #
+# F2. exact-package expected identity, emitted per-family only (req 1)
+# --------------------------------------------------------------------------- #
+def test_rpm_invocation_emits_only_expected_rpm_from_inspected_identity():
+    plan = build([cell("c", [target("rpm", "el-9", "amd64", version="2.0.0", release="1.el9", cell_id="c")])])
+    inv = plan["matrix"]["include"][0]
+    assert inv["expected_rpm"] == "2.0.0-1.el9"        # <version>-<release>, from the inspected package
+    assert inv["expected_deb"] == ""                   # opposite family empty -> workflow drops it
+
+
+def test_deb_invocation_emits_only_expected_deb_from_inspected_identity():
+    plan = build([cell("c", [target("deb", "bookworm", "arm64", version="2.0.0", release="1.noble", cell_id="c")])],
+                 plats=enabled(("deb", "arm64", "debian12")))
+    inv = plan["matrix"]["include"][0]
+    assert inv["expected_deb"] == "2.0.0-1.noble"
+    assert inv["expected_rpm"] == ""
+
+
+def test_expected_strings_are_not_reconstructed_from_intended_version():
+    # The inspected package (version/release) is authoritative for the pinned identity; the release
+    # 'intended_version' (which drives expected_version) is deliberately DIVERGENT here to prove
+    # expected_rpm comes from package.version/release, not from the intended version.
+    t = target("rpm", "el-9", "amd64", version="2.0.0", release="1.el9", cell_id="c")   # package.* = 2.0.0-1.el9
+    plan = build([cell("c", [t])], version="7.7.7")                                     # release intended = 7.7.7
+    inv = plan["matrix"]["include"][0]
+    assert inv["expected_rpm"] == "2.0.0-1.el9"         # from package.*, NOT the 7.7.7 intended version
+    assert inv["expected_version"] == "7.7.7"           # expected_version carries the release intent
+
+
+# --------------------------------------------------------------------------- #
+# F3. eligible-target identity invariants: epoch + confirmed state (req 1, 4)
+# --------------------------------------------------------------------------- #
+def test_epoch_bearing_eligible_target_is_gap_not_invocation():
+    t = target("rpm", "el-9", "amd64", epoch="1", cell_id="c")
+    plan = build([cell("c", [t])])
+    assert plan["plan_resolved"] is True and plan["matrix"]["include"] == []
+    assert gap_reasons(plan) == [P.GAP_PACKAGE_HAS_EPOCH]
+
+
+def test_only_none_epoch_allowed_noncanonical_rejected():
+    # The inspector canonicalizes a missing/zero epoch to None. Only None is accepted here; the
+    # alternate representations "", "0", 0 (and any real epoch) are rejected as a gap.
+    ok = build([cell("c", [target("rpm", "el-9", "amd64", epoch=None, cell_id="c")])])
+    assert ok["counts"]["invocations"] == 3 and ok["coverage_gaps"] == []
+    for bad in ("", "0", 0, "1"):
+        plan = build([cell("c", [target("rpm", "el-9", "amd64", epoch=bad, cell_id="c")])])
+        assert plan["matrix"]["include"] == [] and gap_reasons(plan) == [P.GAP_PACKAGE_HAS_EPOCH]
+
+
+def test_identity_unconfirmed_eligible_target_is_gap():
+    t = target("rpm", "el-9", "amd64", identity_state="ambiguous", cell_id="c")
+    plan = build([cell("c", [t])])
+    assert plan["matrix"]["include"] == [] and gap_reasons(plan) == [P.GAP_IDENTITY_UNCONFIRMED]
+
+
+# --------------------------------------------------------------------------- #
+# F4. malformed eligible-target shapes never raise / never partial (req 4)
+# --------------------------------------------------------------------------- #
+def test_malformed_target_shapes_are_gaps_never_raise():
+    def over(**changes):
+        t = target("rpm", "el-9", "amd64", cell_id="c")
+        t.update(changes)
+        return t
+    ok_pkg = {"name": "pgedge-rag-server2", "epoch": None, "version": "2.0.0", "release": "1.el9",
+              "sha256": "ab" * 32}
+    bad_targets = [
+        over(package=None),                                              # package not a dict
+        over(expected=["not", "an", "object"]),                         # expected not a dict
+        over(package={k: v for k, v in ok_pkg.items() if k != "version"}),   # missing version
+        over(package={**ok_pkg, "name": "different-name"}),             # name disagrees
+        over(package={**ok_pkg, "sha256": "nothex"}),                   # bad sha
+        over(package={**ok_pkg, "release": "1 el9"}),                   # non-canonical release
+    ]
+    for bt in bad_targets:
+        plan = build([cell("c", [bt])])
+        assert plan["plan_resolved"] is True                             # never raised
+        assert plan["matrix"]["include"] == []                           # no partial/null entry
+        assert plan["counts"]["coverage_gaps"] == 1
+        assert gap_reasons(plan) == [P.GAP_MALFORMED_TARGET]
+
+
+def test_logical_component_disagreement_is_malformed_gap():
+    t = target("rpm", "el-9", "amd64", cell_id="c")
+    t["logical_component"] = "rag"          # target says rag
+    plan = build([cell("c", [t])], component="rag")   # release also rag -> agrees -> ok baseline
+    assert plan["counts"]["invocations"] == 3
+    t2 = target("rpm", "el-9", "amd64", cell_id="c")
+    t2["logical_component"] = "somethingelse"          # disagrees with release 'rag'
+    plan2 = build([cell("c", [t2])])
+    assert plan2["matrix"]["include"] == [] and gap_reasons(plan2) == [P.GAP_MALFORMED_TARGET]
+
+
+def test_nonstring_binary_expectation_is_malformed_gap():
+    for bad in (123, ["x"], {"v": 1}, 1.5):
+        t = target("rpm", "el-9", "amd64", cell_id="c")
+        t["expected"]["expected_binary_version"] = bad   # neither None nor a string
+        plan = build([cell("c", [t])])
+        assert plan["matrix"]["include"] == [] and gap_reasons(plan) == [P.GAP_MALFORMED_TARGET]
+
+
+def test_none_binary_expectation_is_emitted_as_empty_string():
+    t = target("rpm", "el-9", "amd64", ebv=None, cell_id="c")   # expected_binary_version = None
+    inv = build([cell("c", [t])])["matrix"]["include"][0]
+    assert inv["expected_binary"] == ""
+
+
+def test_hyphenated_debian_version_stays_pinnable():
+    # A valid Debian version bearing hyphens must survive per-field validation and pin exactly.
+    ec = exec_catalog(platforms=[{"os_token": "trixie", "family": "deb", "catalog_os": ["debian13"]}])
+    plan = build([cell("c", [target("deb", "trixie", "arm64", version="2.0.0-beta", release="1.trixie",
+                                    native_arch="arm64", cell_id="c")])],
+                 ec=ec, plats=enabled(("deb", "arm64", "debian13")))
+    inv = plan["matrix"]["include"][0]
+    assert inv["expected_deb"] == "2.0.0-beta-1.trixie" and inv["expected_rpm"] == ""
+    # ... and it normalizes + pins through the real PEP contract (debian13-arm64 is a real alias).
+    req = pep_request.normalize_request(_request_from_invocation(inv))
+    kind, token = pep_verify.choose_install(req)
+    assert kind == "pinned" and token == "2.0.0-beta-1.trixie"
+
+
+# --------------------------------------------------------------------------- #
+# F5. blank/whitespace optionals canonicalize to "" (never a doomed invocation) (req: this pass)
+# --------------------------------------------------------------------------- #
+def test_blank_variants_of_optionals_emit_empty_string():
+    # effective_tag, expected_buildnum (from intended_buildnum) and expected_binary: every
+    # None/empty/whitespace-only form must be emitted as "" (the planner treats blank as absent).
+    for blank in (None, "", "   ", "\t", " \n "):
+        t = target("rpm", "el-9", "amd64", cell_id="c")
+        t["expected"]["expected_binary_version"] = blank
+        plan = build([cell("c", [t])], tag=blank, buildnum=blank)
+        assert plan["plan_resolved"] is True
+        inv = plan["matrix"]["include"][0]
+        assert inv["effective_tag"] == ""
+        assert inv["expected_buildnum"] == ""
+        assert inv["expected_binary"] == ""
+
+
+def test_normalize_request_rejects_whitespace_optional_documenting_why():
+    # WHY the canonicalization matters: a whitespace-only optional reaching the request is rejected
+    # by normalize_request as "provided but is empty". The planner must never emit such a value.
+    plan = _real_rag_plan()
+    inv = next(i for i in plan["matrix"]["include"] if i["family"] == "rpm")
+    raw = _request_from_invocation(inv)
+    raw["effective_tag"] = "   "                         # simulate a non-canonicalized value slipping in
+    with pytest.raises(pep_request.RequestError):
+        pep_request.normalize_request(raw)
+
+
+def test_whitespace_only_optionals_do_not_produce_doomed_invocation():
+    # End-to-end: whitespace-only tag/buildnum/binary in the source -> the generated invocation still
+    # normalizes cleanly and pins exactly (no "provided but is empty").
+    t = target("rpm", "el-9", "amd64", version="2.0.0", release="1.el9", cell_id="c")
+    t["expected"]["expected_binary_version"] = "   "
+    plan = build([cell("c", [t])], tag="   ", buildnum="   ")
+    inv = plan["matrix"]["include"][0]
+    raw = _request_from_invocation(inv)
+    assert "effective_tag" not in raw and "expected_buildnum" not in raw and "expected_binary" not in raw
+    req = pep_request.normalize_request(raw)             # must not raise
+    kind, token = pep_verify.choose_install(req)
+    assert kind == "pinned" and token == "2.0.0-1.el9"
+
+
+# --------------------------------------------------------------------------- #
+# G. reject: duplicate identity + ambiguous/malformed catalog (req 8) + unresolved source
+# --------------------------------------------------------------------------- #
+def test_duplicate_invocation_identity_fails_closed():
+    # two cells, identical component+package+os+arch+inspected identity -> identical ids -> reject.
+    cells = [cell("c1", [target("rpm", "el-9", "amd64", cell_id="c1")]),
+             cell("c2", [target("rpm", "el-9", "amd64", cell_id="c2")])]
+    plan = build(cells)
+    assert plan["plan_resolved"] is False and plan["matrix"]["include"] == []
+    assert any("duplicate invocation identity" in e for e in plan["errors"])
+
+
+def test_ambiguous_exec_catalog_mapping_fails_closed():
+    ec = exec_catalog(platforms=[
+        {"os_token": "el-9", "family": "rpm", "catalog_os": ["rocky9"]},
+        {"os_token": "el-9", "family": "rpm", "catalog_os": ["alma9"]}])   # same (os_token, family)
+    plan = build([cell("c", [target("rpm", "el-9", "amd64", cell_id="c")])], ec=ec)
+    assert plan["plan_resolved"] is False and plan["matrix"]["include"] == []
+    assert any("ambiguous mapping" in e for e in plan["errors"])
+
+
+def test_malformed_exec_catalog_fails_closed():
+    for bad in ({"schema": "wrong", "supported_pg_majors": ["16"], "platforms": []},
+                {"schema": P.EXEC_CATALOG_SCHEMA, "supported_pg_majors": [], "platforms": []},
+                {"schema": P.EXEC_CATALOG_SCHEMA, "supported_pg_majors": ["x"], "platforms": []},
+                {"schema": P.EXEC_CATALOG_SCHEMA, "supported_pg_majors": ["16"], "platforms": "nope"}):
+        plan = build([cell("c", [target("rpm", "el-9", "amd64", cell_id="c")])], ec=bad)
+        assert plan["plan_resolved"] is False and plan["matrix"]["include"] == []
+
+
+def test_unresolved_or_wrong_schema_source_fails_closed():
+    unresolved = build([cell("c", [target("rpm", "el-9", "amd64", cell_id="c")])], resolved=False)
+    assert unresolved["plan_resolved"] is False and unresolved["matrix"]["include"] == []
+    wrong = build([cell("c", [target("rpm", "el-9", "amd64", cell_id="c")])], schema="cert-plan/999")
+    assert wrong["plan_resolved"] is False and wrong["matrix"]["include"] == []
+
+
+def test_bad_release_channel_or_version_fails_closed():
+    bad_channel = build([cell("c", [target("rpm", "el-9", "amd64", cell_id="c")])], channel="nightly")
+    assert bad_channel["plan_resolved"] is False and bad_channel["matrix"]["include"] == []
+    assert any("channel" in e for e in bad_channel["errors"])
+    blank_ver = build([cell("c", [target("rpm", "el-9", "amd64", cell_id="c")])], version="")
+    assert blank_ver["plan_resolved"] is False and blank_ver["matrix"]["include"] == []
+
+
+def test_bad_effective_tag_fails_closed():
+    # a tag missing the required 'v' prefix would be rejected by normalize_request downstream ->
+    # fail closed here rather than emit invocations that predictably fail.
+    plan = build([cell("c", [target("rpm", "el-9", "amd64", cell_id="c")])], tag="2.0.0")
+    assert plan["plan_resolved"] is False and plan["matrix"]["include"] == []
+    assert any("effective_tag" in e for e in plan["errors"])
+
+
+def test_bad_intended_buildnum_fails_closed():
+    # '-' is not in the PEP build-number grammar (^[A-Za-z0-9._]+$) -> fail closed.
+    plan = build([cell("c", [target("rpm", "el-9", "amd64", cell_id="c")])], buildnum="1-2")
+    assert plan["plan_resolved"] is False and plan["matrix"]["include"] == []
+    assert any("intended_buildnum" in e for e in plan["errors"])
+
+
+# --------------------------------------------------------------------------- #
+# G2. exec-catalog canonical-string rejection (req 5)
+# --------------------------------------------------------------------------- #
+@pytest.mark.parametrize("bad_pgs", [("16 ",), (" 16",), ("016",), ("16", "16")])
+def test_padded_or_duplicate_pg_majors_rejected(bad_pgs):
+    pgs, os_map, errs = P.validate_exec_catalog(exec_catalog(pgs=bad_pgs))
+    assert errs and pgs == []                                  # rejected, not silently stripped
+
+
+def test_padded_os_token_or_catalog_os_rejected():
+    ec_tok = exec_catalog(platforms=[{"os_token": " el-9", "family": "rpm", "catalog_os": ["oel9"]}])
+    ec_cos = exec_catalog(platforms=[{"os_token": "el-9", "family": "rpm", "catalog_os": ["oel9 "]}])
+    for ec in (ec_tok, ec_cos):
+        _, _, errs = P.validate_exec_catalog(ec)
+        assert errs
+        plan = build([cell("c", [target("rpm", "el-9", "amd64", cell_id="c")])], ec=ec)
+        assert plan["plan_resolved"] is False and plan["matrix"]["include"] == []
+
+
+# --------------------------------------------------------------------------- #
+# H. data-only reconfiguration changes output without code changes (req 9)
+# --------------------------------------------------------------------------- #
+def test_changing_supported_pg_changes_output():
+    cells = [cell("c", [target("rpm", "el-9", "amd64", cell_id="c")])]
+    wide = P.build_invocation_plan(cert_plan(cells), exec_catalog(pgs=("16", "17", "18")),
+                                   enabled(("rpm", "amd64", "oel9")))
+    narrow = P.build_invocation_plan(cert_plan(cells), exec_catalog(pgs=("16",)),
+                                     enabled(("rpm", "amd64", "oel9")))
+    assert wide["counts"]["invocations"] == 3 and narrow["counts"]["invocations"] == 1     # data-only
+
+
+def test_adding_os_support_changes_output_without_code():
+    cells = [cell("c", [target("deb", "bullseye", "arm64", cell_id="c")])]
+    plats = enabled(("deb", "arm64", "debian11"))
+    without = P.build_invocation_plan(cert_plan(cells), exec_catalog(platforms=[]), plats)
+    with_bullseye = P.build_invocation_plan(
+        cert_plan(cells),
+        exec_catalog(platforms=[{"os_token": "bullseye", "family": "deb", "catalog_os": ["debian11"]}]),
+        plats)
+    assert without["matrix"]["include"] == [] and gap_reasons(without) == [P.GAP_UNSUPPORTED_OS]
+    assert with_bullseye["counts"]["invocations"] == 3 and with_bullseye["coverage_gaps"] == []
+
+
+# --------------------------------------------------------------------------- #
+# I. invocation_id: workflow-valid, deterministic, collision-resistant (req 2)
+# --------------------------------------------------------------------------- #
+def test_invocation_id_is_workflow_valid_and_repeatable():
+    a = P._invocation_id("rag", "pgedge-rag-server2", "oel9-amd64", "16", "2.0.0", "1.el9", "ab" * 32)
+    b = P._invocation_id("rag", "pgedge-rag-server2", "oel9-amd64", "16", "2.0.0", "1.el9", "ab" * 32)
+    assert a == b and INVOCATION_ID_RE.match(a)               # deterministic + charset/length valid
+
+
+def test_invocation_id_handles_long_and_unsafe_source_values():
+    iid = P._invocation_id("x" * 200, "p::q/../evil", "a b::c" + "z" * 200, "16",
+                           "2.0.0", "1.el9", "cd" * 32)
+    assert INVOCATION_ID_RE.match(iid) and len(iid) <= 64     # long + unsafe -> still safe & bounded
+
+
+def test_invocation_id_distinguishes_physical_packages_and_identities():
+    base = ("rag", "pgedge-rag-server2", "oel9-amd64", "16", "2.0.0", "1.el9", "ab" * 32)
+    # different physical package -> different id
+    assert P._invocation_id(*base) != P._invocation_id("rag", "pgedge-rag-server", *base[2:])
+    # different inspected sha (same everything else) -> different id
+    assert P._invocation_id(*base) != P._invocation_id(*base[:6], "cd" * 32)
+    # different release -> different id
+    assert P._invocation_id(*base) != P._invocation_id(*base[:5], "2.el9", base[6])
+
+
+def test_two_distinct_physical_packages_same_dims_get_distinct_invocations():
+    # 'rag' accepts both pgedge-rag-server2 and pgedge-rag-server; sharing os/arch/pg they must NOT
+    # collide (distinct ids), and both must be emitted -- no fail-closed, no silent merge.
+    cells = [cell("c", [target("rpm", "el-9", "amd64", package="pgedge-rag-server2", cell_id="c"),
+                        target("rpm", "el-9", "amd64", package="pgedge-rag-server", cell_id="c")])]
+    plan = build(cells)
+    assert plan["plan_resolved"] is True
+    assert plan["counts"]["invocations"] == 6                 # 2 packages x 3 pg majors
+    assert len(set(ids(plan))) == 6
+    assert {i["package_name"] for i in plan["matrix"]["include"]} == {"pgedge-rag-server2", "pgedge-rag-server"}
+
+
+# --------------------------------------------------------------------------- #
+# J. logical/physical component boundary + PEP-registry capability gating (req 3)
+# --------------------------------------------------------------------------- #
+def test_unknown_logical_component_is_capability_gap():
+    cells = [cell("c", [target("rpm", "el-9", "amd64", logical="not-a-pep-component", cell_id="c")])]
+    plan = build(cells, component="not-a-pep-component")       # release + target agree, but unknown
+    assert plan["matrix"]["include"] == [] and gap_reasons(plan) == [P.GAP_UNSUPPORTED_COMPONENT]
+
+
+def test_disallowed_physical_package_is_capability_gap():
+    cells = [cell("c", [target("rpm", "el-9", "amd64", package="pgedge-bogus", cell_id="c")])]
+    plan = build(cells)                                        # component 'rag' known, package not accepted
+    assert plan["matrix"]["include"] == [] and gap_reasons(plan) == [P.GAP_UNSUPPORTED_COMPONENT]
+
+
+def test_registry_reuses_pep_request_contract_not_a_copy():
+    # The planner's registry IS pep_request's authoritative table (same object), not a duplicate.
+    assert P.COMPONENT_PACKAGES is pep_request.COMPONENT_PACKAGES
+    assert P.VALID_CHANNELS is pep_request.VALID_CHANNELS
+
+
+# --------------------------------------------------------------------------- #
+# K. END-TO-END CONTRACT: generated invocations normalize + pin exactly (req 1, 3)
+# --------------------------------------------------------------------------- #
+# Coordinator run-level defaults consumed by normalize_request (execution_mode=full is a workflow
+# concept, not a normalize_request input). effective_tag/expected_binary etc. are dropped-when-empty
+# exactly as pep-integration.yml's framework step does (`[ -n "$IN_..." ] && args+=(...)`).
+_RUN_LEVEL_DEFAULTS = {"scenario": "certification", "mode": "observe"}
+_OPTIONAL_KEYS = ("expected_buildnum", "effective_tag", "expected_rpm", "expected_deb", "expected_binary")
+
+
+def _request_from_invocation(inv):
+    """Transform a generated invocation into a normalize_request raw dict the way the coordinator +
+    pep-integration.yml would: required inputs always present, empty optionals dropped, run-level
+    defaults supplied."""
+    raw = {k: inv[k] for k in ("component", "package_name", "channel", "expected_version",
+                               "container_alias", "pg_major", "family", "arch")}
+    for k in _OPTIONAL_KEYS:
+        v = inv.get(k)
+        if v not in (None, ""):
+            raw[k] = v
+    raw.update(_RUN_LEVEL_DEFAULTS)
+    return raw
+
+
+def _real_rag_plan():
+    cells = _rag_cells_from_fixture()
+    ec = json.loads(EXEC_CATALOG_FILE.read_text())
+    enabled_platforms, err = P.load_enabled_platforms(str(CONTAINERS_FILE))
+    assert err is None and enabled_platforms
+    plan = P.build_invocation_plan(cert_plan(cells), ec, enabled_platforms)
+    assert plan["plan_resolved"] is True and plan["errors"] == []
+    return plan
+
+
+def test_every_generated_rag_invocation_normalizes_and_pins_exactly():
+    plan = _real_rag_plan()
+    incl = plan["matrix"]["include"]
+    assert len(incl) >= 20 and {i["family"] for i in incl} == {"rpm", "deb"}   # both families, many legs
+    for inv in incl:                                          # EVERY invocation, not one per family
+        req = pep_request.normalize_request(_request_from_invocation(inv))     # must not raise
+        # L2a (exact package-manager identity) is attemptable, and the install is PINNED, never latest.
+        assert req["attemptable_now"]["l2a"] is True
+        assert req["component"] == RAG_COMPONENT and req["package_name"] == RAG_PACKAGE
+        kind, token = pep_verify.choose_install(req)
+        assert kind == "pinned" and token
+        expected_token = "%s-%s" % (inv["package"]["version"], inv["package"]["release"])
+        assert token == expected_token          # exact VERSION-RELEASE from the inspected package
+
+
+def test_generated_invocation_opposite_family_token_absent():
+    # An rpm invocation carries expected_deb == "" (dropped by the workflow), so normalize_request
+    # never sees a contradictory opposite-family expected string.
+    plan = _real_rag_plan()
+    rpm_inv = next(i for i in plan["matrix"]["include"] if i["family"] == "rpm")
+    raw = _request_from_invocation(rpm_inv)
+    assert "expected_deb" not in raw and raw["expected_rpm"] == rpm_inv["expected_rpm"]
+    req = pep_request.normalize_request(raw)      # would raise if expected_deb leaked into an rpm req
+    assert req["expected_deb"] is None
+
+
+# --------------------------------------------------------------------------- #
+# L. real committed catalogs + RAG-derived cert-plan (req 11 + import boundary)
+# --------------------------------------------------------------------------- #
+def _rag_release(fam, os_tok):
+    """Realistic native release string for a detector os token: EL9->1.el9, EL10->1.el10, and a
+    Debian/Ubuntu codename token->1.<codename> (e.g. noble->1.noble, trixie->1.trixie)."""
+    if fam == "rpm":
+        return "1." + os_tok.replace("-", "")     # el-9 -> 1.el9, el-10 -> 1.el10
+    return "1." + os_tok                            # deb codename token -> 1.<codename>
+
+
+def _rag_native_arch(fam, arch):
+    """Realistic native package arch: RPM uses x86_64/aarch64, DEB uses amd64/arm64."""
+    return {"amd64": "x86_64", "arm64": "aarch64"}[arch] if fam == "rpm" else arch
+
+
+def _rag_cells_from_fixture():
+    """Build eligible, PG-decoupled cert-plan cells from the committed RAG detector matrix.
+
+    The detector fixture's physical package is the RAG 2.x package; the LOGICAL PEP component is
+    'rag' (release-level), matching the authoritative registry. Native release + arch use realistic
+    per-OS values so the generated pins resemble real inspected packages."""
+    doc = json.loads(RAG_DETECTOR_FIXTURE.read_text())
+    seen, cells = set(), []
+    for m in _iter_matrix_cells(doc):
+        fam, os_tok, arch = m.get("family"), m.get("os"), m.get("normalized_arch")
+        cid = m.get("cell_id")
+        if not (fam and os_tok and arch and cid) or cid in seen:
+            continue
+        seen.add(cid)
+        cells.append(cell(cid, [target(fam, os_tok, arch, package=RAG_PACKAGE, logical=RAG_COMPONENT,
+                                        pg_coupled=False, release=_rag_release(fam, os_tok),
+                                        native_arch=_rag_native_arch(fam, arch), cell_id=cid)]))
+    return cells
+
+
+def _iter_matrix_cells(obj):
+    if isinstance(obj, dict):
+        if {"family", "os", "normalized_arch"} <= set(obj):
+            yield obj
+        for v in obj.values():
+            yield from _iter_matrix_cells(v)
+    elif isinstance(obj, list):
+        for v in obj:
+            yield from _iter_matrix_cells(v)
+
+
+def test_real_catalogs_load_and_plan_rag():
+    cells = _rag_cells_from_fixture()
+    assert len(cells) >= 12                                   # the RAG matrix is non-trivial
+    ec = json.loads(EXEC_CATALOG_FILE.read_text())
+    enabled_platforms, err = P.load_enabled_platforms(str(CONTAINERS_FILE))
+    assert err is None and enabled_platforms                 # real container_resolver import boundary
+    plan = P.build_invocation_plan(cert_plan(cells), ec, enabled_platforms)
+    assert plan["plan_resolved"] is True and plan["errors"] == []
+    # bullseye (EOL) always surfaces as an explicit unsupported gap, never a silent drop.
+    bull = [g for g in plan["coverage_gaps"] if g["os"] == "bullseye"]
+    assert bull and all(g["reason"] == P.GAP_UNSUPPORTED_OS for g in bull)
+    # every emitted invocation targets a CURRENTLY-ENABLED alias, a supported PG major, logical rag.
+    alias_set = set(enabled_platforms.values())
+    for inv in plan["matrix"]["include"]:
+        assert inv["container_alias"] in alias_set
+        assert inv["pg_major"] in ("16", "17", "18")
+        assert inv["component"] == RAG_COMPONENT and inv["package_name"] == RAG_PACKAGE
+    _assert_ids_workflow_valid(plan)
+    assert ids(plan) == sorted(ids(plan)) and len(ids(plan)) == len(set(ids(plan)))
+    # nothing eligible silently vanished: covered + gaps accounts for every eligible target.
+    c = plan["counts"]
+    assert c["covered_targets"] + c["coverage_gaps"] == c["eligible_targets"] == len(cells)
+
+
+def test_committed_exec_catalog_is_valid_and_omits_bullseye():
+    ec = json.loads(EXEC_CATALOG_FILE.read_text())
+    pgs, os_map, errs = P.validate_exec_catalog(ec)
+    assert errs == [] and pgs == ["16", "17", "18"]
+    assert ("bullseye", "deb") not in os_map                 # EOL: intentionally unmapped
+    assert ("el-9", "rpm") in os_map and ("bookworm", "deb") in os_map
+
+
+def test_main_writes_plan_and_exit_code(tmp_path):
+    cells = [cell("c", [target("rpm", "el-9", "amd64", cell_id="c")])]
+    cp = tmp_path / "cert-plan.json"; cp.write_text(json.dumps(cert_plan(cells)))
+    out = tmp_path / "inv.json"
+    rc = P.main(["--cert-plan", str(cp), "--exec-catalog", str(EXEC_CATALOG_FILE),
+                 "--containers", str(CONTAINERS_FILE), "--out", str(out)])
+    doc = json.loads(out.read_text())
+    assert rc == 0 and doc["schema"] == P.SCHEMA and doc["plan_resolved"] is True
+    # el-9 amd64 -> oel9-amd64 is enabled in the committed catalog -> real invocations exist.
+    assert any(i["container_alias"] == "oel9-amd64" for i in doc["matrix"]["include"])

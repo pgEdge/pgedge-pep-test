@@ -1,0 +1,14 @@
+{
+  "schema": "pep-exec-catalog/1",
+  "_note": "PEP-OWNED execution catalog for certification planning. It COMPOSES with configuration/containers_list.json (the authoritative platform source: that file owns which concrete containers, per architecture, are currently enabled/runnable). This file adds ONLY the two things the container list cannot express and that are genuinely certification policy: (1) supported_pg_majors — the PG majors PEP can currently execute for certification; (2) platforms — the bridge from a packaging OS token (as the detector/cert-plan emit it) to the container catalog's OS identities (catalog_os), where a container alias is '<catalog_os>-<arch>'. It never duplicates arch or enabled state, and it is NOT a fixed cell universe. Retire an OS by removing its platforms entry here (or disabling its containers in containers_list.json); add PG majors or platforms as data, no code change. Debian bullseye is intentionally ABSENT because it is EOL: historical bullseye build evidence therefore surfaces as an explicit unsupported coverage gap instead of silently disappearing. debian11 may remain enabled in containers_list.json for regression, but certification does not run on EOL bullseye.",
+  "supported_pg_majors": ["16", "17", "18"],
+  "platforms": [
+    { "os_token": "el-9",     "family": "rpm", "catalog_os": ["rocky9", "alma9", "oel9"] },
+    { "os_token": "el-10",    "family": "rpm", "catalog_os": ["rocky10", "alma10", "oel10"] },
+    { "os_token": "jammy",    "family": "deb", "catalog_os": ["ubuntu2204"] },
+    { "os_token": "noble",    "family": "deb", "catalog_os": ["ubuntu2404"] },
+    { "os_token": "bookworm", "family": "deb", "catalog_os": ["debian12"] },
+    { "os_token": "trixie",   "family": "deb", "catalog_os": ["debian13"] },
+    { "os_token": "resolute", "family": "deb", "catalog_os": ["ubuntu2604"] }
+  ]
+}

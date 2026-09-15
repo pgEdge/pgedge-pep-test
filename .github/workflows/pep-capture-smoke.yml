@@ -1,0 +1,241 @@
+name: PEP Capture Smoke
+# PEP-only, manually triggered smoke for the reusable capture workflow. It builds
+# one representative RPM cell and one DEB cell entirely in CI (no committed
+# binaries, no tags, no release event), marks each build job with a [pep-cell:<id>]
+# marker, uploads package + receipt artifacts, then calls the reusable capture
+# workflow to turn this run's own evidence into a certification plan.
+#
+# The two cells are TEST FIXTURES ONLY — they do not define any supported OS/arch/
+# PG/component universe. Certification policy comes from the PEP-owned capture policy
+# file (utillities/pep_capture_policy.json), never from this workflow.
+on:
+  workflow_dispatch: {}
+  # Durable, PATH-SCOPED (not tag/branch-name) trigger: run the smoke whenever the
+  # reusable/smoke workflows or ANY capture dependency they exercise changes, so a
+  # regression is caught on the commit that introduces it — on any branch.
+  push:
+    paths:
+      - '.github/workflows/pep-capture-smoke.yml'
+      - '.github/workflows/pep-capture.yml'
+      - '.github/actions/pep-package-receipt/**'
+      - 'utillities/pep_capture_io.py'
+      - 'utillities/pep_capture.py'
+      - 'utillities/pep_cert_adapter.py'
+      - 'utillities/pep_cert_plan.py'
+      - 'utillities/pep_pkg_inspect.py'
+      - 'utillities/pep_capture_policy.json'
+
+# actions:read is granted at the caller so the reusable capture job (capped by the
+# caller token) can list + download this run's jobs and artifacts.
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  build:
+    # One build job per fixture cell. fail-fast:false so an rpm-only or deb-only
+    # regression is both reported. The job NAME carries the producer-neutral
+    # [pep-cell:<cell_id>] marker the capture adapter associates jobs by.
+    name: build [pep-cell:${{ matrix.cell_id }}]
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - cell_id: capsmoke-rpm-el9-amd64
+            family: rpm
+          - cell_id: capsmoke-deb-bookworm-amd64
+            family: deb
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Checkout PEP (provides the local receipt action + inspector)
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803  # v6.1.0
+
+      - name: Build one tiny ${{ matrix.family }} package aligned to the release intent
+        id: build
+        env:
+          FAMILY: ${{ matrix.family }}
+        run: |
+          set -euo pipefail
+          mkdir -p pkgout
+          if [ "$FAMILY" = "deb" ]; then
+            mkdir -p root/DEBIAN
+            cat > root/DEBIAN/control <<'EOF'
+          Package: pgedge-capture-smoke
+          Version: 1.0.0-1.bookworm
+          Architecture: amd64
+          Maintainer: PEP Smoke <pep@example.invalid>
+          Description: tiny capture-smoke package (deb cell)
+          EOF
+            pkg="pgedge-capture-smoke_1.0.0-1.bookworm_amd64.deb"
+            dpkg-deb --build root "pkgout/$pkg"
+          else
+            if ! command -v rpmbuild >/dev/null 2>&1; then
+              sudo apt-get update -qq
+              sudo apt-get install -y -qq rpm
+            fi
+            cat > tiny.spec <<'EOF'
+          Name: pgedge-capture-smoke
+          Version: 1.0.0
+          Release: 1.el9
+          Summary: tiny capture-smoke rpm (rpm cell)
+          License: MIT
+          BuildArch: noarch
+          %description
+          tiny capture smoke package
+          %files
+          %changelog
+          EOF
+            rpmbuild -bb --define "_topdir $PWD/rpmbuild" tiny.spec
+            pkg="pgedge-capture-smoke-1.0.0-1.el9.noarch.rpm"
+            cp "rpmbuild/RPMS/noarch/$pkg" "pkgout/$pkg"
+          fi
+
+      - name: Upload package artifact FIRST (producer-natural, unique name)
+        id: up
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
+        with:
+          name: capsmoke-pkg-${{ matrix.family }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: pkgout/
+          if-no-files-found: error
+
+      - name: Generate pep-receipt/2 for the cell (LOCAL composite action)
+        id: receipt
+        uses: ./.github/actions/pep-package-receipt
+        with:
+          cell_id: ${{ matrix.cell_id }}
+          family: ${{ matrix.family }}
+          package_dir: pkgout
+          package_artifact_id: ${{ steps.up.outputs.artifact-id }}
+          package_artifact_name: capsmoke-pkg-${{ matrix.family }}-${{ github.run_id }}-${{ github.run_attempt }}
+          package_artifact_digest: ${{ steps.up.outputs.artifact-digest }}
+
+  capture:
+    # Caller job for the reusable capture workflow. It runs in THIS run, so it reads
+    # this run's build jobs (via the markers) and the package + receipt artifacts.
+    # !cancelled() (the scheduling rule proven by the mechanics spike): a build FAILURE
+    # must still reach capture so it produces truthful PARTIAL evidence, not a silent gap.
+    needs: build
+    if: ${{ !cancelled() }}
+    uses: ./.github/workflows/pep-capture.yml
+    permissions:
+      contents: read
+      actions: read
+    with:
+      pep_implementation_ref: ${{ github.sha }}
+      rpm_matrix: '{"include":[{"cell_id":"capsmoke-rpm-el9-amd64","family":"rpm","os":"el-9","normalized_arch":"amd64"}]}'
+      deb_matrix: '{"include":[{"cell_id":"capsmoke-deb-bookworm-amd64","family":"deb","os":"bookworm","normalized_arch":"amd64"}]}'
+      release_intent: '{"logical_component":"pgedge-capture-smoke","intended_version":"1.0.0","intended_buildnum":"1","effective_tag":"capture-smoke","channel":"daily","simulated":false}'
+      publication_results: '{"rpm":"success","deb":"success"}'
+
+  assert-plan:
+    # always(): run even if build/capture went red, and REQUIRE the capture caller to have
+    # SUCCEEDED — a skipped or failed capture can never be read as a passing smoke.
+    needs: capture
+    if: ${{ always() }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Require the capture job to have succeeded
+        env:
+          CAPTURE_RESULT: ${{ needs.capture.result }}
+        run: |
+          set -euo pipefail
+          echo "capture job result: $CAPTURE_RESULT"
+          test "$CAPTURE_RESULT" = "success" || { echo "capture job did not succeed"; exit 1; }
+
+      - name: Assert a fully-resolved 2/2/2/2 plan with zero non-available outcomes
+        env:
+          STATUS: ${{ needs.capture.outputs.capture_status }}
+          RESOLVED: ${{ needs.capture.outputs.plan_resolved }}
+          PLAN_SCHEMA: ${{ needs.capture.outputs.plan_schema }}
+          PLANNED: ${{ needs.capture.outputs.planned_cells }}
+          AVAILABLE: ${{ needs.capture.outputs.available_build_cells }}
+          ACCEPTED: ${{ needs.capture.outputs.accepted_receipt_cells }}
+          ELIGIBLE: ${{ needs.capture.outputs.eligible_targets }}
+          REJECTED: ${{ needs.capture.outputs.rejected_receipt_cells }}
+          AMBIGUOUS: ${{ needs.capture.outputs.ambiguous_receipt_cells }}
+          ABSENT: ${{ needs.capture.outputs.absent_receipt_cells }}
+          EV_ID: ${{ needs.capture.outputs.capture_evidence_artifact_id }}
+          EV_NAME: ${{ needs.capture.outputs.capture_evidence_artifact_name }}
+          PLAN_ID: ${{ needs.capture.outputs.cert_plan_artifact_id }}
+          PLAN_NAME: ${{ needs.capture.outputs.cert_plan_artifact_name }}
+        run: |
+          set -euo pipefail
+          echo "status=$STATUS resolved=$RESOLVED schema=$PLAN_SCHEMA planned=$PLANNED available=$AVAILABLE accepted=$ACCEPTED eligible=$ELIGIBLE rejected=$REJECTED ambiguous=$AMBIGUOUS absent=$ABSENT"
+          echo "evidence: id=$EV_ID name=$EV_NAME ; plan: id=$PLAN_ID name=$PLAN_NAME"
+          test "$STATUS" = "ok"               || { echo "capture did not complete cleanly"; exit 1; }
+          test "$PLAN_SCHEMA" = "cert-plan/1" || { echo "unexpected plan schema"; exit 1; }
+          test "$RESOLVED" = "true"           || { echo "plan not resolved (want lowercase true)"; exit 1; }
+          test "$PLANNED"   = "2"             || { echo "expected 2 planned cells, got $PLANNED"; exit 1; }
+          test "$AVAILABLE" = "2"             || { echo "expected 2 available cells, got $AVAILABLE"; exit 1; }
+          test "$ACCEPTED"  = "2"             || { echo "expected 2 accepted receipts, got $ACCEPTED"; exit 1; }
+          test "$ELIGIBLE"  = "2"             || { echo "expected 2 eligible targets, got $ELIGIBLE"; exit 1; }
+          test "$REJECTED"  = "0"             || { echo "expected 0 rejected, got $REJECTED"; exit 1; }
+          test "$AMBIGUOUS" = "0"             || { echo "expected 0 ambiguous, got $AMBIGUOUS"; exit 1; }
+          test "$ABSENT"    = "0"             || { echo "expected 0 absent, got $ABSENT"; exit 1; }
+          # positive immutable artifact IDs + nonblank names (the by-id download below is real)
+          case "$EV_ID"   in ''|*[!0-9]*) echo "evidence artifact id not a positive integer: '$EV_ID'"; exit 1;; esac
+          case "$PLAN_ID" in ''|*[!0-9]*) echo "plan artifact id not a positive integer: '$PLAN_ID'"; exit 1;; esac
+          test -n "$EV_NAME"   || { echo "blank evidence artifact name"; exit 1; }
+          test -n "$PLAN_NAME" || { echo "blank plan artifact name"; exit 1; }
+
+      - name: Download the capture evidence BY IMMUTABLE ID
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131  # v7.0.0
+        with:
+          # a single artifact-id extracts FLAT into `path` (v7.0.0 length===1 branch)
+          artifact-ids: ${{ needs.capture.outputs.capture_evidence_artifact_id }}
+          path: dl-ev
+
+      - name: Download the certification plan BY IMMUTABLE ID
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131  # v7.0.0
+        with:
+          artifact-ids: ${{ needs.capture.outputs.cert_plan_artifact_id }}
+          path: dl-plan
+
+      - name: Inspect the REAL evidence + plan JSON (schemas, cells, provenance, no secrets)
+        env:
+          EXPECT_REPO: ${{ github.repository }}
+          EXPECT_RUN_ID: ${{ github.run_id }}
+          EV_FILE: dl-ev/capture-evidence.json
+          PLAN_FILE: dl-plan/cert-plan.json
+        run: |
+          set -euo pipefail
+          ls -R dl-ev dl-plan
+          python3 - <<'PY'
+          import json, os, sys
+          ev = json.load(open(os.environ["EV_FILE"]))
+          plan = json.load(open(os.environ["PLAN_FILE"]))
+          def fail(m):
+              print("ASSERT FAIL:", m); sys.exit(1)
+          # exact schemas
+          if ev.get("schema") != "capture-evidence/1": fail("evidence schema %r" % ev.get("schema"))
+          if plan.get("schema") != "cert-plan/1": fail("plan schema %r" % plan.get("schema"))
+          # resolved, and NO plan errors
+          if plan.get("plan_resolved") is not True: fail("plan_resolved=%r" % plan.get("plan_resolved"))
+          if plan.get("errors"): fail("plan errors: %r" % plan.get("errors"))
+          # exactly the two expected cells, both available
+          cells = plan.get("cells") or []
+          ids = sorted(c.get("cell_id") for c in cells)
+          want = ["capsmoke-deb-bookworm-amd64", "capsmoke-rpm-el9-amd64"]
+          if ids != want: fail("cells %r != %r" % (ids, want))
+          for c in cells:
+              if c.get("build_state") != "available": fail("cell %r build_state=%r" % (c.get("cell_id"), c.get("build_state")))
+          # exactly two eligible targets
+          cov = plan.get("coverage_denominators") or {}
+          if cov.get("eligible_targets") != 2: fail("eligible_targets=%r" % cov.get("eligible_targets"))
+          elig = [t for c in cells for t in (c.get("targets") or []) if t.get("eligibility") == "eligible"]
+          if len(elig) != 2: fail("eligible target objects=%d" % len(elig))
+          # correct run provenance on BOTH documents
+          for label, doc in (("evidence", ev), ("plan", plan)):
+              prov = doc.get("provenance") or {}
+              if prov.get("repository") != os.environ["EXPECT_REPO"]:
+                  fail("%s provenance.repository=%r" % (label, prov.get("repository")))
+              if str(prov.get("run_id")) != os.environ["EXPECT_RUN_ID"]:
+                  fail("%s provenance.run_id=%r" % (label, prov.get("run_id")))
+          # NO url / credential / signed-query data in the persisted evidence or plan
+          blob = (json.dumps(ev) + json.dumps(plan)).lower()
+          for bad in ("http://", "https://", "bearer ", "authorization", "x-amz", "sig=", "token="):
+              if bad in blob: fail("leaked %r in persisted artifacts" % bad)
+          print("OK cells=%r eligible=%d run_id=%s" % (ids, len(elig), ev.get("provenance", {}).get("run_id")))
+          PY

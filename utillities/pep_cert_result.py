@@ -16,6 +16,18 @@ top-level ``invocation_id``; the reducer joins it to the corresponding
 SHA and expected pins). The full planned entry is preserved verbatim per leg as
 ``planned_invocation`` alongside the atomic outcome and full validated provenance.
 
+Attempt awareness (rerun-safe): a GitHub run keeps ONE ``run_id`` across every re-run
+attempt (only ``run_attempt`` increments), so identity binds to the FOUR
+attempt-stable provenance fields (repository/run_id/sha/ref) and the producing attempt
+is judged separately — each summary's ``caller_run_attempt`` is classified against the
+REQUIRED live aggregation attempt (``current_run_attempt``): equal is current, lower is
+prior/historical, greater is a future violation (fail-closed). Only a current-attempt
+result fills a leg; a prior-attempt record is retained in ``historical_results`` for
+audit and is NEVER promoted (so an expected id with only carried-forward history is a
+truthful ``missing_result`` leg). ``provenance.run_attempt`` stays the SOURCE
+plan/capture attempt; ``attempt_context`` reports both the plan and aggregation
+attempts without relabelling either. No timestamps and no newest-wins selection.
+
 Structural boundary (``result_resolved`` + ``errors[]``):
   * A malformed, unknown (id not in the plan), or duplicate result record, or a
     matched result whose provenance does not bind to the plan, is a STRUCTURAL
@@ -71,12 +83,15 @@ _COUNT_KEYS = ("tests", "failures", "errors", "skipped")
 _PLAN_PROVENANCE_KEYS = ("repository", "run_id", "run_attempt", "sha", "ref")
 # The stable seven-key shape of the top-level cert-result provenance block.
 _TOP_PROVENANCE_KEYS = _PLAN_PROVENANCE_KEYS + ("pep_requested_ref", "pep_resolved_sha")
-# The five release-run provenance fields that MUST bind a matched atomic summary
-# (caller_* on the summary) to the invocation plan (plan.provenance.*).
-_PROVENANCE_BINDING = (
+# The ATTEMPT-STABLE release-run provenance fields that bind an atomic summary
+# (caller_* on the summary) to the invocation plan (plan.provenance.*). run_attempt
+# is DELIBERATELY EXCLUDED: it is not an identity discriminator (one GitHub run keeps
+# a single run_id across every re-run attempt, incrementing only run_attempt), so a
+# carried-forward prior-attempt summary shares these four fields and must be
+# classified by attempt (current/prior/future) rather than rejected as foreign.
+_STABLE_BINDING = (
     ("caller_repo", "repository"),
     ("caller_run_id", "run_id"),
-    ("caller_run_attempt", "run_attempt"),
     ("caller_sha", "sha"),
     ("caller_ref", "ref"),
 )
@@ -175,6 +190,11 @@ def _provenance_reason(prov):
     for k in _PROVENANCE_KEYS:
         if not _nonblank_str(prov.get(k)):
             return "provenance field %r must be a nonblank string" % k
+    # The summary must carry and validate its OWN producing attempt as a positive
+    # decimal string so it can be classified (current/prior/future) against the live
+    # aggregation attempt. A nonblank-but-non-numeric caller_run_attempt is malformed.
+    if not _is_positive_decimal_str(prov.get("caller_run_attempt")):
+        return "provenance caller_run_attempt must be a positive decimal string"
     rs = prov["pep_resolved_sha"]
     if not _FULL_SHA_RE.fullmatch(rs):
         return "pep_resolved_sha must be a full 40-hex SHA"
@@ -240,40 +260,53 @@ def _unexpected_invocation_id(s):
 # --------------------------------------------------------------------------- #
 # provenance binding (matched legs only)
 # --------------------------------------------------------------------------- #
-def _bind_field(iid, label, summary_val, plan_val, errors):
-    pv, sv = _coerce(plan_val), _coerce(summary_val)
-    if pv == "":
-        errors.append("leg %s: cannot bind %s: plan provenance is missing this value" % (iid, label))
-        return
-    if sv == "":
-        errors.append("leg %s: cannot bind %s: summary provenance is missing this value" % (iid, label))
-        return
-    if sv != pv:
-        errors.append("leg %s: %s %r does not match plan provenance %r" % (iid, label, summary_val, plan_val))
+def _attempt_context(plan_prov, current_run_attempt):
+    """The stable two-key attempt-context block. ``plan_run_attempt`` mirrors the
+    top-level provenance run_attempt (the SOURCE plan/capture attempt, nulled when the
+    plan value is untrustworthy — never relabelled as the aggregation attempt);
+    ``aggregation_run_attempt`` is the validated live aggregation attempt, or null when
+    it is not a positive decimal string. Shape is ALWAYS these two keys."""
+    prov = plan_prov if isinstance(plan_prov, dict) else {}
+    pa = prov.get("run_attempt")
+    plan_ra = pa if _valid_plan_provenance_value("run_attempt", pa) else None
+    agg_ra = current_run_attempt if _is_positive_decimal_str(current_run_attempt) else None
+    return {"plan_run_attempt": plan_ra, "aggregation_run_attempt": agg_ra}
 
 
-def _validate_matched_provenance(matched, plan_prov):
-    """Bind every matched summary's caller_* provenance to the plan's release-run
-    provenance, and enforce PEP-ref + enforcement-mode consistency across matched
-    legs. Returns a deterministic list of structural error strings (empty == valid).
+def _stable_binding_errors(iid, prov, plan_prov):
+    """Deterministic error strings if a summary's ATTEMPT-STABLE provenance
+    (repository/run_id/sha/ref) does not bind to the plan (empty == binds). A summary
+    that does not bind is FOREIGN regardless of its attempt. The plan provenance is a
+    validated dict (Phase 0b), so only the summary side can be missing/mismatched."""
+    errors = []
+    for summary_key, plan_key in _STABLE_BINDING:
+        pv, sv = _coerce(plan_prov.get(plan_key)), _coerce(prov.get(summary_key))
+        if sv == "":
+            errors.append("leg %s: cannot bind %s: summary provenance is missing this value"
+                          % (iid, summary_key))
+        elif sv != pv:
+            errors.append("leg %s: %s %r does not match plan provenance %r"
+                          % (iid, summary_key, prov.get(summary_key), plan_prov.get(plan_key)))
+    return errors
 
-    caller_repo/run_id/run_attempt/sha/ref bind DIRECTLY to plan.provenance (a
-    mismatch is validation_failure). pep_requested_ref/pep_resolved_sha have no
-    absolute plan value, so they are required nonblank, required to agree across
-    matched legs, and — only when requested_ref is a full 40-hex SHA — required to
-    equal resolved_sha; proving how an arbitrary ref resolves stays workflow work."""
+
+def _matched_cross_consistency(matched):
+    """Enforce PEP-ref + enforcement-mode consistency across the CURRENT matched legs
+    (never historical records). Returns a deterministic list of structural error
+    strings (empty == consistent).
+
+    pep_requested_ref/pep_resolved_sha have no absolute plan value, so they are
+    required to agree across matched legs (each is already nonblank, and — when
+    requested_ref is a full 40-hex SHA — already required to equal resolved_sha by the
+    malformed classification). enforcement_mode must likewise agree across matched legs.
+    Attempt-stable binding to the plan is enforced per-record upstream, so only these
+    cross-record concerns remain here."""
     errors = []
     if not matched:
         return errors
-    # Each matched record is already complete/consistent (malformed classification
-    # guarantees seven nonblank provenance fields + a full pep_resolved_sha + a
-    # full-SHA pep_requested_ref that equals it), so only CROSS-record concerns remain:
-    # binding caller_* to the plan and agreement across matched legs.
     requested, resolved, modes = {}, {}, {}
     for iid in sorted(matched):
         prov = matched[iid].get("provenance") or {}
-        for summary_key, plan_key in _PROVENANCE_BINDING:
-            _bind_field(iid, summary_key, prov.get(summary_key), plan_prov.get(plan_key), errors)
         requested[iid] = prov.get("pep_requested_ref")
         resolved[iid] = prov.get("pep_resolved_sha")
         modes[iid] = matched[iid].get("enforcement_mode")
@@ -326,6 +359,36 @@ def _missing_leg(iid, planned):
         "provenance": None,
         "planned_invocation": planned,
     }
+
+
+# --------------------------------------------------------------------------- #
+# historical (prior-attempt) audit records — never promoted to a leg
+# --------------------------------------------------------------------------- #
+def _historical_entry(iid, s):
+    """Audit record for a bound PRIOR-attempt summary. Preserves enough to audit the
+    invocation, its producing attempt, its result and its full provenance. Never
+    influences legs, coverage, verdict, or the top-level PEP refs."""
+    return {
+        "invocation_id": iid,
+        "producing_attempt": s["provenance"]["caller_run_attempt"],
+        "execution_status": s.get("execution_status"),
+        "test_verdict": s.get("test_verdict"),
+        "enforcement_mode": s.get("enforcement_mode"),
+        "identity_evidence": copy.deepcopy(s.get("identity_evidence")),
+        "counts": copy.deepcopy(s.get("counts")),
+        "reason": s.get("reason"),
+        "provenance": copy.deepcopy(s.get("provenance")),
+    }
+
+
+def _sorted_historical(historical):
+    """Byte-deterministic ordering. On the resolved path each (invocation_id,
+    producing_attempt) pair is unique (a same-attempt duplicate fails closed), so the
+    numeric-attempt key is total; the serialized tie-breaker keeps it total on every
+    path regardless of input order."""
+    return sorted(historical, key=lambda h: (
+        h["invocation_id"], int(h["producing_attempt"]),
+        json.dumps(h, sort_keys=True, ensure_ascii=False)))
 
 
 # --------------------------------------------------------------------------- #
@@ -447,9 +510,11 @@ def _sorted_unexpected(unexpected):
         json.dumps(u.get("evidence"), sort_keys=True, ensure_ascii=False)))
 
 
-def _fail_closed(errors, plan=None, unexpected=None):
+def _fail_closed(errors, plan=None, unexpected=None, current_run_attempt=None):
     """Empty/failed-safe cert-result for a STRUCTURAL validation failure. Echoes the
-    plan's provenance/release for traceability; carries the offending records."""
+    plan's provenance/release for traceability; carries the offending records. The
+    stable-shape fields (seven-key provenance, two-key attempt_context, empty
+    historical_results) are always present."""
     unexpected = list(unexpected or [])
     plan = plan if isinstance(plan, dict) else {}
     rel = plan.get("release")
@@ -461,6 +526,7 @@ def _fail_closed(errors, plan=None, unexpected=None):
         # Seven-key shape retained even when failing closed: trustworthy plan values are
         # kept, the two PEP fields (and any untrustworthy plan value) are null.
         "provenance": _provenance_block(plan.get("provenance"), None, None),
+        "attempt_context": _attempt_context(plan.get("provenance"), current_run_attempt),
         "release": copy.deepcopy(rel) if isinstance(rel, dict) else {},
         "execution_status": "infra_failure",
         "test_verdict": "not_run",
@@ -468,6 +534,7 @@ def _fail_closed(errors, plan=None, unexpected=None):
         "counts": _zero_counts(len(unexpected)),
         "legs": [],
         "coverage_gaps": [],
+        "historical_results": [],
         "unexpected_results": _sorted_unexpected(unexpected),
     }
 
@@ -475,18 +542,35 @@ def _fail_closed(errors, plan=None, unexpected=None):
 # --------------------------------------------------------------------------- #
 # pure core
 # --------------------------------------------------------------------------- #
-def build_cert_result(plan, summaries):
+def build_cert_result(plan, summaries, current_run_attempt):
     """Reduce a resolved ``pep-invocation-plan/1`` + parsed atomic summaries into a
-    deterministic ``cert-result/1`` dict. Never raises for JSON-compatible input."""
+    deterministic ``cert-result/1`` dict. Never raises for JSON-compatible input.
+
+    ``current_run_attempt`` is the LIVE aggregation attempt (the coordinator's
+    ``github.run_attempt`` at aggregate time). It is REQUIRED and validated as a
+    positive decimal string — never silently defaulted from the plan — because a
+    rerun-failed run carries the plan/capture attempt forward while re-executed legs
+    stamp the newer attempt, so the producing attempt must be judged against the live
+    value, not the (possibly stale) plan provenance."""
     # ---- Phase 0: input structural validity ----
+    # The live aggregation attempt is a required, self-standing input: an invalid one
+    # is a validation failure regardless of the plan, and is never inferred from it.
+    if not _is_positive_decimal_str(current_run_attempt):
+        return _fail_closed(["current_run_attempt must be a positive decimal string"],
+                            plan=plan if isinstance(plan, dict) else None,
+                            current_run_attempt=current_run_attempt)
     if not isinstance(plan, dict):
-        return _fail_closed(["source invocation plan is not an object"])
+        return _fail_closed(["source invocation plan is not an object"],
+                            current_run_attempt=current_run_attempt)
     if plan.get("schema") != PLAN_SCHEMA:
-        return _fail_closed(["source plan schema must be %r" % PLAN_SCHEMA], plan=plan)
+        return _fail_closed(["source plan schema must be %r" % PLAN_SCHEMA], plan=plan,
+                            current_run_attempt=current_run_attempt)
     if plan.get("plan_resolved") is not True:
-        return _fail_closed(["source invocation plan is not resolved"], plan=plan)
+        return _fail_closed(["source invocation plan is not resolved"], plan=plan,
+                            current_run_attempt=current_run_attempt)
     if not isinstance(summaries, list):
-        return _fail_closed(["summaries must be a list"], plan=plan)
+        return _fail_closed(["summaries must be a list"], plan=plan,
+                            current_run_attempt=current_run_attempt)
 
     # ---- Phase 0b: validate every OUTER plan field the reducer directly trusts ----
     # A resolved plan is not re-planned here, but a malformed outer contract must fail
@@ -510,6 +594,12 @@ def build_cert_result(plan, summaries):
             outer.append("plan provenance run_id must be a positive decimal string")
         if not _is_positive_decimal_str(prov.get("run_attempt")):
             outer.append("plan provenance run_attempt must be a positive decimal string")
+        # attempt_context invariant: the source plan/capture attempt can never exceed
+        # the live aggregation attempt (current_run_attempt was validated in Phase 0).
+        pa = prov.get("run_attempt")
+        if _is_positive_decimal_str(pa) and int(pa) > int(current_run_attempt):
+            outer.append("plan provenance run_attempt %s is greater than current_run_attempt %s"
+                         % (pa, current_run_attempt))
     if not isinstance(plan.get("release"), dict):
         outer.append("plan release must be an object")
     if not isinstance(plan.get("coverage_gaps"), list):
@@ -526,7 +616,7 @@ def build_cert_result(plan, summaries):
     if not isinstance(include, list):
         outer.append("plan matrix.include must be a list")
     if outer:
-        return _fail_closed(outer, plan=plan)
+        return _fail_closed(outer, plan=plan, current_run_attempt=current_run_attempt)
 
     # ---- Phase 1: index EXPECTED invocations (defensive uniqueness/id checks) ----
     expected, dup_expected, plan_errors = {}, set(), []
@@ -545,10 +635,14 @@ def build_cert_result(plan, summaries):
     if dup_expected:
         plan_errors.append("plan has duplicate invocation_id(s): %s" % ", ".join(sorted(dup_expected)))
     if plan_errors:
-        return _fail_closed(plan_errors, plan=plan)
+        return _fail_closed(plan_errors, plan=plan, current_run_attempt=current_run_attempt)
 
-    # ---- Phase 2: classify each atomic summary ----
-    unexpected, candidates = [], {}
+    # ---- Phase 2: classify each atomic summary (attempt-aware) ----
+    # plan provenance is a validated dict with five nonblank fields (Phase 0b).
+    plan_prov = plan["provenance"]
+    cur_att = int(current_run_attempt)
+    unexpected, binding_errors = [], []
+    current_cand, prior_cand = {}, {}
     for s in summaries:
         reason = _summary_malformed_reason(s)
         if reason is not None:
@@ -562,32 +656,77 @@ def build_cert_result(plan, summaries):
                                "invocation_id": iid,
                                "evidence": _evidence(s, "invocation_id is not in the plan")})
             continue
-        candidates.setdefault(iid, []).append(s)
+        # A well-formed summary carries a complete provenance object (malformed
+        # classification guarantees seven nonblank fields + a positive-decimal
+        # caller_run_attempt). Bind the ATTEMPT-STABLE identity first: a summary that
+        # does not bind is foreign regardless of attempt.
+        prov_s = s["provenance"]
+        berrs = _stable_binding_errors(iid, prov_s, plan_prov)
+        if berrs:
+            binding_errors.extend(berrs)
+            unexpected.append({"kind": "foreign", "invocation_id": iid,
+                               "evidence": _evidence(s, "summary stable provenance does not bind to the plan")})
+            continue
+        att = int(prov_s["caller_run_attempt"])
+        if att > cur_att:
+            unexpected.append({"kind": "future", "invocation_id": iid,
+                               "evidence": _evidence(
+                                   s, "producing attempt %d is greater than the aggregation attempt %d"
+                                   % (att, cur_att))})
+        elif att == cur_att:
+            current_cand.setdefault(iid, []).append(s)
+        else:
+            prior_cand.setdefault(iid, []).append(s)
 
-    # Duplicates: >1 candidate for one expected id. Retain EVERY candidate's evidence
-    # in unexpected_results; never silently select one. They do not enter legs.
-    for iid in sorted(candidates):
-        group = candidates[iid]
+    # Current duplicates: >1 CURRENT candidate for one expected id. Retain EVERY
+    # candidate's evidence; never silently select one. They do not enter legs.
+    for iid in sorted(current_cand):
+        group = current_cand[iid]
         if len(group) > 1:
             for s in group:
                 unexpected.append({"kind": "duplicate", "invocation_id": iid,
-                                   "evidence": _evidence(s, "duplicate result for an expected invocation")})
-    matched = {iid: group[0] for iid, group in candidates.items() if len(group) == 1}
+                                   "evidence": _evidence(s, "duplicate current result for an expected invocation")})
+    matched = {iid: group[0] for iid, group in current_cand.items() if len(group) == 1}
+
+    # Historical (prior-attempt) records: distinct producing attempts for one
+    # invocation are allowed and audited; two records sharing the SAME invocation and
+    # producing attempt are ambiguous -> validation failure (both retained as evidence).
+    # Group by the NUMERIC attempt value (caller_run_attempt is a validated positive
+    # decimal), so different spellings of the same number ("1" and "01") are the SAME
+    # producing attempt and collide as a duplicate. Output spelling is left untouched:
+    # _historical_entry preserves each record's original caller_run_attempt string.
+    historical = []
+    for iid in sorted(prior_cand):
+        by_attempt = {}
+        for s in prior_cand[iid]:
+            by_attempt.setdefault(int(s["provenance"]["caller_run_attempt"]), []).append(s)
+        for att_num in sorted(by_attempt):
+            grp = by_attempt[att_num]
+            if len(grp) > 1:
+                for s in grp:
+                    unexpected.append({"kind": "duplicate_historical", "invocation_id": iid,
+                                       "evidence": _evidence(
+                                           s, "duplicate historical result for an expected invocation and producing attempt")})
+            else:
+                historical.append(_historical_entry(iid, grp[0]))
 
     # ---- Phase 3: structural gate (fail closed on unexpected records or bad binding) ----
-    # plan provenance is a validated dict with five nonblank fields (Phase 0b).
-    plan_prov = plan["provenance"]
-    struct_errors = _validate_matched_provenance(matched, plan_prov)
+    # Foreign binding detail surfaces in errors; cross-consistency applies to CURRENT
+    # matched legs only (never historical).
+    struct_errors = list(binding_errors) + _matched_cross_consistency(matched)
     kind_counts = {}
     for u in unexpected:
         kind_counts[u["kind"]] = kind_counts.get(u["kind"], 0) + 1
-    for kind in ("malformed", "unknown", "duplicate"):
+    for kind in ("malformed", "unknown", "foreign", "future", "duplicate", "duplicate_historical"):
         if kind_counts.get(kind):
             struct_errors.append("%d %s result record(s) present" % (kind_counts[kind], kind))
     if struct_errors:
-        return _fail_closed(struct_errors, plan=plan, unexpected=unexpected)
+        return _fail_closed(struct_errors, plan=plan, unexpected=unexpected,
+                            current_run_attempt=current_run_attempt)
 
     # ---- Phase 4: build exactly one leg per expected invocation ----
+    # A leg is filled ONLY by a current-attempt result; a prior-attempt record is never
+    # promoted (an expected id with only history is a missing_result leg).
     legs = []
     for iid in sorted(expected):
         planned = copy.deepcopy(expected[iid])
@@ -601,9 +740,9 @@ def build_cert_result(plan, summaries):
     test_verdict = _aggregate_verdict(legs, n_expected)
     coverage_status = _aggregate_coverage(legs, n_expected, plan_gaps)
 
-    # Top-level provenance: five plan fields + the two PEP fields taken from the
-    # already-validated common atomic provenance (all matched legs agree), or null when
-    # no result matched. Any matched summary carries the same values by construction.
+    # Top-level PEP requested/resolved come ONLY from current matched summaries (never
+    # historical); null when no current result matched. Any matched summary carries the
+    # same values by construction (cross-consistency enforced above).
     if matched:
         common = matched[sorted(matched)[0]]["provenance"]
         pep_requested_ref = common.get("pep_requested_ref")
@@ -616,7 +755,10 @@ def build_cert_result(plan, summaries):
         "result_resolved": True,
         "errors": [],
         "reason_code": reason_code,
+        # provenance.run_attempt stays the SOURCE plan/capture attempt; the live
+        # aggregation attempt lives only in attempt_context, never relabelling the plan.
         "provenance": _provenance_block(plan_prov, pep_requested_ref, pep_resolved_sha),
+        "attempt_context": _attempt_context(plan_prov, current_run_attempt),
         "release": copy.deepcopy(plan.get("release") or {}),
         "execution_status": execution_status,
         "test_verdict": test_verdict,
@@ -624,6 +766,7 @@ def build_cert_result(plan, summaries):
         "counts": _counts(legs, n_expected, plan_gaps, 0),
         "legs": legs,
         "coverage_gaps": copy.deepcopy(plan_gaps),
+        "historical_results": _sorted_historical(historical),
         "unexpected_results": [],
     }
 
@@ -654,6 +797,9 @@ def main(argv=None):
                     help="an already-extracted atomic summary.json (repeatable)")
     ap.add_argument("--summaries-dir", default=None,
                     help="directory of already-extracted *.json atomic summaries")
+    ap.add_argument("--current-run-attempt", required=True,
+                    help="the live aggregation attempt (the coordinator's github.run_attempt); "
+                         "a positive decimal string. Never inferred from the plan.")
     ap.add_argument("--out", default=None, help="write the cert-result here (default: stdout)")
     args = ap.parse_args(argv)
 
@@ -663,7 +809,9 @@ def main(argv=None):
         for f in sorted(Path(args.summaries_dir).glob("*.json")):
             summaries.append(_load_json(str(f)))
 
-    result = build_cert_result(plan, summaries)
+    # The pure core validates current_run_attempt (positive decimal) and fails closed
+    # with a truthful cert-result rather than an argparse crash on a bad value.
+    result = build_cert_result(plan, summaries, args.current_run_attempt)
     text = to_json(result)
     if args.out:
         with open(args.out, "w", encoding="utf-8") as fh:

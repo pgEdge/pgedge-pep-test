@@ -99,12 +99,20 @@ def _summary(iid, *, execution_status="completed", test_verdict="pass",
     return s
 
 
+def _build(plan, summaries, current_run_attempt="1"):
+    """Call the pure reducer with an explicit aggregation attempt. Defaults to "1"
+    (matching the default plan/caller attempt) so attempt-agnostic tests keep their
+    original meaning; attempt-classification tests pass an explicit value. The reducer
+    itself has NO default — current_run_attempt is a required argument."""
+    return pcr.build_cert_result(plan, summaries, current_run_attempt)
+
+
 # --------------------------------------------------------------------------- #
 # happy path + planned-invocation retention + evidence preservation
 # --------------------------------------------------------------------------- #
 def test_all_completed_pass_is_complete_coverage_and_completed_execution():
     plan = _plan([_inv("rag-a-pg17-aaaa"), _inv("rag-b-pg18-bbbb", pg="18")])
-    res = pcr.build_cert_result(plan, [_summary("rag-a-pg17-aaaa"), _summary("rag-b-pg18-bbbb")])
+    res = _build(plan, [_summary("rag-a-pg17-aaaa"), _summary("rag-b-pg18-bbbb")])
     assert res["result_resolved"] is True
     assert res["execution_status"] == "completed"
     assert res["test_verdict"] == "pass"
@@ -117,7 +125,7 @@ def test_all_completed_pass_is_complete_coverage_and_completed_execution():
 
 def test_full_planned_invocation_is_retained_per_leg():
     inv = _inv("rag-a-pg17-aaaa", source_target_id="tgt-XYZ")
-    res = pcr.build_cert_result(_plan([inv]), [_summary("rag-a-pg17-aaaa")])
+    res = _build(_plan([inv]), [_summary("rag-a-pg17-aaaa")])
     leg = res["legs"][0]
     planned = leg["planned_invocation"]
     # exactly the plan entry, preserved wholesale (source IDs, SHA, exact pins)
@@ -130,7 +138,7 @@ def test_full_planned_invocation_is_retained_per_leg():
 
 def test_matched_leg_preserves_full_provenance_identity_counts():
     prov = _caller_prov()
-    res = pcr.build_cert_result(_plan([_inv("rag-a-pg17-aaaa")]),
+    res = _build(_plan([_inv("rag-a-pg17-aaaa")]),
                                 [_summary("rag-a-pg17-aaaa", provenance=prov)])
     leg = res["legs"][0]
     assert leg["provenance"] == prov            # FULL provenance, not a subset
@@ -143,7 +151,7 @@ def test_coverage_gaps_carried_verbatim_and_force_partial():
     gap = {"cell_id": "pepcell.v1.deb.bullseye.amd64.pkg", "target_id": "tgt-eol",
            "family": "deb", "os": "bullseye", "arch": "amd64",
            "physical_package": "pgedge-rag-server", "reason": "unsupported_os", "detail": "bullseye"}
-    res = pcr.build_cert_result(_plan([_inv("rag-a-pg17-aaaa")], gaps=[gap]),
+    res = _build(_plan([_inv("rag-a-pg17-aaaa")], gaps=[gap]),
                                 [_summary("rag-a-pg17-aaaa")])
     assert res["result_resolved"] is True
     assert res["coverage_status"] == "partial"      # a planner gap prevents complete
@@ -156,7 +164,7 @@ def test_coverage_gaps_carried_verbatim_and_force_partial():
 # missing result: affects BOTH execution and coverage
 # --------------------------------------------------------------------------- #
 def test_missing_result_synthesizes_infra_leg_and_partial_coverage():
-    res = pcr.build_cert_result(_plan([_inv("rag-a-pg17-aaaa")]), [])
+    res = _build(_plan([_inv("rag-a-pg17-aaaa")]), [])
     assert res["result_resolved"] is True           # missing is truthfully resolved
     leg = res["legs"][0]
     assert leg["reconciliation"] == "missing"
@@ -171,7 +179,7 @@ def test_missing_result_synthesizes_infra_leg_and_partial_coverage():
 
 def test_missing_alongside_completed_still_infra_and_partial():
     plan = _plan([_inv("rag-a-pg17-aaaa"), _inv("rag-b-pg18-bbbb", pg="18")])
-    res = pcr.build_cert_result(plan, [_summary("rag-a-pg17-aaaa")])   # b is missing
+    res = _build(plan, [_summary("rag-a-pg17-aaaa")])   # b is missing
     assert res["execution_status"] == "infra_failure"
     assert res["reason_code"] == "missing_result"
     assert res["coverage_status"] == "partial"
@@ -183,7 +191,7 @@ def test_missing_alongside_completed_still_infra_and_partial():
 # execution precedence + aggregate independence
 # --------------------------------------------------------------------------- #
 def test_matched_infra_leg_rolls_up_infra_leg_reason():
-    res = pcr.build_cert_result(
+    res = _build(
         _plan([_inv("rag-a-pg17-aaaa")]),
         [_summary("rag-a-pg17-aaaa", execution_status="infra_failure", test_verdict="not_run")])
     assert res["execution_status"] == "infra_failure"
@@ -193,7 +201,7 @@ def test_matched_infra_leg_rolls_up_infra_leg_reason():
 
 def test_mixed_preview_and_non_preview_is_incomplete_mixed_mode():
     plan = _plan([_inv("rag-a-pg17-aaaa"), _inv("rag-b-pg18-bbbb", pg="18")])
-    res = pcr.build_cert_result(plan, [
+    res = _build(plan, [
         _summary("rag-a-pg17-aaaa", execution_status="preview", test_verdict="not_run"),
         _summary("rag-b-pg18-bbbb")])
     assert res["execution_status"] == "incomplete"
@@ -202,7 +210,7 @@ def test_mixed_preview_and_non_preview_is_incomplete_mixed_mode():
 
 def test_missing_takes_precedence_over_mixed_preview():
     plan = _plan([_inv("rag-a-pg17-aaaa"), _inv("rag-b-pg18-bbbb", pg="18")])
-    res = pcr.build_cert_result(plan, [
+    res = _build(plan, [
         _summary("rag-a-pg17-aaaa", execution_status="preview", test_verdict="not_run")])  # b missing
     assert res["execution_status"] == "infra_failure"
     assert res["reason_code"] == "missing_result"
@@ -210,7 +218,7 @@ def test_missing_takes_precedence_over_mixed_preview():
 
 def test_leg_incomplete_aggregate_classification():
     plan = _plan([_inv("rag-a-pg17-aaaa"), _inv("rag-b-pg18-bbbb", pg="18")])
-    res = pcr.build_cert_result(plan, [
+    res = _build(plan, [
         _summary("rag-a-pg17-aaaa"),                                   # completed/pass
         _summary("rag-b-pg18-bbbb", execution_status="incomplete", test_verdict="not_run")])
     assert res["execution_status"] == "incomplete"
@@ -220,7 +228,7 @@ def test_leg_incomplete_aggregate_classification():
 
 def test_all_preview_is_preview():
     plan = _plan([_inv("rag-a-pg17-aaaa"), _inv("rag-b-pg18-bbbb", pg="18")])
-    res = pcr.build_cert_result(plan, [
+    res = _build(plan, [
         _summary("rag-a-pg17-aaaa", execution_status="preview", test_verdict="not_run"),
         _summary("rag-b-pg18-bbbb", execution_status="preview", test_verdict="not_run")])
     assert res["execution_status"] == "preview"
@@ -229,7 +237,7 @@ def test_all_preview_is_preview():
 
 
 def test_zero_eligible_is_incomplete_zero_eligible_and_none_coverage():
-    res = pcr.build_cert_result(_plan([]), [])
+    res = _build(_plan([]), [])
     assert res["result_resolved"] is True
     assert res["execution_status"] == "incomplete"
     assert res["reason_code"] == "zero_eligible"
@@ -240,7 +248,7 @@ def test_zero_eligible_is_incomplete_zero_eligible_and_none_coverage():
 
 # --- incomplete/pass and incomplete/fail preservation (independent axes) --- #
 def test_incomplete_pass_combo_is_preserved():
-    res = pcr.build_cert_result(
+    res = _build(
         _plan([_inv("rag-a-pg17-aaaa")]),
         [_summary("rag-a-pg17-aaaa", execution_status="incomplete", test_verdict="pass")])
     leg = res["legs"][0]
@@ -253,7 +261,7 @@ def test_incomplete_pass_combo_is_preserved():
 
 
 def test_incomplete_fail_combo_is_preserved():
-    res = pcr.build_cert_result(
+    res = _build(
         _plan([_inv("rag-a-pg17-aaaa")]),
         [_summary("rag-a-pg17-aaaa", execution_status="incomplete", test_verdict="fail")])
     leg = res["legs"][0]
@@ -264,7 +272,7 @@ def test_incomplete_fail_combo_is_preserved():
 
 
 def test_completed_fail_keeps_complete_coverage():
-    res = pcr.build_cert_result(
+    res = _build(
         _plan([_inv("rag-a-pg17-aaaa")]),
         [_summary("rag-a-pg17-aaaa", test_verdict="fail",
                   counts={"tests": 3, "failures": 1, "errors": 0, "skipped": 0})])
@@ -274,7 +282,7 @@ def test_completed_fail_keeps_complete_coverage():
 
 
 def test_all_skipped_matched_is_not_run_not_pass():
-    res = pcr.build_cert_result(
+    res = _build(
         _plan([_inv("rag-a-pg17-aaaa")]),
         [_summary("rag-a-pg17-aaaa", test_verdict="not_run")])
     assert res["execution_status"] == "completed"
@@ -308,14 +316,14 @@ def _assert_failed_safe(res):
      "test_verdict": "pass", "enforcement_mode": "observe", "provenance": "x"},  # bad provenance
 ])
 def test_malformed_record_fails_closed(bad):
-    res = pcr.build_cert_result(_plan([_inv("rag-a-pg17-aaaa")]), [bad])
+    res = _build(_plan([_inv("rag-a-pg17-aaaa")]), [bad])
     _assert_failed_safe(res)
     assert any(u["kind"] == "malformed" for u in res["unexpected_results"])
     assert res["counts"]["unexpected_results"] >= 1
 
 
 def test_unknown_record_fails_closed_and_is_audited_not_in_legs():
-    res = pcr.build_cert_result(_plan([_inv("rag-a-pg17-aaaa")]),
+    res = _build(_plan([_inv("rag-a-pg17-aaaa")]),
                                 [_summary("rag-a-pg17-aaaa"), _summary("rag-z-pg17-zzzz")])
     _assert_failed_safe(res)
     kinds = {u["kind"] for u in res["unexpected_results"]}
@@ -326,7 +334,7 @@ def test_unknown_record_fails_closed_and_is_audited_not_in_legs():
 def test_duplicate_records_retained_without_silent_selection():
     dup_a = _summary("rag-a-pg17-aaaa", test_verdict="pass")
     dup_b = _summary("rag-a-pg17-aaaa", test_verdict="fail")   # conflicting duplicate
-    res = pcr.build_cert_result(_plan([_inv("rag-a-pg17-aaaa")]), [dup_a, dup_b])
+    res = _build(_plan([_inv("rag-a-pg17-aaaa")]), [dup_a, dup_b])
     _assert_failed_safe(res)
     dups = [u for u in res["unexpected_results"] if u["kind"] == "duplicate"]
     assert len(dups) == 2                                # BOTH candidates preserved
@@ -337,7 +345,7 @@ def test_duplicate_records_retained_without_silent_selection():
 def test_unresolved_plan_fails_closed():
     plan = _plan([_inv("rag-a-pg17-aaaa")])
     plan["plan_resolved"] = False
-    res = pcr.build_cert_result(plan, [_summary("rag-a-pg17-aaaa")])
+    res = _build(plan, [_summary("rag-a-pg17-aaaa")])
     _assert_failed_safe(res)
     assert any("not resolved" in e for e in res["errors"])
 
@@ -345,21 +353,22 @@ def test_unresolved_plan_fails_closed():
 def test_wrong_plan_schema_fails_closed():
     plan = _plan([_inv("rag-a-pg17-aaaa")])
     plan["schema"] = "something-else/9"
-    _assert_failed_safe(pcr.build_cert_result(plan, []))
+    _assert_failed_safe(_build(plan, []))
 
 
 # --------------------------------------------------------------------------- #
-# provenance binding: the five caller fields bind directly to the plan
+# provenance binding: the four ATTEMPT-STABLE caller fields bind directly to the plan
+# (run_attempt is DELIBERATELY excluded from binding — it drives attempt
+# classification instead; see the future-attempt / prior-attempt tests below).
 # --------------------------------------------------------------------------- #
 @pytest.mark.parametrize("field,badval", [
     ("caller_repo", "evil/repo"),
     ("caller_run_id", "999"),
-    ("caller_run_attempt", "2"),
     ("caller_sha", "c" * 40),
     ("caller_ref", "refs/heads/rogue"),
 ])
 def test_provenance_field_mismatch_fails_closed(field, badval):
-    res = pcr.build_cert_result(
+    res = _build(
         _plan([_inv("rag-a-pg17-aaaa")]),
         [_summary("rag-a-pg17-aaaa", provenance=_caller_prov(**{field: badval}))])
     _assert_failed_safe(res)
@@ -367,7 +376,7 @@ def test_provenance_field_mismatch_fails_closed(field, badval):
 
 
 def test_provenance_match_resolves_true():
-    res = pcr.build_cert_result(_plan([_inv("rag-a-pg17-aaaa")]),
+    res = _build(_plan([_inv("rag-a-pg17-aaaa")]),
                                 [_summary("rag-a-pg17-aaaa", provenance=_caller_prov())])
     assert res["result_resolved"] is True
 
@@ -376,7 +385,7 @@ def test_missing_plan_provenance_value_fails_outer_contract():
     # A resolved plan missing a provenance source value fails the OUTER contract
     # (before any binding), never binds against a blank.
     plan = _plan([_inv("rag-a-pg17-aaaa")], prov=_plan_prov(run_id=None))
-    res = pcr.build_cert_result(plan, [_summary("rag-a-pg17-aaaa")])
+    res = _build(plan, [_summary("rag-a-pg17-aaaa")])
     _assert_failed_safe(res)
     assert any("run_id must be a positive decimal string" in e for e in res["errors"])
 
@@ -385,7 +394,7 @@ def test_missing_plan_provenance_value_fails_outer_contract():
 # PEP refs: nonblank, internally consistent, full-SHA equality (record evidence)
 # --------------------------------------------------------------------------- #
 def test_blank_pep_requested_ref_is_malformed():
-    res = pcr.build_cert_result(
+    res = _build(
         _plan([_inv("rag-a-pg17-aaaa")]),
         [_summary("rag-a-pg17-aaaa", provenance=_caller_prov(pep_requested_ref="  "))])
     _assert_failed_safe(res)
@@ -394,7 +403,7 @@ def test_blank_pep_requested_ref_is_malformed():
 
 def test_matched_legs_disagree_on_resolved_sha_fails_closed():
     plan = _plan([_inv("rag-a-pg17-aaaa"), _inv("rag-b-pg18-bbbb", pg="18")])
-    res = pcr.build_cert_result(plan, [
+    res = _build(plan, [
         _summary("rag-a-pg17-aaaa", provenance=_caller_prov(pep_requested_ref="b" * 40, pep_resolved_sha="b" * 40)),
         _summary("rag-b-pg18-bbbb", provenance=_caller_prov(pep_requested_ref="c" * 40, pep_resolved_sha="c" * 40))])
     _assert_failed_safe(res)
@@ -402,7 +411,7 @@ def test_matched_legs_disagree_on_resolved_sha_fails_closed():
 
 
 def test_full_sha_requested_must_equal_resolved():
-    res = pcr.build_cert_result(
+    res = _build(
         _plan([_inv("rag-a-pg17-aaaa")]),
         [_summary("rag-a-pg17-aaaa",
                   provenance=_caller_prov(pep_requested_ref="b" * 40, pep_resolved_sha="e" * 40))])
@@ -413,7 +422,7 @@ def test_full_sha_requested_must_equal_resolved():
 
 def test_full_sha_equality_is_case_insensitive():
     # An uppercase requested SHA equal to a lowercase resolved SHA is consistent.
-    res = pcr.build_cert_result(
+    res = _build(
         _plan([_inv("rag-a-pg17-aaaa")]),
         [_summary("rag-a-pg17-aaaa",
                   provenance=_caller_prov(pep_requested_ref="B" * 40, pep_resolved_sha="b" * 40))])
@@ -423,7 +432,7 @@ def test_full_sha_equality_is_case_insensitive():
 def test_non_sha_requested_ref_is_not_required_to_equal_resolved():
     # A tag/branch ref cannot be proven to resolve to a SHA by the pure reducer, so
     # requested != resolved is allowed as long as both are nonblank and consistent.
-    res = pcr.build_cert_result(
+    res = _build(
         _plan([_inv("rag-a-pg17-aaaa")]),
         [_summary("rag-a-pg17-aaaa",
                   provenance=_caller_prov(pep_requested_ref="refs/tags/v2.0.0", pep_resolved_sha="b" * 40))])
@@ -435,7 +444,7 @@ def test_non_sha_requested_ref_is_not_required_to_equal_resolved():
 # --------------------------------------------------------------------------- #
 def test_mixed_enforcement_modes_rejected():
     plan = _plan([_inv("rag-a-pg17-aaaa"), _inv("rag-b-pg18-bbbb", pg="18")])
-    res = pcr.build_cert_result(plan, [
+    res = _build(plan, [
         _summary("rag-a-pg17-aaaa", enforcement_mode="observe"),
         _summary("rag-b-pg18-bbbb", enforcement_mode="gate")])
     _assert_failed_safe(res)
@@ -443,7 +452,7 @@ def test_mixed_enforcement_modes_rejected():
 
 
 def test_enforcement_mode_preserved_per_leg():
-    res = pcr.build_cert_result(_plan([_inv("rag-a-pg17-aaaa")]),
+    res = _build(_plan([_inv("rag-a-pg17-aaaa")]),
                                 [_summary("rag-a-pg17-aaaa", enforcement_mode="gate")])
     assert res["legs"][0]["enforcement_mode"] == "gate"
 
@@ -453,8 +462,8 @@ def test_enforcement_mode_preserved_per_leg():
 # --------------------------------------------------------------------------- #
 def test_exactly_one_leg_per_expected_regardless_of_summary_order():
     plan = _plan([_inv("rag-a-pg17-aaaa"), _inv("rag-b-pg18-bbbb", pg="18")])
-    forward = pcr.build_cert_result(plan, [_summary("rag-a-pg17-aaaa"), _summary("rag-b-pg18-bbbb")])
-    reverse = pcr.build_cert_result(plan, [_summary("rag-b-pg18-bbbb"), _summary("rag-a-pg17-aaaa")])
+    forward = _build(plan, [_summary("rag-a-pg17-aaaa"), _summary("rag-b-pg18-bbbb")])
+    reverse = _build(plan, [_summary("rag-b-pg18-bbbb"), _summary("rag-a-pg17-aaaa")])
     assert len(forward["legs"]) == 2
     assert pcr.to_json(forward) == pcr.to_json(reverse)   # byte-identical, order-independent
 
@@ -463,15 +472,15 @@ def test_build_does_not_mutate_inputs():
     plan = _plan([_inv("rag-a-pg17-aaaa")])
     snapshot = json.dumps(plan, sort_keys=True)
     summaries = [_summary("rag-a-pg17-aaaa")]
-    res = pcr.build_cert_result(plan, summaries)
+    res = _build(plan, summaries)
     res["legs"][0]["planned_invocation"]["source_target_id"] = "MUTATED"
     assert json.dumps(plan, sort_keys=True) == snapshot   # deepcopy protected the input
 
 
 def test_to_json_is_stable_across_repeated_builds():
     plan = _plan([_inv("rag-a-pg17-aaaa")])
-    a = pcr.to_json(pcr.build_cert_result(plan, [_summary("rag-a-pg17-aaaa")]))
-    b = pcr.to_json(pcr.build_cert_result(plan, [_summary("rag-a-pg17-aaaa")]))
+    a = pcr.to_json(_build(plan, [_summary("rag-a-pg17-aaaa")]))
+    b = pcr.to_json(_build(plan, [_summary("rag-a-pg17-aaaa")]))
     assert a == b
 
 
@@ -486,7 +495,7 @@ def test_main_reads_plan_and_summaries_dir(tmp_path):
     (sdir / "a.json").write_text(json.dumps(_summary("rag-a-pg17-aaaa")))
     out = tmp_path / "cert-result.json"
     code = pcr.main(["--plan", str(tmp_path / "plan.json"),
-                     "--summaries-dir", str(sdir), "--out", str(out)])
+                     "--summaries-dir", str(sdir), "--current-run-attempt", "1", "--out", str(out)])
     data = json.loads(out.read_text())
     assert code == 0
     assert data["result_resolved"] is True
@@ -496,10 +505,19 @@ def test_main_reads_plan_and_summaries_dir(tmp_path):
 
 def test_main_unreadable_plan_fails_closed_exit1(tmp_path):
     out = tmp_path / "cert-result.json"
-    code = pcr.main(["--plan", str(tmp_path / "nope.json"), "--out", str(out)])
+    code = pcr.main(["--plan", str(tmp_path / "nope.json"),
+                     "--current-run-attempt", "1", "--out", str(out)])
     data = json.loads(out.read_text())
     assert code == 1
     assert data["result_resolved"] is False
+
+
+def test_main_requires_current_run_attempt(tmp_path):
+    plan = _plan([_inv("rag-a-pg17-aaaa")])
+    (tmp_path / "plan.json").write_text(json.dumps(plan))
+    # --current-run-attempt is required: argparse exits (SystemExit 2) when it is absent.
+    with pytest.raises(SystemExit):
+        pcr.main(["--plan", str(tmp_path / "plan.json"), "--out", str(tmp_path / "o.json")])
 
 
 # --------------------------------------------------------------------------- #
@@ -508,7 +526,7 @@ def test_main_unreadable_plan_fails_closed_exit1(tmp_path):
 def test_missing_identity_evidence_is_malformed():
     s = _summary("rag-a-pg17-aaaa")
     del s["identity_evidence"]
-    res = pcr.build_cert_result(_plan([_inv("rag-a-pg17-aaaa")]), [s])
+    res = _build(_plan([_inv("rag-a-pg17-aaaa")]), [s])
     _assert_failed_safe(res)
     assert any(u["kind"] == "malformed" for u in res["unexpected_results"])
 
@@ -521,7 +539,7 @@ def test_missing_identity_evidence_is_malformed():
     "not-an-object",
 ])
 def test_malformed_identity_evidence_is_malformed(ev):
-    res = pcr.build_cert_result(_plan([_inv("rag-a-pg17-aaaa")]),
+    res = _build(_plan([_inv("rag-a-pg17-aaaa")]),
                                 [_summary("rag-a-pg17-aaaa", identity_evidence=ev)])
     _assert_failed_safe(res)
     assert any(u["kind"] == "malformed" for u in res["unexpected_results"])
@@ -530,7 +548,7 @@ def test_malformed_identity_evidence_is_malformed(ev):
 def test_missing_counts_is_malformed_and_never_substituted():
     s = _summary("rag-a-pg17-aaaa")
     del s["counts"]
-    res = pcr.build_cert_result(_plan([_inv("rag-a-pg17-aaaa")]), [s])
+    res = _build(_plan([_inv("rag-a-pg17-aaaa")]), [s])
     _assert_failed_safe(res)
     assert res["legs"] == []          # never a leg carrying counts={}
 
@@ -547,7 +565,7 @@ def test_missing_counts_is_malformed_and_never_substituted():
     "not-an-object",
 ])
 def test_inconsistent_counts_is_malformed(counts):
-    res = pcr.build_cert_result(_plan([_inv("rag-a-pg17-aaaa")]),
+    res = _build(_plan([_inv("rag-a-pg17-aaaa")]),
                                 [_summary("rag-a-pg17-aaaa", counts=counts)])
     _assert_failed_safe(res)
     assert any(u["kind"] == "malformed" for u in res["unexpected_results"])
@@ -555,7 +573,7 @@ def test_inconsistent_counts_is_malformed(counts):
 
 @pytest.mark.parametrize("sha", ["z" * 40, "a" * 39, "a" * 41, "", "  ", "A" * 40 + " "])
 def test_malformed_pep_resolved_sha_is_malformed(sha):
-    res = pcr.build_cert_result(
+    res = _build(
         _plan([_inv("rag-a-pg17-aaaa")]),
         [_summary("rag-a-pg17-aaaa",
                   provenance=_caller_prov(pep_requested_ref="refs/tags/x", pep_resolved_sha=sha))])
@@ -566,7 +584,7 @@ def test_malformed_pep_resolved_sha_is_malformed(sha):
 def test_incomplete_provenance_field_is_malformed():
     prov = _caller_prov()
     del prov["caller_ref"]
-    res = pcr.build_cert_result(_plan([_inv("rag-a-pg17-aaaa")]),
+    res = _build(_plan([_inv("rag-a-pg17-aaaa")]),
                                 [_summary("rag-a-pg17-aaaa", provenance=prov)])
     _assert_failed_safe(res)
     assert any(u["kind"] == "malformed" for u in res["unexpected_results"])
@@ -589,13 +607,13 @@ def test_incomplete_provenance_field_is_malformed():
 def test_malformed_outer_plan_fails_closed(mutate):
     plan = _plan([_inv("rag-a-pg17-aaaa")])
     mutate(plan)
-    _assert_failed_safe(pcr.build_cert_result(plan, [_summary("rag-a-pg17-aaaa")]))
+    _assert_failed_safe(_build(plan, [_summary("rag-a-pg17-aaaa")]))
 
 
 def test_corrupt_coverage_gaps_cannot_yield_complete_coverage():
     plan = _plan([_inv("rag-a-pg17-aaaa")])
     plan["coverage_gaps"] = "corrupt"
-    res = pcr.build_cert_result(plan, [_summary("rag-a-pg17-aaaa")])
+    res = _build(plan, [_summary("rag-a-pg17-aaaa")])
     assert res["result_resolved"] is False
     assert res["coverage_status"] == "none"          # never "complete"
     assert any("coverage_gaps must be a list" in e for e in res["errors"])
@@ -610,7 +628,7 @@ def test_corrupt_coverage_gaps_cannot_yield_complete_coverage():
 def test_summary_invocation_id_is_whole_string_validated(iid):
     s = _summary("placeholder")
     s["invocation_id"] = iid                         # id fails fullmatch -> malformed
-    res = pcr.build_cert_result(_plan([_inv("rag-a-pg17-aaaa")]), [s])
+    res = _build(_plan([_inv("rag-a-pg17-aaaa")]), [s])
     _assert_failed_safe(res)
     assert any(u["kind"] == "malformed" for u in res["unexpected_results"])
 
@@ -622,8 +640,8 @@ def test_duplicate_audit_is_order_independent_and_complete():
     a = _summary("rag-a-pg17-aaaa", test_verdict="pass")
     b = _summary("rag-a-pg17-aaaa", test_verdict="fail",
                  counts={"tests": 3, "failures": 1, "errors": 0, "skipped": 0})
-    forward = pcr.build_cert_result(_plan([_inv("rag-a-pg17-aaaa")]), [a, b])
-    reverse = pcr.build_cert_result(_plan([_inv("rag-a-pg17-aaaa")]), [b, a])
+    forward = _build(_plan([_inv("rag-a-pg17-aaaa")]), [a, b])
+    reverse = _build(_plan([_inv("rag-a-pg17-aaaa")]), [b, a])
     assert pcr.to_json(forward) == pcr.to_json(reverse)          # byte-identical
     dups = [u for u in forward["unexpected_results"] if u["kind"] == "duplicate"]
     assert len(dups) == 2
@@ -635,7 +653,7 @@ def test_duplicate_audit_is_order_independent_and_complete():
 
 
 def test_non_dict_malformed_keeps_bounded_repr():
-    res = pcr.build_cert_result(_plan([_inv("rag-a-pg17-aaaa")]), ["x" * 500])
+    res = _build(_plan([_inv("rag-a-pg17-aaaa")]), ["x" * 500])
     _assert_failed_safe(res)
     ev = res["unexpected_results"][0]["evidence"]
     assert "repr" in ev and len(ev["repr"]) <= 200
@@ -645,7 +663,7 @@ def test_malformed_evidence_retains_complete_record():
     # A malformed record (bad counts) is preserved COMPLETE in the audit — including
     # its identity_evidence, provenance and reason fields — for later diagnosis.
     bad = _summary("rag-a-pg17-aaaa", counts={"tests": 1, "failures": 5, "errors": 0, "skipped": 0})
-    res = pcr.build_cert_result(_plan([_inv("rag-a-pg17-aaaa")]), [bad])
+    res = _build(_plan([_inv("rag-a-pg17-aaaa")]), [bad])
     _assert_failed_safe(res)
     rec = res["unexpected_results"][0]["evidence"]["record"]
     assert rec["identity_evidence"] == {"l2a": "proven", "l2b": "proven", "l1": "proven"}
@@ -667,7 +685,7 @@ def test_malformed_evidence_retains_complete_record():
     ("infra_failure", "fail", {"tests": 0, "failures": 0, "errors": 0, "skipped": 0}),      # infra claiming fail
 ])
 def test_contradictory_status_verdict_counts_is_malformed(status, verdict, counts):
-    res = pcr.build_cert_result(
+    res = _build(
         _plan([_inv("rag-a-pg17-aaaa")]),
         [_summary("rag-a-pg17-aaaa", execution_status=status, test_verdict=verdict, counts=counts)])
     _assert_failed_safe(res)                          # cannot become complete/pass
@@ -678,7 +696,7 @@ def test_contradictory_status_verdict_counts_is_malformed(status, verdict, count
 
 def test_legit_incomplete_pass_with_supporting_counts_is_accepted():
     # incomplete/pass is legitimate when the counts support pass (some parsed, none failed).
-    res = pcr.build_cert_result(
+    res = _build(
         _plan([_inv("rag-a-pg17-aaaa")]),
         [_summary("rag-a-pg17-aaaa", execution_status="incomplete", test_verdict="pass",
                   counts={"tests": 3, "failures": 0, "errors": 0, "skipped": 1})])
@@ -695,7 +713,7 @@ _SEVEN_KEYS = {"repository", "run_id", "run_attempt", "sha", "ref",
 
 
 def test_top_provenance_happy_path_seven_keys_with_pep():
-    res = pcr.build_cert_result(_plan([_inv("rag-a-pg17-aaaa")]), [_summary("rag-a-pg17-aaaa")])
+    res = _build(_plan([_inv("rag-a-pg17-aaaa")]), [_summary("rag-a-pg17-aaaa")])
     p = res["provenance"]
     assert set(p.keys()) == _SEVEN_KEYS
     assert p["repository"] == "pgEdge/pgedge-rag-server"
@@ -707,7 +725,7 @@ def test_top_provenance_happy_path_seven_keys_with_pep():
 
 def test_top_provenance_missing_only_keeps_pep_from_matched():
     plan = _plan([_inv("rag-a-pg17-aaaa"), _inv("rag-b-pg18-bbbb", pg="18")])
-    res = pcr.build_cert_result(plan, [_summary("rag-a-pg17-aaaa")])   # b missing
+    res = _build(plan, [_summary("rag-a-pg17-aaaa")])   # b missing
     p = res["provenance"]
     assert set(p.keys()) == _SEVEN_KEYS
     assert p["pep_requested_ref"] == "b" * 40           # still populated from the matched leg
@@ -715,7 +733,7 @@ def test_top_provenance_missing_only_keeps_pep_from_matched():
 
 
 def test_top_provenance_zero_eligible_pep_fields_null():
-    res = pcr.build_cert_result(_plan([]), [])
+    res = _build(_plan([]), [])
     p = res["provenance"]
     assert set(p.keys()) == _SEVEN_KEYS
     assert p["pep_requested_ref"] is None and p["pep_resolved_sha"] is None  # no result to source
@@ -725,7 +743,7 @@ def test_top_provenance_zero_eligible_pep_fields_null():
 def test_top_provenance_fail_closed_seven_keys_pep_null():
     plan = _plan([_inv("rag-a-pg17-aaaa")])
     plan["plan_resolved"] = False
-    res = pcr.build_cert_result(plan, [_summary("rag-a-pg17-aaaa")])
+    res = _build(plan, [_summary("rag-a-pg17-aaaa")])
     assert res["result_resolved"] is False
     p = res["provenance"]
     assert set(p.keys()) == _SEVEN_KEYS
@@ -751,7 +769,7 @@ def test_fail_closed_nulls_only_malformed_provenance_field(bad_key, bad_val):
     # field is null while every other valid plan field is retained independently.
     good = {"repository": "pgEdge/pgedge-rag-server", "run_id": "123", "run_attempt": "1",
             "sha": "a" * 40, "ref": "refs/tags/v2.0.0"}
-    res = pcr.build_cert_result(
+    res = _build(
         _plan([_inv("rag-a-pg17-aaaa")], prov=_plan_prov(**{bad_key: bad_val})),
         [_summary("rag-a-pg17-aaaa")])
     assert res["result_resolved"] is False           # malformed provenance -> fail closed
@@ -783,7 +801,7 @@ def test_fail_closed_nulls_only_malformed_provenance_field(bad_key, bad_val):
     _plan_prov(run_attempt="0"),          # zero
 ])
 def test_malformed_plan_provenance_types_fail_closed(prov):
-    res = pcr.build_cert_result(_plan([_inv("rag-a-pg17-aaaa")], prov=prov),
+    res = _build(_plan([_inv("rag-a-pg17-aaaa")], prov=prov),
                                 [_summary("rag-a-pg17-aaaa")])
     _assert_failed_safe(res)
 
@@ -791,7 +809,7 @@ def test_malformed_plan_provenance_types_fail_closed(prov):
 def test_resolved_plan_carrying_errors_fails_closed():
     plan = _plan([_inv("rag-a-pg17-aaaa")])
     plan["errors"] = ["contradiction"]
-    res = pcr.build_cert_result(plan, [_summary("rag-a-pg17-aaaa")])
+    res = _build(plan, [_summary("rag-a-pg17-aaaa")])
     _assert_failed_safe(res)
     assert any("must not carry errors" in e for e in res["errors"])
 
@@ -799,6 +817,252 @@ def test_resolved_plan_carrying_errors_fails_closed():
 def test_plan_errors_must_be_a_list():
     plan = _plan([_inv("rag-a-pg17-aaaa")])
     plan["errors"] = "oops"
-    res = pcr.build_cert_result(plan, [_summary("rag-a-pg17-aaaa")])
+    res = _build(plan, [_summary("rag-a-pg17-aaaa")])
     _assert_failed_safe(res)
     assert any("errors must be a list" in e for e in res["errors"])
+
+
+# --------------------------------------------------------------------------- #
+# attempt-awareness (Slice A): current/prior/future classification vs the LIVE
+# aggregation attempt; historical audit; stable-shape attempt_context.
+# --------------------------------------------------------------------------- #
+def test_attempt_fresh_all_current_is_complete():
+    # Fresh run: plan attempt 1, aggregation 1, every summary current -> unchanged
+    # complete/completed result, empty history, attempt_context 1/1.
+    plan = _plan([_inv("rag-a-pg17-aaaa"), _inv("rag-b-pg18-bbbb", pg="18")],
+                 prov=_plan_prov(run_attempt="1"))
+    res = _build(plan, [_summary("rag-a-pg17-aaaa"), _summary("rag-b-pg18-bbbb")],
+                 current_run_attempt="1")
+    assert res["result_resolved"] is True
+    assert res["execution_status"] == "completed"
+    assert res["coverage_status"] == "complete"
+    assert res["historical_results"] == []
+    assert res["attempt_context"] == {"plan_run_attempt": "1", "aggregation_run_attempt": "1"}
+    assert res["provenance"]["run_attempt"] == "1"   # source plan attempt, unchanged
+
+
+def test_rerun_failed_prior_only_alpha_is_missing_and_historical():
+    # Rerun-failed: plan carried forward at attempt 1, aggregation is attempt 2, and the
+    # only alpha summary is the carried-forward attempt-1 (prior) result. Alpha has NO
+    # current evidence -> missing_result leg; the prior is audited, never promoted.
+    plan = _plan([_inv("rag-a-pg17-aaaa")], prov=_plan_prov(run_attempt="1"))
+    prior = _summary("rag-a-pg17-aaaa", provenance=_caller_prov(caller_run_attempt="1"))
+    res = _build(plan, [prior], current_run_attempt="2")
+    assert res["result_resolved"] is True
+    leg = res["legs"][0]
+    assert leg["reconciliation"] == "missing"
+    assert leg["reason_code"] == "missing_result"
+    assert res["reason_code"] == "missing_result"
+    assert res["execution_status"] == "infra_failure"
+    assert res["coverage_status"] == "partial"
+    hist = res["historical_results"]
+    assert len(hist) == 1
+    assert hist[0]["invocation_id"] == "rag-a-pg17-aaaa"
+    assert hist[0]["producing_attempt"] == "1"
+    assert hist[0]["provenance"]["caller_run_attempt"] == "1"    # full provenance retained
+    assert res["attempt_context"] == {"plan_run_attempt": "1", "aggregation_run_attempt": "2"}
+    # no current result -> top-level PEP refs are null
+    assert res["provenance"]["pep_requested_ref"] is None
+    assert res["provenance"]["pep_resolved_sha"] is None
+
+
+def test_mixed_current_and_prior_for_one_invocation():
+    # One current (attempt 3) plus one prior (attempt 1) for the same id: the current
+    # result fills the leg; the prior is retained as history only.
+    plan = _plan([_inv("rag-a-pg17-aaaa")], prov=_plan_prov(run_attempt="1"))
+    current = _summary("rag-a-pg17-aaaa", provenance=_caller_prov(caller_run_attempt="3"))
+    prior = _summary("rag-a-pg17-aaaa", test_verdict="fail",
+                     counts={"tests": 3, "failures": 1, "errors": 0, "skipped": 0},
+                     provenance=_caller_prov(caller_run_attempt="1"))
+    res = _build(plan, [current, prior], current_run_attempt="3")
+    assert res["result_resolved"] is True
+    leg = res["legs"][0]
+    assert leg["reconciliation"] == "matched"
+    assert leg["test_verdict"] == "pass"                # the CURRENT result is used
+    assert res["execution_status"] == "completed"
+    hist = res["historical_results"]
+    assert [h["producing_attempt"] for h in hist] == ["1"]
+    assert hist[0]["test_verdict"] == "fail"            # prior retained verbatim, not promoted
+    assert res["provenance"]["pep_requested_ref"] == "b" * 40   # from the current match
+
+
+def test_rerun_all_all_current_is_complete():
+    # Rerun-all: plan and every summary re-executed at attempt 3, aggregation 3 -> all
+    # current, complete coverage, empty history.
+    plan = _plan([_inv("rag-a-pg17-aaaa"), _inv("rag-b-pg18-bbbb", pg="18")],
+                 prov=_plan_prov(run_attempt="3"))
+    res = _build(plan, [
+        _summary("rag-a-pg17-aaaa", provenance=_caller_prov(caller_run_attempt="3")),
+        _summary("rag-b-pg18-bbbb", provenance=_caller_prov(caller_run_attempt="3"))],
+        current_run_attempt="3")
+    assert res["result_resolved"] is True
+    assert res["execution_status"] == "completed"
+    assert res["coverage_status"] == "complete"
+    assert res["historical_results"] == []
+    assert res["attempt_context"] == {"plan_run_attempt": "3", "aggregation_run_attempt": "3"}
+
+
+def test_future_attempt_summary_fails_closed():
+    # A producing attempt greater than the live aggregation attempt is a violation.
+    plan = _plan([_inv("rag-a-pg17-aaaa")], prov=_plan_prov(run_attempt="1"))
+    res = _build(plan, [_summary("rag-a-pg17-aaaa", provenance=_caller_prov(caller_run_attempt="2"))],
+                 current_run_attempt="1")
+    _assert_failed_safe(res)
+    assert any(u["kind"] == "future" for u in res["unexpected_results"])
+    assert res["historical_results"] == []
+
+
+def test_plan_attempt_greater_than_aggregation_fails_closed():
+    # The source plan/capture attempt can never exceed the live aggregation attempt.
+    plan = _plan([_inv("rag-a-pg17-aaaa")], prov=_plan_prov(run_attempt="3"))
+    res = _build(plan, [_summary("rag-a-pg17-aaaa", provenance=_caller_prov(caller_run_attempt="2"))],
+                 current_run_attempt="2")
+    _assert_failed_safe(res)
+    assert any("greater than current_run_attempt" in e for e in res["errors"])
+
+
+def test_wrong_stable_provenance_is_foreign_validation_failure():
+    # A mismatch on any attempt-stable field (here run_id) is foreign regardless of attempt.
+    res = _build(_plan([_inv("rag-a-pg17-aaaa")]),
+                 [_summary("rag-a-pg17-aaaa", provenance=_caller_prov(caller_run_id="999"))],
+                 current_run_attempt="1")
+    _assert_failed_safe(res)
+    assert any(u["kind"] == "foreign" for u in res["unexpected_results"])
+    assert any("caller_run_id" in e for e in res["errors"])
+
+
+def test_duplicate_current_fails_closed():
+    a = _summary("rag-a-pg17-aaaa", test_verdict="pass")
+    b = _summary("rag-a-pg17-aaaa", test_verdict="fail",
+                 counts={"tests": 3, "failures": 1, "errors": 0, "skipped": 0})
+    res = _build(_plan([_inv("rag-a-pg17-aaaa")]), [a, b], current_run_attempt="1")
+    _assert_failed_safe(res)
+    dups = [u for u in res["unexpected_results"] if u["kind"] == "duplicate"]
+    assert len(dups) == 2                                 # both current candidates retained
+
+
+def test_duplicate_same_historical_attempt_fails_closed():
+    # Two prior records sharing the SAME invocation AND producing attempt are ambiguous.
+    plan = _plan([_inv("rag-a-pg17-aaaa")], prov=_plan_prov(run_attempt="1"))
+    p1 = _summary("rag-a-pg17-aaaa", test_verdict="pass",
+                  provenance=_caller_prov(caller_run_attempt="1"))
+    p2 = _summary("rag-a-pg17-aaaa", test_verdict="fail",
+                  counts={"tests": 3, "failures": 1, "errors": 0, "skipped": 0},
+                  provenance=_caller_prov(caller_run_attempt="1"))
+    res = _build(plan, [p1, p2], current_run_attempt="3")
+    _assert_failed_safe(res)
+    dh = [u for u in res["unexpected_results"] if u["kind"] == "duplicate_historical"]
+    assert len(dh) == 2
+    assert res["historical_results"] == []
+
+
+def test_multiple_distinct_historical_attempts_allowed_and_deterministic():
+    # Distinct producing attempts (1 and 2) for one id are audited; a current (3) fills
+    # the leg. Output is byte-identical under reordered input.
+    plan = _plan([_inv("rag-a-pg17-aaaa")], prov=_plan_prov(run_attempt="1"))
+    cur = _summary("rag-a-pg17-aaaa", provenance=_caller_prov(caller_run_attempt="3"))
+    h1 = _summary("rag-a-pg17-aaaa", test_verdict="fail",
+                  counts={"tests": 3, "failures": 1, "errors": 0, "skipped": 0},
+                  provenance=_caller_prov(caller_run_attempt="1"))
+    h2 = _summary("rag-a-pg17-aaaa", test_verdict="not_run",
+                  provenance=_caller_prov(caller_run_attempt="2"))
+    forward = _build(plan, [cur, h1, h2], current_run_attempt="3")
+    reverse = _build(plan, [h2, cur, h1], current_run_attempt="3")
+    assert forward["result_resolved"] is True
+    assert [h["producing_attempt"] for h in forward["historical_results"]] == ["1", "2"]
+    assert pcr.to_json(forward) == pcr.to_json(reverse)   # byte-identical, order-independent
+
+
+def test_attempt_output_byte_identical_under_reordered_summaries():
+    # Mixed current+prior across two invocations, reordered -> byte-identical JSON.
+    plan = _plan([_inv("rag-a-pg17-aaaa"), _inv("rag-b-pg18-bbbb", pg="18")],
+                 prov=_plan_prov(run_attempt="1"))
+    a_cur = _summary("rag-a-pg17-aaaa", provenance=_caller_prov(caller_run_attempt="2"))
+    a_prior = _summary("rag-a-pg17-aaaa", test_verdict="fail",
+                       counts={"tests": 3, "failures": 1, "errors": 0, "skipped": 0},
+                       provenance=_caller_prov(caller_run_attempt="1"))
+    b_cur = _summary("rag-b-pg18-bbbb", provenance=_caller_prov(caller_run_attempt="2"))
+    fwd = _build(plan, [a_cur, a_prior, b_cur], current_run_attempt="2")
+    rev = _build(plan, [b_cur, a_prior, a_cur], current_run_attempt="2")
+    assert fwd["result_resolved"] is True
+    assert fwd["coverage_status"] == "complete"
+    assert pcr.to_json(fwd) == pcr.to_json(rev)
+
+
+@pytest.mark.parametrize("bad", ["0", "-1", "", "  ", "abc", "1.0", "1 ", None, 1, True, [1], {"x": 1}])
+def test_malformed_current_run_attempt_fails_closed(bad):
+    # The pure reducer requires current_run_attempt as a positive decimal string; a bad
+    # value fails closed (never defaulted from the plan) and nulls the aggregation attempt.
+    res = pcr.build_cert_result(_plan([_inv("rag-a-pg17-aaaa")]),
+                                [_summary("rag-a-pg17-aaaa")], bad)
+    _assert_failed_safe(res)
+    assert any("current_run_attempt must be a positive decimal string" in e for e in res["errors"])
+    assert res["attempt_context"]["aggregation_run_attempt"] is None
+    assert res["historical_results"] == []
+
+
+def test_fail_closed_has_stable_attempt_context_and_empty_history():
+    plan = _plan([_inv("rag-a-pg17-aaaa")])
+    plan["plan_resolved"] = False
+    res = _build(plan, [_summary("rag-a-pg17-aaaa")], current_run_attempt="2")
+    assert res["result_resolved"] is False
+    assert res["historical_results"] == []
+    assert res["attempt_context"] == {"plan_run_attempt": "1", "aggregation_run_attempt": "2"}
+
+
+def test_caller_run_attempt_must_be_positive_decimal():
+    # A nonblank-but-non-numeric producing attempt is malformed (cannot be classified).
+    res = _build(_plan([_inv("rag-a-pg17-aaaa")]),
+                 [_summary("rag-a-pg17-aaaa", provenance=_caller_prov(caller_run_attempt="one"))],
+                 current_run_attempt="1")
+    _assert_failed_safe(res)
+    assert any(u["kind"] == "malformed" for u in res["unexpected_results"])
+
+
+def test_historical_duplicate_detected_by_numeric_attempt_not_spelling():
+    # "1" and "01" are the SAME producing attempt numerically -> duplicate_historical,
+    # even though their string spellings differ. (Both are valid positive decimals.)
+    plan = _plan([_inv("rag-a-pg17-aaaa")], prov=_plan_prov(run_attempt="1"))
+    h_one = _summary("rag-a-pg17-aaaa", test_verdict="pass",
+                     provenance=_caller_prov(caller_run_attempt="1"))
+    h_oh_one = _summary("rag-a-pg17-aaaa", test_verdict="fail",
+                        counts={"tests": 3, "failures": 1, "errors": 0, "skipped": 0},
+                        provenance=_caller_prov(caller_run_attempt="01"))
+    res = _build(plan, [h_one, h_oh_one], current_run_attempt="3")
+    _assert_failed_safe(res)
+    dh = [u for u in res["unexpected_results"] if u["kind"] == "duplicate_historical"]
+    assert len(dh) == 2                                   # both retained as evidence
+    assert res["historical_results"] == []               # none promoted to history
+
+
+def test_distinct_numeric_historical_attempts_1_and_2_remain_allowed():
+    # "1" and "2" are distinct numeric attempts -> both audited, not a duplicate.
+    plan = _plan([_inv("rag-a-pg17-aaaa")], prov=_plan_prov(run_attempt="1"))
+    cur = _summary("rag-a-pg17-aaaa", provenance=_caller_prov(caller_run_attempt="3"))
+    h1 = _summary("rag-a-pg17-aaaa", test_verdict="fail",
+                  counts={"tests": 3, "failures": 1, "errors": 0, "skipped": 0},
+                  provenance=_caller_prov(caller_run_attempt="1"))
+    h2 = _summary("rag-a-pg17-aaaa", test_verdict="not_run",
+                  provenance=_caller_prov(caller_run_attempt="2"))
+    res = _build(plan, [cur, h1, h2], current_run_attempt="3")
+    assert res["result_resolved"] is True
+    assert not any(u["kind"] == "duplicate_historical" for u in res["unexpected_results"])
+    assert [h["producing_attempt"] for h in res["historical_results"]] == ["1", "2"]
+
+
+def test_numeric_grouping_preserves_original_spelling_and_ordering():
+    # A lone "01" prior is audited with its ORIGINAL spelling preserved in the output,
+    # and ordering stays deterministic under reordered input.
+    plan = _plan([_inv("rag-a-pg17-aaaa")], prov=_plan_prov(run_attempt="1"))
+    cur = _summary("rag-a-pg17-aaaa", provenance=_caller_prov(caller_run_attempt="3"))
+    h_oh_one = _summary("rag-a-pg17-aaaa", test_verdict="not_run",
+                        provenance=_caller_prov(caller_run_attempt="01"))
+    h_two = _summary("rag-a-pg17-aaaa", test_verdict="fail",
+                     counts={"tests": 3, "failures": 1, "errors": 0, "skipped": 0},
+                     provenance=_caller_prov(caller_run_attempt="2"))
+    fwd = _build(plan, [cur, h_oh_one, h_two], current_run_attempt="3")
+    rev = _build(plan, [h_two, cur, h_oh_one], current_run_attempt="3")
+    assert fwd["result_resolved"] is True
+    # sorted by numeric attempt (1 before 2), original spelling "01" preserved verbatim
+    assert [h["producing_attempt"] for h in fwd["historical_results"]] == ["01", "2"]
+    assert pcr.to_json(fwd) == pcr.to_json(rev)           # deterministic under reorder

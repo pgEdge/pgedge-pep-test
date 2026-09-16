@@ -1,0 +1,428 @@
+# TEMPORARY Stage 3B mechanics spike — DO NOT MERGE.
+# Reusable coordinator. Proves the production-shaped mechanic:
+#   plan job -> dynamic 2-leg matrix -> fan-out (fail-fast:false) that
+#   `uses:` a reusable atomic workflow -> aggregate under !cancelled().
+# Aggregation is authoritative from artifacts + the run's job/artifact REST
+# snapshots, NEVER from reusable-workflow outputs (those collapse to the last
+# successful setter and cannot represent per-leg results).
+name: PEP Spike Coordinator
+
+on:
+  workflow_call:
+    secrets:
+      probe_secret:
+        description: Forwarded two-hop probe (caller -> coordinator -> atomic). Presence only.
+        required: true
+
+permissions: {}
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # plan: emit a DYNAMIC two-leg matrix from a job output (spike data only).
+  # inv-alpha succeeds and uploads; inv-bravo builds then fails before upload.
+  # fail_before_upload is a real JSON boolean, consumed by a boolean input.
+  # ---------------------------------------------------------------------------
+  plan:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      matrix: ${{ steps.gen.outputs.matrix }}
+      plan_include: ${{ steps.gen.outputs.plan_include }}
+      expected_ids: ${{ steps.gen.outputs.expected_ids }}
+      expected_count: ${{ steps.gen.outputs.expected_count }}
+    steps:
+      - id: gen
+        name: Generate dynamic two-leg matrix
+        run: |
+          set -euo pipefail
+          include='[{"invocation_id":"inv-alpha","fail_before_upload":false},{"invocation_id":"inv-bravo","fail_before_upload":true}]'
+          matrix="$(jq -cn --argjson inc "$include" '{include: $inc}')"
+          ids="$(jq -rn --argjson inc "$include" '$inc | map(.invocation_id) | join(",")')"
+          count="$(jq -rn --argjson inc "$include" '$inc | length')"
+          {
+            echo "matrix=${matrix}"
+            echo "plan_include=${include}"
+            echo "expected_ids=${ids}"
+            echo "expected_count=${count}"
+          } >> "$GITHUB_OUTPUT"
+          echo "Planned ${count} invocation(s): ${ids}"
+
+  # ---------------------------------------------------------------------------
+  # run: parallel fan-out (fail-fast:false) where EACH leg `uses:` the reusable
+  # atomic stub. This is the nested reusable-workflow + dynamic-matrix mechanic.
+  # The probe secret is EXPLICITLY forwarded on this second hop.
+  # ---------------------------------------------------------------------------
+  run:
+    needs: plan
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}
+    uses: ./.github/workflows/pep-spike-atomic-stub.yml
+    with:
+      invocation_id: ${{ matrix.invocation_id }}
+      fail_before_upload: ${{ matrix.fail_before_upload }}
+    secrets:
+      probe_secret: ${{ secrets.probe_secret }}
+
+  # ---------------------------------------------------------------------------
+  # aggregate: runs even when a leg fails (!cancelled()). Reads the run's jobs
+  # (including per-step records) and artifacts through the REST API with
+  # pagination, downloads candidate summaries by immutable ID, ingests them
+  # fail-closed (each artifact must contribute exactly one summary.json),
+  # validates provenance, classifies by attempt, records the attempt-1 oracle,
+  # and uploads one attempt-specific evidence artifact.
+  # ---------------------------------------------------------------------------
+  aggregate:
+    needs: [plan, run]
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: read
+    steps:
+      - id: collect
+        name: Paginate this run's jobs (with steps) and artifacts (REST)
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          RUN_ID: ${{ github.run_id }}
+          RUN_ATTEMPT: ${{ github.run_attempt }}
+        run: |
+          set -euo pipefail
+          mkdir -p evidence/raw
+
+          # --- paginate jobs for THIS attempt (each job carries a steps[] array) ---
+          page=1
+          echo '[]' > evidence/jobs.json
+          while : ; do
+            resp="$(gh api "repos/${REPO}/actions/runs/${RUN_ID}/attempts/${RUN_ATTEMPT}/jobs?per_page=100&page=${page}")"
+            printf '%s' "$resp" > "evidence/raw/jobs_page_${page}.json"
+            printf '%s' "$resp" | jq '.jobs' > evidence/_page.json
+            jq -s '.[0] + .[1]' evidence/jobs.json evidence/_page.json > evidence/jobs.tmp
+            mv evidence/jobs.tmp evidence/jobs.json
+            total="$(printf '%s' "$resp" | jq '.total_count')"
+            got="$(jq 'length' evidence/jobs.json)"
+            n="$(printf '%s' "$resp" | jq '.jobs | length')"
+            page=$((page + 1))
+            { [ "$got" -ge "$total" ] || [ "$n" -eq 0 ]; } && break
+          done
+
+          # --- paginate artifacts for THIS run (all attempts) ---
+          page=1
+          echo '[]' > evidence/artifacts.json
+          while : ; do
+            resp="$(gh api "repos/${REPO}/actions/runs/${RUN_ID}/artifacts?per_page=100&page=${page}")"
+            printf '%s' "$resp" > "evidence/raw/artifacts_page_${page}.json"
+            printf '%s' "$resp" | jq '.artifacts' > evidence/_page.json
+            jq -s '.[0] + .[1]' evidence/artifacts.json evidence/_page.json > evidence/artifacts.tmp
+            mv evidence/artifacts.tmp evidence/artifacts.json
+            total="$(printf '%s' "$resp" | jq '.total_count')"
+            got="$(jq 'length' evidence/artifacts.json)"
+            n="$(printf '%s' "$resp" | jq '.artifacts | length')"
+            page=$((page + 1))
+            { [ "$got" -ge "$total" ] || [ "$n" -eq 0 ]; } && break
+          done
+          rm -f evidence/_page.json
+
+          echo "Jobs collected:      $(jq 'length' evidence/jobs.json)"
+          echo "Artifacts collected: $(jq 'length' evidence/artifacts.json)"
+
+      - id: discover
+        name: Coarse candidate discovery by name prefix (never authoritative)
+        run: |
+          set -euo pipefail
+          jq '[ .[] | select((.name // "") | startswith("pep-spike-summary-")) ]' \
+            evidence/artifacts.json > evidence/candidates.json
+          ids="$(jq -r '[ .[].id ] | join(",")' evidence/candidates.json)"
+          count="$(jq 'length' evidence/candidates.json)"
+          echo "candidate_ids=${ids}" >> "$GITHUB_OUTPUT"
+          echo "candidate_count=${count}" >> "$GITHUB_OUTPUT"
+          echo "Discovered ${count} candidate summary artifact(s) by prefix."
+
+      - id: download
+        name: Download candidate summaries by immutable ID
+        if: ${{ steps.discover.outputs.candidate_count != '0' }}
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131  # v7.0.0
+        with:
+          artifact-ids: ${{ steps.discover.outputs.candidate_ids }}
+          path: dl
+          github-token: ${{ github.token }}
+
+      - id: ingest
+        name: Fail-closed ingestion (one summary per artifact, keep evidence)
+        run: |
+          set -euo pipefail
+          # Associate each extracted summary with its SOURCE artifact id + name.
+          # Require exactly one summary.json per candidate artifact; record 0/>1
+          # or malformed/non-object JSON as evidence WITHOUT aborting.
+          python3 - <<'PY'
+          import json, os, glob
+          cands = json.load(open("evidence/candidates.json"))
+          single = len(cands) == 1
+          records = []
+          for c in cands:
+              aid, name = c.get("id"), c.get("name")
+              d = None
+              if name and os.path.isdir(os.path.join("dl", name)):
+                  d = os.path.join("dl", name)          # multi-artifact: per-name subdir
+              elif single and os.path.isfile(os.path.join("dl", "summary.json")):
+                  d = "dl"                               # single-artifact: flat extract
+              files = glob.glob(os.path.join(d, "summary.json")) if d else []
+              rec = {"artifact_id": aid, "artifact_name": name,
+                     "summary_count": len(files), "source_path": None,
+                     "parse_error": False, "root_is_object": False, "raw": None}
+              if len(files) == 1:
+                  p = files[0]; rec["source_path"] = p
+                  try:
+                      val = json.load(open(p))
+                      rec["root_is_object"] = isinstance(val, dict)
+                      rec["raw"] = val if isinstance(val, dict) else None
+                  except Exception:
+                      rec["parse_error"] = True
+              records.append(rec)
+          json.dump(records, open("evidence/summaries.json", "w"), indent=2)
+          print("Ingested %d candidate artifact record(s)." % len(records))
+          PY
+
+      - id: evaluate
+        name: Validate provenance, classify attempts, record the oracle
+        env:
+          REPO: ${{ github.repository }}
+          REF: ${{ github.ref }}
+          SHA: ${{ github.sha }}
+          RUN_ID: ${{ github.run_id }}
+          RUN_ATTEMPT: ${{ github.run_attempt }}
+          EXPECTED_IDS: ${{ needs.plan.outputs.expected_ids }}
+          EXPECTED_COUNT: ${{ needs.plan.outputs.expected_count }}
+          PLAN_INCLUDE: ${{ needs.plan.outputs.plan_include }}
+          PLAN_RESULT: ${{ needs.plan.result }}
+          RUN_RESULT: ${{ needs.run.result }}
+        run: |
+          set -euo pipefail
+          printf '%s' "$PLAN_INCLUDE" | jq '.' > evidence/plan_include.json
+          jq -n --arg ids "$EXPECTED_IDS" '$ids | split(",")' > evidence/expected_ids.json
+
+          jq -n \
+            --arg run_id "$RUN_ID" \
+            --arg run_attempt "$RUN_ATTEMPT" \
+            --arg repo "$REPO" \
+            --arg ref "$REF" \
+            --arg sha "$SHA" \
+            --arg plan_result "$PLAN_RESULT" \
+            --arg run_result "$RUN_RESULT" \
+            --arg expected_count "$EXPECTED_COUNT" \
+            --argjson expected "$(cat evidence/expected_ids.json)" \
+            --argjson plan_include "$(cat evidence/plan_include.json)" \
+            --argjson jobs "$(cat evidence/jobs.json)" \
+            --argjson artifacts "$(cat evidence/artifacts.json)" \
+            --argjson candidates "$(cat evidence/candidates.json)" \
+            --argjson records "$(cat evidence/summaries.json)" \
+            '
+            # Type-total predicates: each guards its type BEFORE any
+            # type-sensitive op (test/tonumber/ascii_downcase/length), and jq
+            # short-circuits "and", so a non-string never reaches the op.
+            def is_str: type == "string";
+            def nonblank: is_str and test( "\\S" );
+            def is_hex40: is_str and test( "^[0-9a-fA-F]{40}$" );
+            def is_posdec: is_str and test( "^[0-9]+$" ) and ( tonumber > 0 );
+            def is_bool: type == "boolean";
+            ( $expected | unique | length ) as $distinct
+            | ( $records | map(
+                . as $r
+                # Sanitize before any field access: use {} when the supplied
+                # value is not an object, so indexing is always safe.
+                | ( if ( $r.raw | type ) == "object" then $r.raw else {} end ) as $raw
+                | ( ( $raw.provenance | type ) == "object" ) as $prov_ok
+                | ( if $prov_ok then $raw.provenance else {} end ) as $prov
+                | {
+                    artifact_id: $r.artifact_id,
+                    artifact_name: $r.artifact_name,
+                    source_path: $r.source_path,
+                    summary_count: $r.summary_count,
+                    one_summary: ( $r.summary_count == 1 ),
+                    object_root: ( ( $r.parse_error | not ) and $r.root_is_object ),
+                    schema_ok: ( ( $raw.schema | is_str ) and ( $raw.schema == "pep-spike-summary/1" ) ),
+                    id: $raw.invocation_id,
+                    id_ok: ( $raw.invocation_id | nonblank ),
+                    prov_ok: $prov_ok,
+                    repo_ok: ( $prov.caller_repository | nonblank ),
+                    ref_ok: ( $prov.caller_ref | nonblank ),
+                    sha_ok: ( $prov.caller_sha | is_hex40 ),
+                    run_id_ok: ( $prov.caller_run_id | is_posdec ),
+                    attempt_ok: ( $prov.caller_run_attempt | is_posdec ),
+                    secret_ok: ( $raw.secret_present | is_bool ),
+                    prov: $prov,
+                    raw: $raw
+                  }
+                | . + { structurally_valid: ( .one_summary and .object_root and .schema_ok and .id_ok and .prov_ok and .repo_ok and .ref_ok and .sha_ok and .run_id_ok and .attempt_ok and .secret_ok ) }
+                | . + {
+                    repo_match: ( .structurally_valid and ( .prov.caller_repository == $repo ) ),
+                    ref_match: ( .structurally_valid and ( .prov.caller_ref == $ref ) ),
+                    sha_match: ( .structurally_valid and ( .prov.caller_sha | is_str ) and ( ( .prov.caller_sha | ascii_downcase ) == ( $sha | ascii_downcase ) ) ),
+                    run_id_match: ( .structurally_valid and ( .prov.caller_run_id == $run_id ) ),
+                    in_expected: ( .structurally_valid and ( .id as $iid | ( $expected | index( $iid ) ) != null ) ),
+                    attempt_num: ( if ( .structurally_valid and ( .prov.caller_run_attempt | is_posdec ) ) then ( .prov.caller_run_attempt | tonumber ) else null end )
+                  }
+                | . + { belongs: ( .structurally_valid and .repo_match and .ref_match and .sha_match and .run_id_match ) }
+                | . + { attempt_class: (
+                    if .attempt_num == null then null
+                    elif .attempt_num == ( $run_attempt | tonumber ) then "current"
+                    elif .attempt_num < ( $run_attempt | tonumber ) then "prior"
+                    else "future" end
+                  ) }
+              ) ) as $ann
+            | ( $ann | map( select( .structurally_valid | not ) ) ) as $malformed
+            | ( $ann | map( select( .structurally_valid ) ) ) as $valid
+            | ( $valid | map( select( .belongs | not ) ) ) as $foreign
+            | ( $valid | map( select( .belongs and ( .in_expected | not ) ) ) ) as $unknown
+            | ( $valid | map( select( .belongs and .in_expected and .attempt_class == "future" ) ) ) as $future
+            | ( $valid | map( select( .belongs and .in_expected and .attempt_class == "prior" ) ) ) as $prior
+            | ( $valid | map( select( .belongs and .in_expected and .attempt_class == "current" ) ) ) as $current
+            | ( $expected | map( . as $id | { invocation_id: $id, current_matched: ( $current | map( select( .id == $id ) ) | length ) } ) ) as $per_expected
+            | ( $per_expected | map( select( .current_matched == 0 ) ) | map( .invocation_id ) ) as $missing_ids
+            | ( $per_expected | map( select( .current_matched > 1 ) ) | map( .invocation_id ) ) as $duplicate_current_ids
+            | ( $plan_include | map(
+                . as $leg
+                | ( $jobs | map( select( ( .name // "" ) | contains( $leg.invocation_id ) ) ) ) as $lj
+                | ( $lj | map( .steps // [] ) | add // [] ) as $steps
+                | {
+                    invocation_id: $leg.invocation_id,
+                    expected_fail: ( $leg.fail_before_upload == true ),
+                    job_names: ( $lj | map( .name ) ),
+                    conclusions: ( $lj | map( .conclusion ) ),
+                    job_run_attempts: ( $lj | map( .run_attempt ) ),
+                    ran: ( ( $lj | length ) > 0 ),
+                    any_success: ( $lj | any( .conclusion == "success" ) ),
+                    any_failure: ( $lj | any( .conclusion == "failure" ) ),
+                    step_records: ( $steps | map( { name: .name, status: .status, conclusion: .conclusion, number: .number } ) ),
+                    build_step_success: ( $steps | any( ( ( .name // "" ) | contains( "Build deterministic summary" ) ) and .conclusion == "success" ) ),
+                    failure_step_failed: ( $steps | any( ( ( .name // "" ) | contains( "Intentional failure" ) ) and .conclusion == "failure" ) ),
+                    upload_step_ran: ( $steps | any( ( ( .name // "" ) | contains( "Upload summary" ) ) and .conclusion == "success" ) ),
+                    upload_step_skipped_or_absent: ( $steps | map( select( ( .name // "" ) | contains( "Upload summary" ) ) ) | all( ( .conclusion == "skipped" ) or ( .conclusion == null ) ) )
+                  }
+              ) ) as $leg_eval
+            | ( $leg_eval | all( .ran ) ) as $c2_both_ran
+            | ( $leg_eval | map( select( .expected_fail | not ) ) ) as $succ_legs
+            | ( $leg_eval | map( select( .expected_fail ) ) ) as $fail_legs
+            | ( $succ_legs | all( .any_success and ( .any_failure | not ) ) ) as $succ_jobs_ok
+            | ( $succ_legs | all( .build_step_success ) ) as $alpha_build_ok
+            | ( $succ_legs | all( .upload_step_ran ) ) as $alpha_upload_ran
+            | ( $succ_legs | all( .invocation_id as $id | ( $current | map( select( .id == $id ) ) | length ) == 1 ) ) as $succ_one_summary
+            | ( $succ_legs | all( .invocation_id as $id | ( ( $current | map( select( .id == $id and .raw.secret_present == true ) ) ) | length ) >= 1 ) ) as $c6_secret
+            | ( $fail_legs | all( .any_failure ) ) as $fail_jobs_ok
+            | ( $fail_legs | all( .build_step_success ) ) as $bravo_build_ok
+            | ( $fail_legs | all( .failure_step_failed ) ) as $bravo_fail_step_failed
+            | ( $fail_legs | all( .upload_step_skipped_or_absent and ( .upload_step_ran | not ) ) ) as $bravo_upload_not_executed
+            | ( $fail_legs | all( .invocation_id as $id | ( $ann | map( select( .id == $id ) ) | length ) == 0 ) ) as $bravo_no_summary
+            | ( ( $distinct == 2 ) and ( ( $expected | length ) == 2 ) and ( ( $expected_count | tonumber ) == 2 ) ) as $c1_plan_two
+            | ( $run_result == "failure" ) as $c5_run_failed
+            | ( ( $malformed | length ) == 0 and ( $foreign | length ) == 0 and ( $unknown | length ) == 0 and ( $future | length ) == 0 and ( $duplicate_current_ids | length ) == 0 ) as $c7_clean
+            | (
+                ( ( $malformed | length ) > 0 )
+                or ( ( $foreign | length ) > 0 )
+                or ( ( $unknown | length ) > 0 )
+                or ( ( $future | length ) > 0 )
+                or ( ( $duplicate_current_ids | length ) > 0 )
+                or ( $distinct != 2 )
+              ) as $violation
+            | ( $run_attempt == "1" ) as $is_attempt1
+            | (
+                if $is_attempt1
+                then ( $c1_plan_two and $c2_both_ran
+                       and $succ_jobs_ok and $alpha_build_ok and $alpha_upload_ran and $succ_one_summary and $c6_secret
+                       and $fail_jobs_ok and $bravo_build_ok and $bravo_fail_step_failed and $bravo_upload_not_executed and $bravo_no_summary
+                       and $c5_run_failed and $c7_clean )
+                else ( if $violation then false else null end )
+                end
+              ) as $expectation_met
+            | {
+                run_id: $run_id,
+                run_attempt: $run_attempt,
+                repository: $repo,
+                ref: $ref,
+                sha: $sha,
+                observation_mode: ( $is_attempt1 | not ),
+                plan: {
+                  result: $plan_result,
+                  expected_ids: $expected,
+                  expected_count: ( $expected_count | tonumber ),
+                  distinct_invocations: $distinct,
+                  include: $plan_include
+                },
+                run_job: { result: $run_result },
+                aggregate_job: { ran: true, note: "aggregate executed under if: !cancelled() despite matrix leg failure" },
+                jobs_snapshot: $jobs,
+                artifacts_snapshot: $artifacts,
+                artifacts_interpreted: ( $artifacts | map( {
+                  id: .id,
+                  name: .name,
+                  digest: ( .digest // null ),
+                  expired: .expired,
+                  expires_at: .expires_at,
+                  created_at: .created_at,
+                  updated_at: .updated_at,
+                  size_in_bytes: .size_in_bytes,
+                  workflow_run_id: ( .workflow_run.id // null )
+                } ) ),
+                candidates: $candidates,
+                summary_annotations: $ann,
+                leg_evaluation: $leg_eval,
+                classification: {
+                  current_attempt: ( $current | map( { invocation_id: .id, artifact_id: .artifact_id, artifact_name: .artifact_name } ) ),
+                  prior_attempt_historical: ( $prior | map( { invocation_id: .id, artifact_id: .artifact_id, artifact_name: .artifact_name, attempt: .attempt_num } ) ),
+                  future_attempt: ( $future | map( { invocation_id: .id, artifact_id: .artifact_id, attempt: .attempt_num } ) ),
+                  foreign: ( $foreign | map( { artifact_id: .artifact_id, artifact_name: .artifact_name, source_path: .source_path } ) ),
+                  unknown_invocation: ( $unknown | map( { invocation_id: .id, artifact_id: .artifact_id } ) ),
+                  malformed: ( $malformed | map( { artifact_id: .artifact_id, artifact_name: .artifact_name, summary_count: .summary_count, source_path: .source_path } ) )
+                },
+                findings: {
+                  current_matched: ( $current | map( .id ) ),
+                  missing: $missing_ids,
+                  duplicate_current: $duplicate_current_ids,
+                  prior_historical: ( $prior | map( .id ) ),
+                  future: ( $future | map( .id ) ),
+                  foreign_count: ( $foreign | length ),
+                  unknown: ( $unknown | map( .id ) ),
+                  malformed_count: ( $malformed | length )
+                },
+                oracle: {
+                  attempt: $run_attempt,
+                  is_attempt_1: $is_attempt1,
+                  checks: {
+                    plan_two_distinct: $c1_plan_two,
+                    both_legs_ran: $c2_both_ran,
+                    alpha_job_success: $succ_jobs_ok,
+                    alpha_build_step_success: $alpha_build_ok,
+                    alpha_upload_step_success: $alpha_upload_ran,
+                    alpha_one_current_summary: $succ_one_summary,
+                    alpha_secret_two_hop_ok: $c6_secret,
+                    bravo_job_failed: $fail_jobs_ok,
+                    bravo_build_step_success: $bravo_build_ok,
+                    bravo_failure_step_failed: $bravo_fail_step_failed,
+                    bravo_upload_not_executed: $bravo_upload_not_executed,
+                    bravo_no_summary_artifact: $bravo_no_summary,
+                    run_job_failed: $c5_run_failed,
+                    aggregate_ran: true,
+                    no_malformed_foreign_unknown_future_or_dupes: $c7_clean
+                  },
+                  violation_independent_of_rerun: $violation,
+                  expectation_met: $expectation_met
+                }
+              }
+            ' > evidence/evidence.json
+
+          echo "=== interpreted oracle ==="
+          jq '.oracle' evidence/evidence.json
+          echo "expectation_met=$(jq -c '.oracle.expectation_met' evidence/evidence.json)"
+          echo "NOTE: attempt 1 is intentionally RED because leg B fails; the aggregate still finishes."
+
+      - id: upload_evidence
+        name: Upload attempt-specific evidence
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
+        with:
+          name: pep-spike-evidence-r${{ github.run_id }}-a${{ github.run_attempt }}
+          path: evidence/
+          if-no-files-found: error

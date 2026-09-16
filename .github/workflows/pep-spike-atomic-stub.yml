@@ -1,0 +1,108 @@
+# TEMPORARY Stage 3B mechanics spike — DO NOT MERGE.
+# Reusable atomic STUB. One invocation per call. It does NOT run any real PEP
+# test: it only proves nested reusable-workflow shape, two-hop secret
+# forwarding, and attempt-safe unique artifact naming.
+#
+# BOTH legs build a deterministic summary first. The fail leg then fails in an
+# ISOLATED step BEFORE upload, so its job evidence proves the result was
+# generated but never published:
+#   leg A (fail_before_upload=false): probe -> build -> (fail step skipped) -> upload
+#   leg B (fail_before_upload=true):  probe -> build -> FAIL step -> upload SKIPPED
+name: PEP Spike Atomic Stub
+
+on:
+  workflow_call:
+    inputs:
+      invocation_id:
+        description: Opaque identity for this atomic invocation (spike data only).
+        required: true
+        type: string
+      fail_before_upload:
+        description: When true, fail in an isolated step AFTER build and BEFORE upload.
+        required: true
+        type: boolean
+    secrets:
+      probe_secret:
+        description: Harmless two-hop forwarding probe. Presence only is recorded; value is never printed or persisted.
+        required: true
+
+permissions: {}
+
+jobs:
+  atomic:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - id: probe
+        name: Record two-hop secret presence
+        env:
+          PROBE_SECRET: ${{ secrets.probe_secret }}
+        run: |
+          set -euo pipefail
+          if [ -n "${PROBE_SECRET:-}" ]; then
+            SP=true
+          else
+            SP=false
+          fi
+          # Only the boolean leaves this step; the value is never echoed.
+          echo "secret_present=${SP}" >> "$GITHUB_OUTPUT"
+          echo "Two-hop probe present: ${SP}"
+
+      - id: build
+        name: Build deterministic summary
+        env:
+          INVOCATION_ID: ${{ inputs.invocation_id }}
+          CALLER_REPOSITORY: ${{ github.repository }}
+          CALLER_REF: ${{ github.ref }}
+          CALLER_SHA: ${{ github.sha }}
+          CALLER_RUN_ID: ${{ github.run_id }}
+          CALLER_RUN_ATTEMPT: ${{ github.run_attempt }}
+          SECRET_PRESENT: ${{ steps.probe.outputs.secret_present }}
+        run: |
+          set -euo pipefail
+          mkdir -p out
+          jq -n \
+            --arg schema "pep-spike-summary/1" \
+            --arg iid "${INVOCATION_ID}" \
+            --arg repo "${CALLER_REPOSITORY}" \
+            --arg ref "${CALLER_REF}" \
+            --arg sha "${CALLER_SHA}" \
+            --arg rid "${CALLER_RUN_ID}" \
+            --arg att "${CALLER_RUN_ATTEMPT}" \
+            --argjson sp "${SECRET_PRESENT}" \
+            '{
+               schema: $schema,
+               invocation_id: $iid,
+               provenance: {
+                 caller_repository: $repo,
+                 caller_ref: $ref,
+                 caller_sha: $sha,
+                 caller_run_id: $rid,
+                 caller_run_attempt: $att
+               },
+               secret_present: $sp
+             }' > out/summary.json
+          echo "Built summary for ${INVOCATION_ID}:"
+          cat out/summary.json
+
+      - id: fail
+        name: Intentional failure before upload
+        # Runs ONLY for the fail leg, AFTER the summary is already built. The
+        # summary is never published because the following upload step is then
+        # skipped. The boolean workflow-call input drives this cleanly.
+        if: ${{ inputs.fail_before_upload }}
+        env:
+          INVOCATION_ID: ${{ inputs.invocation_id }}
+        run: |
+          set -euo pipefail
+          echo "Leg ${INVOCATION_ID}: summary built; failing intentionally before upload." >&2
+          exit 1
+
+      - id: upload
+        name: Upload summary
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
+        with:
+          name: pep-spike-summary-${{ inputs.invocation_id }}-r${{ github.run_id }}-a${{ github.run_attempt }}
+          path: out/summary.json
+          if-no-files-found: error

@@ -1,0 +1,26 @@
+# TEMPORARY Stage 3B mechanics spike — DO NOT MERGE.
+# Branch-scoped caller. Triggers ONLY on pushes to spike/pep-certify-mechanics.
+# Top of the three-level nested reusable-workflow topology:
+#   caller -> coordinator -> atomic stub
+# The probe secret is a harmless named secret mapped from GITHUB_TOKEN and
+# EXPLICITLY forwarded on the first hop, to prove two-hop forwarding rather than
+# relying on the token automatically available inside each workflow.
+name: PEP Spike Caller
+
+on:
+  push:
+    branches:
+      - spike/pep-certify-mechanics
+
+permissions: {}
+
+jobs:
+  certify:
+    # actions:read is required so the nested aggregate job can read this run's
+    # jobs/artifacts and download by ID; the ceiling flows from here.
+    permissions:
+      contents: read
+      actions: read
+    uses: ./.github/workflows/pep-spike-coordinator.yml
+    secrets:
+      probe_secret: ${{ secrets.GITHUB_TOKEN }}

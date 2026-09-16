@@ -12,11 +12,20 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import sys
 import xml.etree.ElementTree as ET
 from pathlib import Path
 
 _NOT_ATTEMPTED = {"l2a": "not_attempted", "l2b": "not_attempted", "l1": "not_attempted"}
+# The reusable workflow's preflight validates a caller invocation_id against this
+# exact charset/length and emits the validated value (or "" when absent/rejected).
+# The summarizer stamps that already-validated value onto every atomic result; the
+# same pattern is re-applied here purely defensively so a value fed straight to the
+# CLI can never leak an unsafe id into a result (a rejected id degrades to "").
+# Matched with fullmatch() (never match()+`$`) so a trailing/embedded newline is
+# rejected: `$` matches before a final "\n", but fullmatch requires the whole string.
+_INVOCATION_ID_RE = re.compile(r"[A-Za-z0-9._-]{1,64}")
 _EVIDENCE_RUNGS = ("l2a", "l2b", "l1")
 _EVIDENCE_VALUES = {"proven", "not_proven", "not_attempted"}
 
@@ -153,9 +162,21 @@ def _aggregate_junit(paths):
     return totals, parsed_any, malformed
 
 
+def _safe_invocation_id(invocation_id):
+    """Return the validated invocation id verbatim, or "" when absent/rejected.
+
+    The preflight is the authoritative validator and passes its already-validated
+    output here; this re-check is a defensive floor so a result NEVER carries an
+    unsafe id (an out-of-charset value fed directly to the CLI degrades to "",
+    mirroring the preflight's drop rather than restamping a raw input)."""
+    if isinstance(invocation_id, str) and _INVOCATION_ID_RE.fullmatch(invocation_id):
+        return invocation_id
+    return ""
+
+
 def build_summary(xml_dir=None, *, mode="observe", preview=False, identity_evidence=None,
                   provenance=None, validation_error=None, infra_error=None,
-                  reports=None, report_manifest=None):
+                  reports=None, report_manifest=None, invocation_id=""):
     """Return (summary_dict, exit_code). See module docstring for the policy.
 
     Outcome classification:
@@ -181,9 +202,14 @@ def build_summary(xml_dir=None, *, mode="observe", preview=False, identity_evide
         raise ValueError(f"mode must be 'observe' or 'gate', got {mode!r}")
     identity = identity_evidence or dict(_NOT_ATTEMPTED)
     zero = {"tests": 0, "failures": 0, "errors": 0, "skipped": 0}
+    # Self-identifying result: the (already-validated) invocation id is stamped
+    # TOP-LEVEL on every branch so the cert-result reducer joins each atomic
+    # summary to its planned invocation by id, never by parsing the artifact name.
+    safe_invocation_id = _safe_invocation_id(invocation_id)
 
     def _finish(execution_status, verdict, counts, reason=None, malformed=0):
         summary = {
+            "invocation_id": safe_invocation_id,
             "execution_status": execution_status,
             "test_verdict": verdict,
             "enforcement_mode": mode,
@@ -262,6 +288,10 @@ def main(argv=None):
     ap.add_argument("--infra-error", default=None)
     ap.add_argument("--identity-json", default=None, help="path to identity-evidence JSON")
     ap.add_argument("--provenance-json", default=None, help="path to provenance JSON")
+    # The preflight-validated invocation id (or "" when absent/rejected). Pass ONLY
+    # the preflight output here, never the raw workflow input; it is stamped
+    # top-level on the result so aggregation is name-independent.
+    ap.add_argument("--invocation-id", default="", help="preflight-validated invocation id")
     args = ap.parse_args(argv)
 
     # Guard the optional side files: a missing/unreadable/malformed/wrong-shape
@@ -277,9 +307,12 @@ def main(argv=None):
             identity_evidence=identity, provenance=provenance,
             validation_error=args.validation_error, infra_error=args.infra_error,
             reports=args.reports, report_manifest=args.reports_manifest,
+            invocation_id=args.invocation_id,
         )
     except SideFileError as e:
-        summary, exit_code = build_summary(mode=args.mode, infra_error=str(e))
+        # Even a side-file plumbing fault yields a self-identifying result.
+        summary, exit_code = build_summary(mode=args.mode, infra_error=str(e),
+                                           invocation_id=args.invocation_id)
 
     Path(args.out).write_text(json.dumps(summary, indent=2))
     print(f"[pep-summary] execution={summary['execution_status']} "

@@ -418,3 +418,91 @@ def test_main_valid_identity_reaches_completed_result(tmp_path):
     assert data["identity_evidence"] == {
         "l2a": "proven", "l2b": "not_proven", "l1": "proven"}
     assert code == 0
+
+
+# --- self-identifying invocation_id: stamped top-level on EVERY branch ---
+
+_VALID_ID = "rag-rocky9-amd64-pg17-0123abcd4567ef89"
+
+
+def test_invocation_id_stamped_on_completed(tmp_path):
+    _dir_with(tmp_path, "report-rpm-rag-17.xml", _PASS_XML)
+    summary, _ = prs.build_summary(tmp_path, mode="observe", invocation_id=_VALID_ID)
+    assert summary["execution_status"] == "completed"
+    assert summary["invocation_id"] == _VALID_ID
+
+
+def test_invocation_id_stamped_on_preview(tmp_path):
+    summary, _ = prs.build_summary(tmp_path, mode="observe", preview=True, invocation_id=_VALID_ID)
+    assert summary["execution_status"] == "preview"
+    assert summary["invocation_id"] == _VALID_ID
+
+
+def test_invocation_id_stamped_on_validation_error(tmp_path):
+    summary, _ = prs.build_summary(
+        tmp_path, mode="observe", validation_error="bad input", invocation_id=_VALID_ID)
+    assert summary["execution_status"] == "incomplete"
+    assert summary["invocation_id"] == _VALID_ID
+
+
+def test_invocation_id_stamped_on_infra_error(tmp_path):
+    summary, _ = prs.build_summary(
+        tmp_path, mode="observe", infra_error="runner lost", invocation_id=_VALID_ID)
+    assert summary["execution_status"] == "infra_failure"
+    assert summary["invocation_id"] == _VALID_ID
+
+
+def test_invocation_id_stamped_on_incomplete_no_reports(tmp_path):
+    summary, _ = prs.build_summary(tmp_path, mode="observe", invocation_id=_VALID_ID)
+    assert summary["execution_status"] == "incomplete"
+    assert summary["invocation_id"] == _VALID_ID
+
+
+def test_invocation_id_default_absent_is_empty(tmp_path):
+    _dir_with(tmp_path, "report-rpm-rag-17.xml", _PASS_XML)
+    summary, _ = prs.build_summary(tmp_path, mode="observe")   # default ""
+    assert summary["invocation_id"] == ""
+
+
+def test_unsafe_invocation_id_degrades_to_empty_not_restamped(tmp_path):
+    # A value fed straight to the summarizer that is NOT workflow-safe must degrade
+    # to "" (mirroring the preflight drop), never leak an unsafe id into a result.
+    # Whole-string validation (fullmatch) rejects trailing/embedded newline and CR,
+    # which a match()+`$` check would have wrongly accepted.
+    _dir_with(tmp_path, "report-rpm-rag-17.xml", _PASS_XML)
+    for bad in ["bad/id", "with space", "x" * 65, "tab\tid",
+                "trailing\n", "embed\ned", "cr\r", "crlf\r\n"]:
+        summary, _ = prs.build_summary(tmp_path, mode="observe", invocation_id=bad)
+        assert summary["invocation_id"] == "", repr(bad)
+
+
+def test_valid_planner_style_invocation_id_preserved(tmp_path):
+    # A real planner-generated id (readable prefix + 16-hex digest, 64 chars max)
+    # must remain unchanged through the summarizer validator.
+    _dir_with(tmp_path, "report-rpm-rag-17.xml", _PASS_XML)
+    for good in ["rag-rocky9-amd64-pg17-0123abcd4567ef89", "a", "A.Z_0-9", "x" * 64]:
+        summary, _ = prs.build_summary(tmp_path, mode="observe", invocation_id=good)
+        assert summary["invocation_id"] == good, repr(good)
+
+
+def test_main_passes_invocation_id_through_to_summary(tmp_path):
+    _dir_with(tmp_path, "report-rpm-rag-17.xml", _PASS_XML)
+    out = tmp_path / "summary.json"
+    code = prs.main(["--xml-dir", str(tmp_path), "--out", str(out),
+                     "--mode", "observe", "--invocation-id", _VALID_ID])
+    data = json.loads(out.read_text())
+    assert data["invocation_id"] == _VALID_ID
+    assert code == 0
+
+
+def test_main_stamps_invocation_id_even_on_sidefile_infra(tmp_path):
+    # A side-file plumbing fault still yields a self-identifying result.
+    _dir_with(tmp_path, "report-rpm-rag-17.xml", _PASS_XML)
+    out = tmp_path / "summary.json"
+    code = prs.main(["--xml-dir", str(tmp_path), "--out", str(out), "--mode", "observe",
+                     "--identity-json", str(tmp_path / "missing.json"),
+                     "--invocation-id", _VALID_ID])
+    data = json.loads(out.read_text())
+    assert data["execution_status"] == "infra_failure"
+    assert data["invocation_id"] == _VALID_ID
+    assert code == 0

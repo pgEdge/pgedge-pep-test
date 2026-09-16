@@ -102,14 +102,31 @@ jobs:
           # never reach upload-artifact.name and fail the report-only job under
           # always(). Empty is allowed (optional input; see the input's doc for the
           # caller's uniqueness obligation). Charset kept in lockstep with the drop.
+          # safe_inv is the '-'-prefixed fragment folded into the artifact name;
+          # safe_id is the BARE validated id emitted as a step output so the
+          # summarizer can stamp it top-level on the atomic result (name-independent
+          # aggregation). Both are set ONLY when the id validates; a rejected or
+          # absent id leaves safe_id="" -> the result carries "" (never the raw input).
           safe_inv=""
+          safe_id=""
           if [ -n "$IN_INVOCATION_ID" ]; then
-            if printf '%s' "$IN_INVOCATION_ID" | grep -qE '^[A-Za-z0-9._-]{1,64}$'; then
-              safe_inv="-$IN_INVOCATION_ID"
-            else
-              echo "invalid invocation_id: '$IN_INVOCATION_ID' (allowed: [A-Za-z0-9._-], 1-64 chars)" >&2
-              rc=3
-            fi
+            # Reject ANY embedded/trailing newline or carriage return FIRST: `grep -E`
+            # matches per line, so a multi-line value whose first line is charset-clean
+            # would otherwise pass. This bash test sees the whole value at once; only a
+            # genuine single-line token then reaches the charset/length check.
+            case "$IN_INVOCATION_ID" in
+              *$'\n'*|*$'\r'*)
+                echo "invalid invocation_id: contains a newline or carriage return" >&2
+                rc=3 ;;
+              *)
+                if printf '%s' "$IN_INVOCATION_ID" | grep -qE '^[A-Za-z0-9._-]{1,64}$'; then
+                  safe_inv="-$IN_INVOCATION_ID"
+                  safe_id="$IN_INVOCATION_ID"
+                else
+                  echo "invalid invocation_id: '$IN_INVOCATION_ID' (allowed: [A-Za-z0-9._-], 1-64 chars)" >&2
+                  rc=3
+                fi ;;
+            esac
           fi
           # Build the artifact name from the validated execution_mode + the safe
           # (validated-or-dropped) invocation_id. The final `tr` is a belt-and-
@@ -120,6 +137,7 @@ jobs:
           {
             echo "rc=$rc"
             echo "artifact_name=$name"
+            echo "invocation_id=$safe_id"
           } >> "$GITHUB_OUTPUT"
           [ "$rc" = "0" ] || exit "$rc"
       - name: Checkout PEP implementation (self, pinned)
@@ -257,6 +275,9 @@ jobs:
           IN_MODE: ${{ inputs.mode }}
           IN_EXEC: ${{ inputs.execution_mode }}
           IN_PREFLIGHT: ${{ steps.preflight.outputs.rc }}   # execution_mode validity (finding 2)
+          # The preflight-validated invocation id ("" when absent/rejected). Passed to
+          # the summarizer so the atomic result self-identifies; NEVER the raw input.
+          IN_INVOCATION_ID_VALID: ${{ steps.preflight.outputs.invocation_id }}
           FW_CODE: ${{ steps.fw.outputs.exit_code }}   # real script exit code (issue #10/#12)
           DOCKER_OUTCOME: ${{ steps.docker.outcome }}
           SETUP_OUTCOME: ${{ steps.setup_python.outcome }}
@@ -278,7 +299,10 @@ jobs:
           # invalid/unknown enforcement mode MUST be revisited before mode=gate is
           # turned on in production. Tracked in the living plan (Deferred decisions).
           case "$IN_MODE" in observe|gate) ;; *) IN_MODE=observe ;; esac
-          args=( --out test-logs/summary.json --mode "$IN_MODE" )
+          # --invocation-id is ALWAYS passed (empty allowed) so every atomic result
+          # branch stamps the validated id top-level. The value is the preflight
+          # output, so a rejected/absent id arrives here as "" and is stamped as "".
+          args=( --out test-logs/summary.json --mode "$IN_MODE" --invocation-id "$IN_INVOCATION_ID_VALID" )
           # issue #8 + carry-forward #1: read ONLY this run's reports (manifest),
           # NEVER a recursive glob over an accumulating test-logs/. In a full
           # (non-preview) integration run the manifest is written unconditionally by

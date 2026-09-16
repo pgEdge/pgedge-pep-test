@@ -1,7 +1,7 @@
 /usr/pgsql-17/lib/bitcode/pg_stat_monitor.index.bc
-/usr/pgsql-17/lib/bitcode/pg_stat_monitor/guc.bc
-/usr/pgsql-17/lib/bitcode/pg_stat_monitor/hash_query.bc
-/usr/pgsql-17/lib/bitcode/pg_stat_monitor/pg_stat_monitor.bc
+/usr/pgsql-17/lib/bitcode/pg_stat_monitor/src/guc.bc
+/usr/pgsql-17/lib/bitcode/pg_stat_monitor/src/hash_query.bc
+/usr/pgsql-17/lib/bitcode/pg_stat_monitor/src/pg_stat_monitor.bc
 /usr/pgsql-17/lib/pg_stat_monitor.so
 /usr/pgsql-17/sbom/pg-stat-monitor-sbom.json
 /usr/pgsql-17/sbom/pg-stat-monitor-sbom.json.asc

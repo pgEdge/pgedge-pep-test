@@ -21,7 +21,13 @@ jobs:
         # reusable capture workflow, the capture smoke, and selftest) rather than the whole
         # .github/workflows/ dir, so this self-test isn't coupled to the unrelated pre-existing
         # pep-regression.yml breaking independently.
-        run: docker run --rm -v "$PWD:/repo" -w /repo rhysd/actionlint@sha256:887a259a5a534f3c4f36cb02dca341673c6089431057242cdc931e9f133147e9 -color .github/workflows/pep-integration.yml .github/workflows/pep-capture.yml .github/workflows/pep-capture-smoke.yml .github/workflows/pep-selftest.yml
+        #
+        # The single `-ignore` suppresses ONLY actionlint's false positive for `job.workflow_sha` (a
+        # 2026 job-context property this pinned actionlint does not yet model; pep-certify.yml's identity
+        # job uses it as GitHub's purpose-built reusable-workflow SHA). The regex is anchored to that
+        # exact diagnostic + the job-context object type, so every other expression diagnostic still fails
+        # the lint. It is NOT a broad `-ignore` of expression errors.
+        run: docker run --rm -v "$PWD:/repo" -w /repo rhysd/actionlint@sha256:887a259a5a534f3c4f36cb02dca341673c6089431057242cdc931e9f133147e9 -color -ignore 'property "workflow_sha" is not defined in object type \{container' .github/workflows/pep-integration.yml .github/workflows/pep-capture.yml .github/workflows/pep-capture-smoke.yml .github/workflows/pep-selftest.yml .github/workflows/pep-certify.yml
       - name: Unit layer (globs so later modules are picked up automatically)
         # Finding 5: also run the pre-existing container-resolver and
         # consolidated-report regression suites. The bridge (run_pep_tf.sh) shells

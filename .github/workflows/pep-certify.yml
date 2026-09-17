@@ -1,0 +1,428 @@
+# Public reusable PEP certification coordinator (the SHIPPING topology).
+#
+#   capture -> plan -> run (parallel matrix) -> aggregate -> enforce
+#
+# ONE reusable-workflow boundary for RAG and later projects. The consumer pins this
+# reusable workflow by immutable SHA (that pin is the PEP implementation revision) and
+# passes only release EVIDENCE (detector matrices, release intent, publication results)
+# plus the enforcement/execution modes; PEP owns the platform/PostgreSQL/component
+# universe (catalog-driven, never a caller input). Supported targets are derived by
+# capture + the invocation planner from containers_list.json + pep_exec_catalog.json.
+#
+# Separation of concerns:
+#   * aggregate PRODUCES evidence -- it collects the atomic summaries, reduces them
+#     to cert-result/1, writes the sanitized collection ledger, and derives the
+#     pep-cert-decision/1. It stays GREEN whenever it produced a decision, even when
+#     the collector fails closed or the policy blocks (those are handled results).
+#   * enforce COLORS the workflow -- it fails closed from the aggregate decision, and
+#     fails if no trustworthy decision was produced.
+name: PEP Certify
+
+on:
+  workflow_call:
+    inputs:
+      # NOTE: there is deliberately NO pep_implementation_ref input. The implementation revision is
+      # THIS reusable workflow's own commit (job.workflow_sha), resolved by the `identity` job below,
+      # so the consumer's `uses: ...@<SHA>` pin is the single source of truth and cannot diverge.
+      rpm_matrix:             {required: true,  type: string}   # detector rpm_matrix JSON (evidence)
+      deb_matrix:             {required: true,  type: string}   # detector deb_matrix JSON (evidence)
+      release_intent:         {required: true,  type: string}   # release evidence JSON
+      publication_results:    {required: true,  type: string}   # family push outcomes JSON
+      enforcement:            {required: false, type: string, default: observe}   # observe|gate
+      execution_mode:         {required: false, type: string, default: preview}   # preview|full
+    secrets:
+      DOCKERHUB_USERNAME: {required: false}   # optional; only full-mode pull rate limits
+      DOCKERHUB_TOKEN:    {required: false}
+    outputs:
+      certification_conclusion: {description: "success|failure (policy decision)", value: "${{ jobs.aggregate.outputs.workflow_conclusion }}"}
+      certification_state:      {description: "pass|fail|incomplete|preview",        value: "${{ jobs.aggregate.outputs.certification_state }}"}
+      execution_status:         {description: "cert-result execution axis",          value: "${{ jobs.aggregate.outputs.execution_status }}"}
+      test_verdict:             {description: "cert-result product verdict",          value: "${{ jobs.aggregate.outputs.test_verdict }}"}
+      coverage_status:          {description: "cert-result coverage axis",           value: "${{ jobs.aggregate.outputs.coverage_status }}"}
+      reason_code:              {description: "policy reason code",                  value: "${{ jobs.aggregate.outputs.reason_code }}"}
+      evidence_artifact_id:     {description: "combined evidence artifact id",       value: "${{ jobs.aggregate.outputs.evidence_artifact_id }}"}
+      evidence_artifact_name:   {description: "combined evidence artifact name",     value: "${{ jobs.aggregate.outputs.evidence_artifact_name }}"}
+
+# Least privilege at the top; each job grants only what it needs (a reusable
+# workflow can never exceed the caller's granted token).
+permissions: {}
+
+jobs:
+  # --- 0. identity: the implementation revision IS this workflow's own commit ---
+  # The consumer pins pep-certify.yml@<SHA> in `uses:` -- that pin is the SINGLE source of the PEP
+  # implementation revision. There is no separate caller ref to keep in sync, so workflow YAML and the
+  # scripts it checks out can never diverge. `job.workflow_sha` is GitHub's purpose-built identity: the
+  # commit SHA of the reusable workflow that DEFINES the current job (the docs' example uses it to check
+  # out that workflow's own repository). We read it via an env var, require a full 40-hex SHA, and expose
+  # it as `pep_ref` for every nested workflow and checkout below.
+  #
+  # (github.workflow_sha would be the CALLER's top-level workflow, not this one. The pinned actionlint's
+  # context model lags GitHub and flags `job.workflow_sha` as unknown; the Self-Test suppresses ONLY that
+  # exact false positive with a narrow `-ignore`, not expression diagnostics broadly.)
+  identity:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions: {}
+    outputs:
+      pep_ref: ${{ steps.id.outputs.pep_ref }}
+    steps:
+      - name: Resolve this workflow's own commit SHA
+        id: id
+        env:
+          WF_SHA: ${{ job.workflow_sha }}
+        run: |
+          set -euo pipefail
+          if ! printf '%s' "${WF_SHA:-}" | grep -Eq '^[0-9a-f]{40}$'; then
+            echo "::error::job.workflow_sha is not a full 40-hex commit SHA (${WF_SHA:-<empty>}); failing closed" >&2
+            exit 1
+          fi
+          echo "pep_ref=${WF_SHA}" >> "$GITHUB_OUTPUT"
+          echo "implementation revision (this workflow's SHA): ${WF_SHA}"
+
+  # --- 1. capture: same-run evidence -> cert-plan/1 (existing reusable workflow) ---
+  capture:
+    needs: identity
+    permissions:
+      contents: read
+      actions: read
+    uses: ./.github/workflows/pep-capture.yml
+    with:
+      pep_implementation_ref: ${{ needs.identity.outputs.pep_ref }}
+      rpm_matrix:             ${{ inputs.rpm_matrix }}
+      deb_matrix:             ${{ inputs.deb_matrix }}
+      release_intent:         ${{ inputs.release_intent }}
+      publication_results:    ${{ inputs.publication_results }}
+
+  # --- 2. plan: cert-plan/1 (by immutable id) -> pep-invocation-plan/1 + dynamic matrix ---
+  plan:
+    needs: [identity, capture]      # identity for pep_ref (checkout), capture for the cert-plan id
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      actions: read      # download the cert-plan artifact by immutable id
+    outputs:
+      matrix:        ${{ steps.plan.outputs.matrix }}
+      has_targets:   ${{ steps.plan.outputs.has_targets }}
+      plan_resolved: ${{ steps.plan.outputs.plan_resolved }}
+      invocation_plan_artifact_id: ${{ steps.up_plan.outputs.artifact-id }}
+    steps:
+      - name: Checkout PEP implementation (self, pinned)
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803  # v6.1.0
+        with:
+          repository: pgEdge/pgedge-pep-test
+          ref: ${{ needs.identity.outputs.pep_ref }}
+      - name: Set up Python (pinned)
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1  # v6.3.0
+        with: {python-version: "3.11"}
+      - name: Download the captured cert-plan by immutable id
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131  # v7.0.0
+        with:
+          artifact-ids: ${{ needs.capture.outputs.cert_plan_artifact_id }}
+          path: plan-in
+          github-token: ${{ github.token }}
+      - name: Derive the invocation plan + dynamic matrix
+        id: plan
+        run: |
+          set -uo pipefail
+          mkdir -p plan-out
+          out=plan-out/invocation-plan.json
+          # Pure, catalog-driven planner: cert-plan/1 + PEP-owned exec catalog + container catalog
+          # -> pep-invocation-plan/1 (matrix.include is GitHub-ready). The planner is FAIL-CLOSED: it
+          # writes a VALID pep-invocation-plan/1 document and exits 0 when the plan resolved, or exits
+          # 1 when it did not (a fail-closed plan carrying `errors` and an EMPTY matrix). BOTH are
+          # HANDLED outcomes -- we still emit outputs and upload the plan, so the aggregate can reduce
+          # the unresolved plan and fail closed with a real reason. Any OTHER exit code, or a missing
+          # or malformed output document, is a genuine planner failure and fails this job (so `set -e`
+          # is dropped only around the planner call, which is classified explicitly below).
+          set +e
+          python3 utillities/pep_invocation_plan.py \
+            --cert-plan plan-in/cert-plan.json \
+            --exec-catalog utillities/pep_exec_catalog.json \
+            --containers configuration/containers_list.json \
+            --out "$out"
+          rc=$?
+          set -e
+          if [ "$rc" -ne 0 ] && [ "$rc" -ne 1 ]; then
+            echo "::error::pep_invocation_plan.py exited ${rc} (unexpected); failing the plan job" >&2
+            exit 1
+          fi
+          if [ ! -s "$out" ]; then
+            echo "::error::planner produced no output document; failing the plan job" >&2
+            exit 1
+          fi
+          # Require a safe pep-invocation-plan/1 shape BEFORE reading matrix/plan_resolved, so a
+          # truncated or wrong-schema document can never masquerade as an (un)resolved plan.
+          safe="$(jq -r '
+            if (type == "object")
+               and (.schema == "pep-invocation-plan/1")
+               and ((.plan_resolved | type) == "boolean")
+               and ((.matrix | type) == "object")
+               and ((.matrix.include | type) == "array")
+            then "true" else "false" end' "$out" 2>/dev/null || echo malformed)"
+          if [ "$safe" != "true" ]; then
+            echo "::error::planner output is not a valid pep-invocation-plan/1 document; failing the plan job" >&2
+            exit 1
+          fi
+          MATRIX="$(jq -c '.matrix' "$out")"
+          RESOLVED="$(jq -r '.plan_resolved' "$out")"
+          # Exit code and result MUST agree: exit 0 iff plan_resolved=true, exit 1 iff plan_resolved=false.
+          # A mismatch means the planner and its document disagree -> fail the plan job (do not emit or
+          # upload a contradictory plan). The valid unresolved pair (exit 1 / false) is retained: it is
+          # uploaded through the normal upload path below and later reduced into blocking evidence by the aggregate.
+          if { [ "$rc" -eq 0 ] && [ "$RESOLVED" != "true" ]; } || { [ "$rc" -eq 1 ] && [ "$RESOLVED" != "false" ]; }; then
+            echo "::error::planner exit ${rc} is inconsistent with plan_resolved=${RESOLVED}; failing the plan job" >&2
+            exit 1
+          fi
+          # has_targets is true ONLY when the plan resolved AND has >=1 invocation, so GitHub never
+          # expands an empty include (a hard error). A fail-closed or zero-eligible plan leaves it
+          # "false"; the run job is skipped and the aggregate still fails closed from the uploaded plan.
+          HAS="$(jq -r 'if (.plan_resolved == true) and ((.matrix.include | length) > 0) then "true" else "false" end' "$out")"
+          {
+            echo "matrix=${MATRIX}"
+            echo "plan_resolved=${RESOLVED}"
+            echo "has_targets=${HAS}"
+          } >> "$GITHUB_OUTPUT"
+          echo "planner_rc=${rc} plan_resolved=${RESOLVED} has_targets=${HAS}"
+      - name: Compute run-attempt-safe plan artifact name
+        id: names
+        run: |
+          set -euo pipefail
+          echo "plan_name=pep-invocation-plan-r${GITHUB_RUN_NUMBER}-a${GITHUB_RUN_ATTEMPT}" >> "$GITHUB_OUTPUT"
+      - name: Upload the invocation plan (for attempt-safe aggregate download by id)
+        id: up_plan
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
+        with:
+          name: ${{ steps.names.outputs.plan_name }}
+          path: plan-out/invocation-plan.json
+          if-no-files-found: error
+
+  # --- 3. run: parallel fan-out; each leg is one atomic pep-integration.yml call ---
+  # fail-fast:false so one failing leg never cancels the others; matrix outputs are
+  # deliberately ignored (they collapse to the last successful setter) -- the aggregate
+  # reads each leg's uploaded summary artifact instead. The caller's enforcement mode is
+  # passed THROUGH to every leg so gate-mode product failures make the leg job red and
+  # stay eligible for "re-run failed jobs".
+  run:
+    needs: [identity, plan]      # identity for pep_ref (per-leg checkout), plan for the matrix
+    if: ${{ needs.plan.outputs.has_targets == 'true' }}
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}
+    uses: ./.github/workflows/pep-integration.yml
+    with:
+      component:         ${{ matrix.component }}
+      package_name:      ${{ matrix.package_name }}
+      channel:           ${{ matrix.channel }}
+      expected_version:  ${{ matrix.expected_version }}
+      container_alias:   ${{ matrix.container_alias }}
+      pg_major:          ${{ matrix.pg_major }}
+      family:            ${{ matrix.family }}
+      arch:              ${{ matrix.arch }}
+      expected_buildnum: ${{ matrix.expected_buildnum }}
+      effective_tag:     ${{ matrix.effective_tag }}
+      expected_rpm:      ${{ matrix.expected_rpm }}
+      expected_deb:      ${{ matrix.expected_deb }}
+      expected_binary:   ${{ matrix.expected_binary }}
+      invocation_id:     ${{ matrix.invocation_id }}
+      scenario:          certification
+      mode:              ${{ inputs.enforcement }}
+      execution_mode:    ${{ inputs.execution_mode }}
+      pep_implementation_ref: ${{ needs.identity.outputs.pep_ref }}
+    secrets:
+      DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+      DOCKERHUB_TOKEN:    ${{ secrets.DOCKERHUB_TOKEN }}
+
+  # --- 4. aggregate: collect -> reduce -> decide -> emit -> upload (evidence only) ---
+  aggregate:
+    needs: [identity, capture, plan, run]      # identity for pep_ref (checkout)
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      actions: read      # list this run's artifacts + download by immutable id
+    outputs:
+      decision_available:  ${{ steps.emit.outputs.decision_available }}
+      workflow_conclusion: ${{ steps.emit.outputs.workflow_conclusion }}
+      certification_state: ${{ steps.emit.outputs.certification_state }}
+      execution_status:    ${{ steps.emit.outputs.execution_status }}
+      test_verdict:        ${{ steps.emit.outputs.test_verdict }}
+      coverage_status:     ${{ steps.emit.outputs.coverage_status }}
+      reason_code:         ${{ steps.emit.outputs.reason_code }}
+      evidence_artifact_id:   ${{ steps.up_evidence.outputs.artifact-id }}
+      evidence_artifact_name: ${{ steps.names.outputs.evidence_name }}
+    steps:
+      - name: Checkout PEP implementation (self, pinned)
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803  # v6.1.0
+        with:
+          repository: pgEdge/pgedge-pep-test
+          ref: ${{ needs.identity.outputs.pep_ref }}
+      - name: Set up Python (pinned)
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1  # v6.3.0
+        with: {python-version: "3.11"}
+      - name: Prepare working directories
+        run: |
+          set -euo pipefail
+          mkdir -p plan-dl dl out
+      - name: Download the invocation plan by immutable id
+        id: dl_plan
+        # Skip entirely when no id was produced (e.g. the plan job failed): a BLANK artifact-ids input
+        # would otherwise fall back to unintended download behavior. A missing plan simply lets the
+        # collector produce its existing fail-closed result.
+        if: ${{ needs.plan.outputs.invocation_plan_artifact_id != '' }}
+        continue-on-error: true      # a missing plan -> collector fails closed downstream
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131  # v7.0.0
+        with:
+          artifact-ids: ${{ needs.plan.outputs.invocation_plan_artifact_id }}
+          path: plan-dl
+          github-token: ${{ github.token }}
+      - name: List this run's artifacts (paginated) -> normalized listing + download ids
+        id: collect
+        continue-on-error: true      # a transport fault -> no/partial listing -> collector fails closed
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          RUN_ID: ${{ github.run_id }}
+          NAME_PREFIX: pep-summary-
+        run: |
+          set -euo pipefail
+          page=1
+          echo '[]' > artifacts.json
+          while : ; do
+            resp="$(gh api "repos/${REPO}/actions/runs/${RUN_ID}/artifacts?per_page=100&page=${page}")"
+            printf '%s' "$resp" | jq '.artifacts' > page.json
+            jq -s '.[0] + .[1]' artifacts.json page.json > artifacts.tmp
+            mv artifacts.tmp artifacts.json
+            total="$(printf '%s' "$resp" | jq '.total_count')"
+            got="$(jq 'length' artifacts.json)"
+            n="$(printf '%s' "$resp" | jq '.artifacts | length')"
+            page=$((page + 1))
+            { [ "$got" -ge "$total" ] || [ "$n" -eq 0 ]; } && break
+          done
+          rm -f page.json
+          # Normalized listing the collector consumes (allowlisted fields only; no URLs).
+          jq '[ .[] | {id, name, expired, size_in_bytes} ]' artifacts.json > listing.json
+          # Coarse prefix filter for DOWNLOAD ids only; exclude expired ids (they cannot
+          # be downloaded). Acceptance is by immutable id + validated content in the collector.
+          ids="$(jq -r --arg p "$NAME_PREFIX" '[ .[] | select((.name // "") | startswith($p)) | select(.expired != true) | .id ] | join(",")' artifacts.json)"
+          echo "download_ids=${ids}" >> "$GITHUB_OUTPUT"
+          echo "Prepared listing with $(jq 'length' listing.json) artifact(s); download ids: ${ids:-<none>}"
+      - name: Download candidate summaries by immutable id
+        id: dl_summaries
+        if: ${{ steps.collect.outputs.download_ids != '' }}
+        continue-on-error: true      # a corrupt/absent artifact -> per-leg missing -> collector fails closed
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131  # v7.0.0
+        with:
+          artifact-ids: ${{ steps.collect.outputs.download_ids }}
+          path: dl
+          github-token: ${{ github.token }}
+      - name: Reduce artifacts into cert-result/1 + sanitized collection ledger
+        id: reduce
+        env:
+          RUN_ATTEMPT: ${{ github.run_attempt }}
+        run: |
+          set -euo pipefail
+          # The collector is offline + fail-closed: a missing plan/listing/summary still
+          # yields a written cert-result + ledger. Its unresolved exit (1) is a HANDLED
+          # result -- capture it so the aggregate keeps producing evidence.
+          set +e
+          python3 utillities/pep_result_io.py \
+            --plan plan-dl/invocation-plan.json \
+            --artifacts-listing listing.json \
+            --download-dir dl \
+            --current-run-attempt "${RUN_ATTEMPT}" \
+            --out out/cert-result.json \
+            --ledger-out out/collection-ledger.json
+          rc=$?
+          set -e
+          echo "collector_rc=${rc}" >> "$GITHUB_OUTPUT"
+          echo "collector exit: ${rc}"
+      - name: Decide the certification workflow outcome (pure policy)
+        id: decide
+        env:
+          MODE: ${{ inputs.enforcement }}
+        run: |
+          set -euo pipefail
+          # The policy helper is pure + fail-closed: a missing/malformed cert-result still
+          # yields a written BLOCK decision. Its block exit (1) is a HANDLED result.
+          set +e
+          python3 utillities/pep_cert_gate.py \
+            --result out/cert-result.json \
+            --mode "${MODE}" \
+            --out out/cert-decision.json
+          rc=$?
+          set -e
+          echo "gate_rc=${rc}" >> "$GITHUB_OUTPUT"
+          echo "gate exit: ${rc}"
+      - name: Emit certification outputs
+        id: emit
+        run: |
+          set -euo pipefail
+          python3 - <<'PY' >> "$GITHUB_OUTPUT"
+          import json
+          from pathlib import Path
+          try:
+              d = json.loads(Path("out/cert-decision.json").read_text())
+          except Exception:
+              d = {}
+          if not isinstance(d, dict):
+              d = {}
+          axes = d.get("axes") if isinstance(d.get("axes"), dict) else {}
+          wc = d.get("workflow_conclusion")
+          avail = "true" if wc in ("success", "failure") else "false"
+          def _s(v):
+              return v if isinstance(v, str) and v != "" else "unknown"
+          print("decision_available=%s" % avail)
+          print("workflow_conclusion=%s" % _s(wc))
+          print("certification_state=%s" % _s(d.get("certification_state")))
+          print("policy_decision=%s" % _s(d.get("policy_decision")))
+          print("reason_code=%s" % _s(d.get("reason_code")))
+          print("execution_status=%s" % _s(axes.get("execution_status")))
+          print("test_verdict=%s" % _s(axes.get("test_verdict")))
+          print("coverage_status=%s" % _s(axes.get("coverage_status")))
+          PY
+      - name: Compute run-attempt-safe evidence artifact name
+        id: names
+        run: |
+          set -euo pipefail
+          echo "evidence_name=pep-certification-r${GITHUB_RUN_NUMBER}-a${GITHUB_RUN_ATTEMPT}" >> "$GITHUB_OUTPUT"
+      - name: Upload the combined certification evidence
+        id: up_evidence
+        if: ${{ always() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
+        with:
+          # One combined artifact: cert-result/1 + collection-ledger/1 + cert-decision/1.
+          name: ${{ steps.names.outputs.evidence_name }}
+          path: out/
+          if-no-files-found: warn
+
+  # --- 5. enforce: colour the workflow from the aggregate decision (fail closed) ---
+  enforce:
+    needs: aggregate
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions: {}
+    steps:
+      - name: Enforce the certification decision
+        env:
+          AVAILABLE:  ${{ needs.aggregate.outputs.decision_available }}
+          CONCLUSION: ${{ needs.aggregate.outputs.workflow_conclusion }}
+          STATE:      ${{ needs.aggregate.outputs.certification_state }}
+          REASON:     ${{ needs.aggregate.outputs.reason_code }}
+        run: |
+          set -euo pipefail
+          echo "certification_state=${STATE:-unknown} reason=${REASON:-unknown} conclusion=${CONCLUSION:-unknown}"
+          # If aggregation could not produce a known decision, fail closed.
+          if [ "${AVAILABLE:-}" != "true" ]; then
+            echo "::error::no trustworthy certification decision was produced; failing closed" >&2
+            exit 1
+          fi
+          case "${CONCLUSION:-}" in
+            success) echo "Certification permits a green workflow." ;;
+            failure) echo "::error::Certification blocks the workflow (${REASON:-unknown})." >&2; exit 1 ;;
+            *) echo "::error::Unknown certification conclusion; failing closed." >&2; exit 1 ;;
+          esac

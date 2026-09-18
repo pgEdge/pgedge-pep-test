@@ -40,12 +40,14 @@ RAG_PACKAGE = "pgedge-rag-server2"
 # --------------------------------------------------------------------------- #
 def target(family, os_token, arch, *, package=RAG_PACKAGE, logical=RAG_COMPONENT, pg_coupled=False,
            build_pg_major=None, version="2.0.0", release=None, epoch=None, ebv="",
-           native_arch=None, identity_state="confirmed", cell_id="c"):
+           native_arch=None, identity_state="confirmed", cell_id="c", eligibility="eligible",
+           preview_eligibility="ineligible"):
     rel = release if release is not None else ("1.el9" if family == "rpm" else "1.bookworm")
     nat = native_arch if native_arch is not None else ("noarch" if family == "rpm" else arch)
     return {
         "target_id": "%s::%s" % (cell_id, package),
-        "eligibility": "eligible",
+        "eligibility": eligibility,
+        "preview_eligibility": preview_eligibility,
         "logical_component": logical,
         "physical_package": package,
         "family": family, "os": os_token, "execution_arch": arch,
@@ -64,16 +66,20 @@ def cell(cell_id, targets):
 
 
 def cert_plan(cells, *, component=RAG_COMPONENT, channel="staging", version="2.0.0",
-              buildnum="1", tag="v2.0.0", resolved=True, schema="cert-plan/1"):
-    return {
+              buildnum="1", tag="v2.0.0", resolved=True, schema="cert-plan/1",
+              execution_mode=None, simulated=False):
+    plan = {
         "schema": schema, "plan_resolved": resolved, "errors": [],
         "provenance": {"repository": "pgEdge/pgedge-pep-test", "run_id": "42", "run_attempt": "1",
                        "sha": "deadbeef", "ref": "refs/heads/feature"},
         "release_intent": {"logical_component": component, "channel": channel,
                            "intended_version": version, "intended_buildnum": buildnum,
-                           "effective_tag": tag, "simulated": False},
+                           "effective_tag": tag, "simulated": simulated},
         "cells": cells,
     }
+    if execution_mode is not None:
+        plan["execution_mode"] = execution_mode
+    return plan
 
 
 def exec_catalog(pgs=("16", "17", "18"), platforms=None):
@@ -90,10 +96,12 @@ def enabled(*triples):
     return {(f, a, c): "%s-%s" % (c, a) for (f, a, c) in triples}
 
 
-def build(cells, *, ec=None, plats=None, **plan_kw):
+def build(cells, *, ec=None, plats=None, execution_mode="full", **plan_kw):
+    plan_kw.setdefault("execution_mode", execution_mode)   # stamp the cert-plan with the same mode
     return P.build_invocation_plan(cert_plan(cells, **plan_kw),
                                    ec if ec is not None else exec_catalog(),
-                                   plats if plats is not None else enabled(("rpm", "amd64", "oel9")))
+                                   plats if plats is not None else enabled(("rpm", "amd64", "oel9")),
+                                   execution_mode=execution_mode)
 
 
 def ids(plan):
@@ -750,3 +758,101 @@ def test_main_writes_plan_and_exit_code(tmp_path):
     assert rc == 0 and doc["schema"] == P.SCHEMA and doc["plan_resolved"] is True
     # el-9 amd64 -> oel9-amd64 is enabled in the committed catalog -> real invocations exist.
     assert any(i["container_alias"] == "oel9-amd64" for i in doc["matrix"]["include"])
+
+
+# --------------------------------------------------------------------------- #
+# execution_mode binding: preview admits preview_eligible; a plan is mode-bound
+# --------------------------------------------------------------------------- #
+def _preview_cell():
+    # a preview-only target: strict ineligible (unpublished), separate preview_eligibility eligible
+    return [cell("c", [target("rpm", "el-9", "amd64",
+                              eligibility="ineligible", preview_eligibility="eligible")])]
+
+
+def _preview_cert_plan(**kw):
+    """A real producible preview cert-plan: a SIMULATED release stamped execution_mode=preview whose
+    target is strict-ineligible (unpublished) yet additively preview-eligible (built + identity
+    confirmed, dry-run). This is exactly what capture emits for a simulated `--execution-mode preview`
+    run -- not a non-simulated plan artificially carrying preview eligibility."""
+    kw.setdefault("execution_mode", "preview")
+    kw.setdefault("simulated", True)
+    return cert_plan(_preview_cell(), **kw)
+
+
+def test_preview_admits_preview_eligible_targets():
+    cp = _preview_cert_plan()                        # models actual simulated-preview capture output
+    assert cp["execution_mode"] == "preview" and cp["release_intent"]["simulated"] is True
+    t = cp["cells"][0]["targets"][0]
+    assert t["eligibility"] == "ineligible" and t["preview_eligibility"] == "eligible"
+    plan = P.build_invocation_plan(cp, exec_catalog(), enabled(("rpm", "amd64", "oel9")),
+                                   execution_mode="preview")
+    assert plan["plan_resolved"] is True and plan["execution_mode"] == "preview"
+    # decoupled -> pg 16/17/18 on the enabled oel9-amd64 alias
+    assert len(plan["matrix"]["include"]) == 3
+    assert all(i["container_alias"] == "oel9-amd64" for i in plan["matrix"]["include"])
+    assert sorted(str(i["pg_major"]) for i in plan["matrix"]["include"]) == ["16", "17", "18"]
+    _assert_ids_workflow_valid(plan)
+
+
+def test_full_never_runs_preview_eligible_targets():
+    # DELIBERATELY CONTRADICTORY hand-built plan (capture never emits preview_eligibility in full):
+    # a full-stamped plan whose target still carries preview_eligibility=eligible must prove the
+    # planner IGNORES that field in full mode. Not a producible plan -- a planner-gating guard.
+    plan = build(_preview_cell(), execution_mode="full")
+    assert plan["plan_resolved"] is True and plan["execution_mode"] == "full"
+    assert plan["matrix"]["include"] == []          # preview_eligible is not runnable in full
+
+
+def test_published_eligible_runs_in_both_modes():
+    cells = [cell("c", [target("rpm", "el-9", "amd64")])]   # strict eligible
+    for m in ("full", "preview"):
+        plan = build(cells, execution_mode=m)
+        assert plan["plan_resolved"] is True and len(plan["matrix"]["include"]) == 3
+
+
+def test_preview_plan_cannot_be_consumed_as_full():
+    cp = _preview_cert_plan()                        # a real simulated preview plan
+    plan = P.build_invocation_plan(cp, exec_catalog(), enabled(("rpm", "amd64", "oel9")),
+                                   execution_mode="full")
+    assert plan["plan_resolved"] is False and plan["matrix"]["include"] == []
+    assert any("execution_mode mismatch" in e for e in plan["errors"])
+
+
+def test_full_plan_cannot_be_consumed_as_preview():
+    cp = cert_plan([cell("c", [target("rpm", "el-9", "amd64")])], execution_mode="full")
+    plan = P.build_invocation_plan(cp, exec_catalog(), enabled(("rpm", "amd64", "oel9")),
+                                   execution_mode="preview")
+    assert plan["plan_resolved"] is False
+    assert any("execution_mode mismatch" in e for e in plan["errors"])
+
+
+def test_legacy_cert_plan_without_stamp_is_full_by_default():
+    # an unstamped cert-plan is treated as full; a full planner accepts it (back-compat).
+    cp = cert_plan([cell("c", [target("rpm", "el-9", "amd64")])])   # no execution_mode key
+    assert "execution_mode" not in cp
+    plan = P.build_invocation_plan(cp, exec_catalog(), enabled(("rpm", "amd64", "oel9")),
+                                   execution_mode="full")
+    assert plan["plan_resolved"] is True and len(plan["matrix"]["include"]) == 3
+    # ...but a preview planner must reject the unstamped (==full) plan.
+    bad = P.build_invocation_plan(cp, exec_catalog(), enabled(("rpm", "amd64", "oel9")),
+                                  execution_mode="preview")
+    assert bad["plan_resolved"] is False and any("execution_mode mismatch" in e for e in bad["errors"])
+
+
+def test_invalid_execution_mode_is_unresolved():
+    cp = cert_plan([cell("c", [target("rpm", "el-9", "amd64")])], execution_mode="full")
+    plan = P.build_invocation_plan(cp, exec_catalog(), enabled(("rpm", "amd64", "oel9")),
+                                   execution_mode="bogus")
+    assert plan["plan_resolved"] is False and plan["execution_mode"] is None
+    assert any("invalid execution_mode" in e for e in plan["errors"])
+
+
+def test_execution_mode_is_stamped_on_the_plan():
+    assert build([cell("c", [target("rpm", "el-9", "amd64")])], execution_mode="full")["execution_mode"] == "full"
+    assert build(_preview_cell(), execution_mode="preview", simulated=True)["execution_mode"] == "preview"
+
+
+def test_preview_matrix_is_deterministic():
+    a = P.to_json(build(_preview_cell(), execution_mode="preview", simulated=True))
+    b = P.to_json(build(_preview_cell(), execution_mode="preview", simulated=True))
+    assert a == b

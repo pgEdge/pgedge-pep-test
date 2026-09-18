@@ -1,14 +1,18 @@
 # PEP Certify Live -- TEMPORARY, throwaway live validation of the reusable certification
-# coordinator (.github/workflows/pep-certify.yml) pinned at 95ca240 (main reconciled), before RAG integration.
+# coordinator (.github/workflows/pep-certify.yml) pinned at 1081b32 (simulated preview
+# certification), before RAG integration.
 #
 # It exists ONLY on branch spike/pep-certify-live. A workflow absent from the default branch
 # cannot be started with workflow_dispatch, so it is triggered by push to its own branch only.
 #
-# Green-path, PEP-only, synthetic and inexpensive: it builds two tiny pgedge-capture-smoke
-# packages (RPM EL9 + DEB Trixie, both amd64), reuses the committed pep-package-receipt action
-# for evidence exactly like pep-capture-smoke.yml, then calls the real coordinator in
-# observe + preview mode so every leg is a dry run and the workflow stays green. It asserts the
-# full contract from the combined evidence. DELETE this branch after review.
+# SIMULATED-PREVIEW proof, PEP-only, synthetic and inexpensive: it builds two tiny
+# pgedge-capture-smoke packages (RPM EL9 + DEB Trixie, both amd64) and reuses the committed
+# pep-package-receipt action for evidence exactly like pep-capture-smoke.yml, but marks the
+# release SIMULATED with BOTH family publications truthfully skipped -- nothing is published.
+# It then calls the real coordinator in observe + preview mode: the built-but-unpublished
+# targets are strictly INELIGIBLE yet PREVIEW-eligible, so every leg is a dry run and the
+# workflow stays green. It asserts the full mode-bound contract from the produced cert-plan/1
+# and the combined evidence. DELETE this branch after review.
 name: PEP Certify Live
 
 on:
@@ -101,7 +105,7 @@ jobs:
   certify:
     needs: build
     if: ${{ !cancelled() }}      # a build failure must still reach the coordinator (truthful evidence)
-    uses: pgEdge/pgedge-pep-test/.github/workflows/pep-certify.yml@95ca240f3055825de9bdd5bc00e5cba6e08837fa
+    uses: pgEdge/pgedge-pep-test/.github/workflows/pep-certify.yml@1081b32fcefdcf07a9f1d23e4c9cdf73bc9e121c
     permissions:
       contents: read      # nested checkouts of the pinned PEP implementation
       actions: read       # nested capture/aggregate list + download this run's artifacts by id
@@ -111,8 +115,11 @@ jobs:
       # across the supported PG majors {16,17,18}.
       rpm_matrix: '{"include":[{"cell_id":"certlive-rpm-el9-amd64","family":"rpm","os":"el-9","normalized_arch":"amd64","pg_coupled":false}]}'
       deb_matrix: '{"include":[{"cell_id":"certlive-deb-trixie-amd64","family":"deb","os":"trixie","normalized_arch":"amd64","pg_coupled":false}]}'
-      release_intent: '{"logical_component":"pgedge-capture-smoke","intended_version":"1.0.0","intended_buildnum":"1","effective_tag":"v1.0.0","channel":"daily","simulated":false}'
-      publication_results: '{"rpm":"success","deb":"success"}'
+      # SIMULATED release: the packages were built but intentionally NOT published, and BOTH family
+      # pushes are truthfully skipped. Under the mode-bound contract these targets are strictly
+      # ineligible (unpublished) yet preview-eligible, so preview fan-out stays green and honest.
+      release_intent: '{"logical_component":"pgedge-capture-smoke","intended_version":"1.0.0","intended_buildnum":"1","effective_tag":"v1.0.0","channel":"daily","simulated":true}'
+      publication_results: '{"rpm":"skipped","deb":"skipped"}'
       enforcement: observe
       execution_mode: preview
     # No secrets: preview does no rate-limited image pulls, so DockerHub creds are unnecessary.
@@ -171,13 +178,21 @@ jobs:
           path: plan
           github-token: ${{ github.token }}
 
-      - name: Validate combined evidence, six-leg distribution, provenance and ledger sanitization
+      - name: Download the captured cert-plan (for the mode-bound eligibility facts) by name
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131  # v7.0.0
+        with:
+          pattern: pep-cert-plan-*
+          merge-multiple: true
+          path: certplan
+          github-token: ${{ github.token }}
+
+      - name: Validate cert-plan eligibility, combined evidence, six-leg distribution, provenance and ledger
         env:
-          PIN: 95ca240f3055825de9bdd5bc00e5cba6e08837fa
+          PIN: 1081b32fcefdcf07a9f1d23e4c9cdf73bc9e121c
           THIS_RUN: ${{ github.run_id }}
         run: |
           set -euo pipefail
-          ls -R ev plan
+          ls -R ev plan certplan
           python3 - <<'PY'
           import json, os, sys
           def fail(m):
@@ -187,6 +202,29 @@ jobs:
           led = json.load(open("ev/collection-ledger.json"))
           dec = json.load(open("ev/cert-decision.json"))
           plan = json.load(open("plan/invocation-plan.json"))
+          cp  = json.load(open("certplan/cert-plan.json"))
+
+          # --- cert-plan/1: resolved + stamped preview; SIMULATED release; both package cells are the
+          #     genuine simulated skip; strict eligible targets = 0; preview-eligible targets = 2 ---
+          if cp.get("schema") != "cert-plan/1": fail("cert-plan schema %r" % cp.get("schema"))
+          if cp.get("plan_resolved") is not True: fail("cert-plan plan_resolved=%r" % cp.get("plan_resolved"))
+          if cp.get("execution_mode") != "preview": fail("cert-plan execution_mode=%r" % cp.get("execution_mode"))
+          if (cp.get("release_intent") or {}).get("simulated") is not True:
+              fail("cert-plan release_intent.simulated=%r" % (cp.get("release_intent") or {}).get("simulated"))
+          cp_cells = cp.get("cells") or []
+          if len(cp_cells) != 2: fail("expected 2 cert-plan cells, got %d" % len(cp_cells))
+          if sorted(c.get("family") for c in cp_cells) != ["deb", "rpm"]:
+              fail("cert-plan cell families %r" % sorted(c.get("family") for c in cp_cells))
+          for c in cp_cells:
+              if c.get("publication_state") != "publish_skipped":
+                  fail("cell %r publication_state=%r (want publish_skipped)" % (c.get("cell_id"), c.get("publication_state")))
+              if c.get("publication_reason") != "simulated":
+                  fail("cell %r publication_reason=%r (want simulated)" % (c.get("cell_id"), c.get("publication_reason")))
+          cov = cp.get("coverage_denominators") or {}
+          if cov.get("eligible_targets") != 0:
+              fail("cert-plan strict eligible_targets=%r (want 0)" % cov.get("eligible_targets"))
+          if cov.get("preview_eligible_targets") != 2:
+              fail("cert-plan preview_eligible_targets=%r (want 2)" % cov.get("preview_eligible_targets"))
 
           # --- cert-result/1: resolved, no errors, preview axes ---
           if cr.get("schema") != "cert-result/1": fail("cert-result schema %r" % cr.get("schema"))
@@ -205,7 +243,9 @@ jobs:
               if l.get("execution_status") != "preview": fail("leg %r not preview" % l.get("invocation_id"))
           leg_ids = sorted(l["invocation_id"] for l in legs)
 
-          # --- invocation plan: 6 invocations, correct family/alias/PG distribution ---
+          # --- invocation plan: resolved + preview-stamped, 6 invocations, correct family/alias/PG distribution ---
+          if plan.get("plan_resolved") is not True: fail("invocation plan plan_resolved=%r" % plan.get("plan_resolved"))
+          if plan.get("execution_mode") != "preview": fail("invocation plan execution_mode=%r" % plan.get("execution_mode"))
           inc = (plan.get("matrix") or {}).get("include") or []
           if len(inc) != 6: fail("plan matrix.include != 6 (%d)" % len(inc))
           rpm = sorted(str(e["pg_major"]) for e in inc if e["family"] == "rpm")
@@ -242,7 +282,8 @@ jobs:
           for body_key in ('"test_verdict"', '"identity_evidence"', '"execution_status"', '"provenance"'):
               if body_key in blob: fail("ledger appears to embed a summary body (%s)" % body_key)
 
-          print("OK cert-result resolved; 6 matched preview legs; rpm=oel9-amd64{16,17,18} deb=debian13-amd64{16,17,18};")
+          print("OK cert-plan resolved+preview; simulated=true; both cells publish_skipped/simulated; strict eligible=0; preview-eligible=2")
+          print("OK invocation plan resolved+preview; cert-result resolved; 6 matched preview legs; rpm=oel9-amd64{16,17,18} deb=debian13-amd64{16,17,18};")
           print("OK decision preview/report/success/preview; provenance run_id=%s ref==sha==%s; ledger sanitized" % (this_run, pin))
           PY
 

@@ -44,8 +44,8 @@ def _member(name, native_arch, klass="runtime", version="2.0.0", release="1.el9"
 
 
 def _inp(cells, jobs, artifacts, *, allowed=None, pubs=None, simulated=False,
-         version="2.0.0", buildnum="1", component="rag", channel="staging"):
-    return {
+         version="2.0.0", buildnum="1", component="rag", channel="staging", execution_mode=None):
+    inp = {
         "provenance": {"repository": "pgEdge/example"},
         "release_intent": {"logical_component": component, "intended_version": version,
                            "intended_buildnum": buildnum, "effective_tag": "v" + version,
@@ -54,6 +54,9 @@ def _inp(cells, jobs, artifacts, *, allowed=None, pubs=None, simulated=False,
                              "expected_binary_version": version},
         "planned_cells": cells, "job_records": jobs, "artifacts": artifacts,
         "publication_results": pubs or {}}
+    if execution_mode is not None:                 # absent -> reduce() defaults to strict "full"
+        inp["execution_mode"] = execution_mode
+    return inp
 
 
 # ---- 1 & 2: Spike 0 attempt-2 / attempt-3 build states ---------------------
@@ -858,3 +861,143 @@ def test_pg_invalid_makes_plan_unresolved_regardless_of_cell_order():
         assert vc["pg_coupled"] is True and vc["build_pg_major"] == "17" and vc["build_pg_version"] == "17.5"
         vt = vc["targets"][0]
         assert vt["pg_coupled"] is True and vt["build_pg_major"] == "17" and vt["build_pg_version"] == "17.5"
+
+
+# ---- additive preview_eligibility (simulated dry-run), strict eligibility unchanged ----------
+def _built_cell(pubs=None, simulated=False, execution_mode=None):
+    """One built + identity-confirmed rpm cell (art present, member matches the allowlist)."""
+    cells = [_cell("c", artifact="art-c")]
+    jobs = [_job("c", 1, 1, "success")]
+    arts = [{"name": "art-c", "id": 1, "members": [_member("pgedge-rag-server2", "x86_64")]}]
+    return _inp(cells, jobs, arts, allowed=["pgedge-rag-server2"], pubs=pubs,
+                simulated=simulated, execution_mode=execution_mode)
+
+
+def test_preview_simulated_is_preview_eligible_but_strictly_ineligible():
+    # STRICT eligibility stays ineligible (unpublished); the SEPARATE preview_eligibility is eligible.
+    plan = R.reduce(_built_cell(simulated=True, execution_mode="preview"))
+    assert plan["execution_mode"] == "preview" and plan["release_intent"]["simulated"] is True
+    c = cells_by_id(plan)["c"]
+    assert c["publication_state"] == "publish_skipped" and c["publication_reason"] == "simulated"
+    t = c["targets"][0]
+    assert t["eligibility"] == "ineligible" and t["eligibility_reason"] == "simulated_not_eligible"
+    assert t["preview_eligibility"] == "eligible"
+    assert t["preview_eligibility_reason"] == "simulated_built_identity_confirmed_dry_run"
+    assert plan["coverage_denominators"]["eligible_targets"] == 0
+    assert plan["coverage_denominators"]["preview_eligible_targets"] == 1
+    assert plan["plan_resolved"] is True
+
+
+def test_full_simulated_has_no_strict_or_preview_eligibility():
+    plan = R.reduce(_built_cell(simulated=True, execution_mode="full"))
+    t = cells_by_id(plan)["c"]["targets"][0]
+    assert t["eligibility"] == "ineligible" and t["eligibility_reason"] == "simulated_not_eligible"
+    assert t["preview_eligibility"] == "ineligible" and t["preview_eligibility_reason"] == "not_preview_mode"
+    assert plan["coverage_denominators"]["eligible_targets"] == 0
+    assert plan["coverage_denominators"]["preview_eligible_targets"] == 0
+
+
+def test_missing_execution_mode_defaults_to_strict_full():
+    plan = R.reduce(_built_cell(simulated=True, execution_mode=None))   # absent -> full
+    assert plan["execution_mode"] == "full"
+    t = cells_by_id(plan)["c"]["targets"][0]
+    assert t["eligibility"] == "ineligible" and t["preview_eligibility"] == "ineligible"
+
+
+def test_malformed_execution_mode_fails_closed():
+    plan = R.reduce(_built_cell(simulated=True, execution_mode="bogus"))
+    assert plan["plan_resolved"] is False and plan["execution_mode"] is None
+    assert any("execution_mode 'bogus'" in e for e in plan["errors"])
+    assert plan["coverage_denominators"]["eligible_targets"] == 0
+    assert plan["coverage_denominators"]["preview_eligible_targets"] == 0
+
+
+# ---- point 2: simulated-publication truth table (preview mode) --------------
+# Only a genuine simulated skip (missing / skipped push) may become preview-runnable.
+def test_simulated_publication_truth_table_preview():
+    def run(pubs):
+        plan = R.reduce(_built_cell(pubs=pubs, simulated=True, execution_mode="preview"))
+        c = cells_by_id(plan)["c"]
+        t = c["targets"][0]
+        return c["publication_state"], c["publication_reason"], t["preview_eligibility"], t["eligibility"]
+
+    # missing family push (pubs absent) -> truthful simulated skip -> preview-runnable
+    assert run(None) == ("publish_skipped", "simulated", "eligible", "ineligible")
+    # explicit skipped -> truthful simulated skip -> preview-runnable
+    assert run({"rpm": "skipped"}) == ("publish_skipped", "simulated", "eligible", "ineligible")
+    # failure -> unconfirmed, NOT preview-runnable (raw truth preserved, not collapsed to a skip)
+    assert run({"rpm": "failure"}) == ("publish_unconfirmed", "family_push_failure", "ineligible", "ineligible")
+    # cancellation -> unconfirmed, NOT preview-runnable
+    assert run({"rpm": "cancelled"}) == ("publish_unconfirmed", "family_push_cancelled", "ineligible", "ineligible")
+    # contradictory success -> fail-closed unconfirmed (a simulated run cannot have published), never a
+    # confirmed publication and never a simulated skip, NOT preview-runnable
+    assert run({"rpm": "success"}) == (
+        "publish_unconfirmed", "simulated_with_family_push_success", "ineligible", "ineligible")
+
+
+def test_full_published_behavior_unchanged():
+    plan = R.reduce(_built_cell(pubs={"rpm": "success"}, simulated=False, execution_mode="full"))
+    t = cells_by_id(plan)["c"]["targets"][0]
+    assert t["eligibility"] == "eligible" and t["eligibility_reason"] == "built_published_identity_confirmed"
+    assert t["preview_eligibility"] == "ineligible"          # non-simulated -> not preview
+    assert plan["coverage_denominators"]["eligible_targets"] == 1
+
+
+def test_preview_published_is_still_strictly_eligible():
+    # a genuinely published, non-simulated target stays STRICT "eligible" even in a preview plan.
+    plan = R.reduce(_built_cell(pubs={"rpm": "success"}, simulated=False, execution_mode="preview"))
+    t = cells_by_id(plan)["c"]["targets"][0]
+    assert t["eligibility"] == "eligible"
+    assert t["preview_eligibility"] == "ineligible" and t["preview_eligibility_reason"] == "not_simulated"
+    assert plan["coverage_denominators"]["eligible_targets"] == 1
+    assert plan["coverage_denominators"]["preview_eligible_targets"] == 0
+
+
+def test_reduce_is_deterministic_under_preview():
+    a = R.to_json(R.reduce(_built_cell(simulated=True, execution_mode="preview")))
+    b = R.to_json(R.reduce(_built_cell(simulated=True, execution_mode="preview")))
+    assert a == b
+
+
+def test_strict_vocabulary_is_only_eligible_or_ineligible():
+    # cert-plan/1's `eligibility` field never carries a new enum value (additive-compat guarantee).
+    for em in ("preview", "full", None):
+        plan = R.reduce(_built_cell(simulated=True, execution_mode=em))
+        for c in plan["cells"]:
+            for t in c["targets"]:
+                assert t["eligibility"] in ("eligible", "ineligible")
+                assert t["preview_eligibility"] in ("eligible", "ineligible")
+
+
+def test_eligibility_functions_direct():
+    ok = dict(build_state="available", identity="confirmed", family="rpm", channel="staging",
+              plan_resolved=True, context_ok=True)
+    # strict: simulated -> ineligible; non-simulated confirmed -> eligible
+    assert R._strict_eligibility(pub_state="publish_skipped", simulated=True, **ok) == \
+        ("ineligible", "simulated_not_eligible")
+    assert R._strict_eligibility(pub_state="publish_confirmed", simulated=False, **ok)[0] == "eligible"
+    # preview: simulated-skip in preview -> eligible; in full -> not_preview_mode
+    assert R._preview_eligibility(pub_state="publish_skipped", pub_reason="simulated", simulated=True,
+                                  execution_mode="preview", **ok)[0] == "eligible"
+    assert R._preview_eligibility(pub_state="publish_skipped", pub_reason="simulated", simulated=True,
+                                  execution_mode="full", **ok) == ("ineligible", "not_preview_mode")
+    # preview + simulated failure -> ineligible (no bypass); preview + non-simulated -> not_simulated
+    assert R._preview_eligibility(pub_state="publish_unconfirmed", pub_reason="family_push_failure",
+                                  simulated=True, execution_mode="preview", **ok)[0] == "ineligible"
+    assert R._preview_eligibility(pub_state="publish_confirmed", pub_reason="family_push_success",
+                                  simulated=False, execution_mode="preview", **ok) == \
+        ("ineligible", "not_simulated")
+
+
+def test_resolve_publication_simulated_success_is_fail_closed():
+    # A simulated run cannot have published; a contradictory family push "success" is preserved
+    # fail-closed as publish_unconfirmed, never publish_confirmed and never a simulated skip.
+    assert R._resolve_publication("rpm", "available", {"rpm": "success"}, True) == \
+        ("publish_unconfirmed", "simulated_with_family_push_success")
+    # non-simulated success + available -> the ordinary confirmed mapping is unchanged.
+    assert R._resolve_publication("rpm", "available", {"rpm": "success"}, False) == \
+        ("publish_confirmed", "family_push_success")
+    # genuine simulated skip stays the simulated skip; failure stays unconfirmed.
+    assert R._resolve_publication("rpm", "available", {}, True) == ("publish_skipped", "simulated")
+    assert R._resolve_publication("rpm", "available", {"rpm": "failure"}, True) == \
+        ("publish_unconfirmed", "family_push_failure")

@@ -447,7 +447,12 @@ def test_simulated_release_yields_no_eligible_targets():
                    pubs={"rpm": "success"}, rel=ri(simulated=True),
                    pol=policy(allowed=["pgedge-rag-server2"]))
     plan = R.reduce(env)
-    assert plan["cells"][0]["publication_state"] == "publish_skipped"
+    # A simulated run cannot have published, so a contradictory push "success" is neither collapsed
+    # into a simulated skip nor reported as a confirmed publication: it is preserved fail-closed as
+    # publish_unconfirmed/simulated_with_family_push_success. Strict eligibility still yields no
+    # eligible targets because the release is simulated.
+    assert plan["cells"][0]["publication_state"] == "publish_unconfirmed"
+    assert plan["cells"][0]["publication_reason"] == "simulated_with_family_push_success"
     assert plan["coverage_denominators"]["eligible_targets"] == 0
 
 

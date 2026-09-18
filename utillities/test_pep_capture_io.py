@@ -698,3 +698,33 @@ def test_main_output_write_failure_fails_closed(tmp_path, monkeypatch):
         {"schema": "cert-plan/1", "plan_resolved": True, "coverage_denominators": {}}))
     rc = IO.main(_min_inputs(tmp_path) + ["--out-dir", str(out_dir)])
     assert rc == 1 and _failed(gh)                                 # verified but unpersistable -> failed
+
+
+# --------------------------------------------------------------------------- #
+# execution_mode capture boundary: preview intent -> preview-stamped cert-plan
+# --------------------------------------------------------------------------- #
+def test_run_capture_preview_stamps_cert_plan(tmp_path, monkeypatch):
+    use_fake_tools(tmp_path, monkeypatch)
+    run = Run()
+    cr = run.add_cell(tmp_path, "rpm", "rag-rpm-el9-amd64", "el-9", "amd64", "rpm_runtime")
+    cells = [{k: cr[k] for k in ("cell_id", "family", "os", "normalized_arch")}]
+    env, ev, plan = _run_capture(run, cells, tmp_path, execution_mode="preview")
+    assert env["execution_mode"] == "preview"                 # intent passed into the reducer input
+    assert plan["execution_mode"] == "preview"                # cert-plan is preview-stamped
+
+
+def test_run_capture_default_is_full(tmp_path, monkeypatch):
+    use_fake_tools(tmp_path, monkeypatch)
+    run = Run()
+    cr = run.add_cell(tmp_path, "rpm", "rag-rpm-el9-amd64", "el-9", "amd64", "rpm_runtime")
+    cells = [{k: cr[k] for k in ("cell_id", "family", "os", "normalized_arch")}]
+    _env, _ev, plan = _run_capture(run, cells, tmp_path)      # omitted -> strict full
+    assert plan["execution_mode"] == "full"
+
+
+def test_cli_malformed_execution_mode_fails_closed(tmp_path):
+    # argparse choices reject the bad mode at parse time -> SystemExit, no cert-plan written.
+    out_dir = tmp_path / "out"
+    with pytest.raises(SystemExit):
+        IO.main(_min_inputs(tmp_path) + ["--out-dir", str(out_dir), "--execution-mode", "bogus"])
+    assert not (out_dir / "cert-plan.json").exists()

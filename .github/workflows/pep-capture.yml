@@ -26,6 +26,7 @@ on:
       deb_matrix:             {required: true, type: string}   # detector deb_matrix JSON
       release_intent:         {required: true, type: string}   # release evidence JSON
       publication_results:    {required: true, type: string}   # family push outcomes JSON
+      execution_mode:         {required: false, type: string, default: full}   # preview|full; bound into cert-plan/1
     outputs:
       capture_status:        {value: "${{ jobs.capture.outputs.capture_status }}"}
       plan_schema:           {value: "${{ jobs.capture.outputs.plan_schema }}"}
@@ -126,6 +127,7 @@ jobs:
           GITHUB_TOKEN: ${{ github.token }}
           PEP_IMPLEMENTATION_REF: ${{ inputs.pep_implementation_ref }}
           PEP_RESOLVED_SHA: ${{ steps.verify.outputs.resolved_sha }}
+          EXECUTION_MODE: ${{ inputs.execution_mode }}
         run: |
           set -euo pipefail
           python3 utillities/pep_capture_io.py \
@@ -134,6 +136,7 @@ jobs:
             --release-intent capture-in/release_intent.json \
             --publication-results capture-in/publication_results.json \
             --policy utillities/pep_capture_policy.json \
+            --execution-mode "${EXECUTION_MODE}" \
             --out-dir capture-out \
             --tmp-root "${RUNNER_TEMP}/pep-capture-dl"
 

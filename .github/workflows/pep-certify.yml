@@ -92,6 +92,7 @@ jobs:
       deb_matrix:             ${{ inputs.deb_matrix }}
       release_intent:         ${{ inputs.release_intent }}
       publication_results:    ${{ inputs.publication_results }}
+      execution_mode:         ${{ inputs.execution_mode }}   # bind intent into cert-plan (preview admits simulated dry-run)
 
   # --- 2. plan: cert-plan/1 (by immutable id) -> pep-invocation-plan/1 + dynamic matrix ---
   plan:
@@ -123,6 +124,8 @@ jobs:
           github-token: ${{ github.token }}
       - name: Derive the invocation plan + dynamic matrix
         id: plan
+        env:
+          EXECUTION_MODE: ${{ inputs.execution_mode }}   # must match the cert-plan's stamped mode
         run: |
           set -uo pipefail
           mkdir -p plan-out
@@ -140,6 +143,7 @@ jobs:
             --cert-plan plan-in/cert-plan.json \
             --exec-catalog utillities/pep_exec_catalog.json \
             --containers configuration/containers_list.json \
+            --execution-mode "${EXECUTION_MODE}" \
             --out "$out"
           rc=$?
           set -e

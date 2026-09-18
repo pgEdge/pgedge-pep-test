@@ -488,10 +488,12 @@ def _is_pos_int(x):
 
 # --- top-level capture ------------------------------------------------------
 def run_capture(*, transport, repo, run_id, matrices, release_intent, publication_results,
-                component_policy, provenance, tmp_root):
+                component_policy, provenance, tmp_root, execution_mode="full"):
     """Read the run's jobs+artifacts, download the associated evidence, and delegate
     to the pure capture core. Returns ``(reducer_env, capture_evidence, cert_plan)``.
-    Raises ``CaptureIOError`` / ``CaptureSystemError`` on systemic failure."""
+    ``execution_mode`` is the coordinator's execution intent, bound into the reducer input so the
+    cert-plan is stamped with it (the invocation planner re-checks the stamp). Raises
+    ``CaptureIOError`` / ``CaptureSystemError`` on systemic failure."""
     planned = A.planned_cells_from_detector(*matrices)
     planned_ids, family_by_cell, seen = [], {}, set()
     for c in planned:
@@ -524,6 +526,9 @@ def run_capture(*, transport, repo, run_id, matrices, release_intent, publicatio
         detector_matrices=matrices, job_pages=job_pages, artifact_pages=art_pages_final,
         blobs=blobs, release_intent=release_intent, component_policy=component_policy,
         publication_results=publication_results, provenance=provenance, tmp_root=tmp_root)
+    # Bind the coordinator's execution intent into the reducer input so the cert-plan is stamped
+    # with it (release_intent stays caller-owned; execution_mode is a sibling top-level key).
+    env = {**env, "execution_mode": execution_mode}
     plan = R.reduce(env)
     return env, evidence, plan
 
@@ -596,6 +601,8 @@ def main(argv=None):
     ap.add_argument("--release-intent", required=True, help="release_intent JSON file (caller evidence)")
     ap.add_argument("--publication-results", required=True, help="publication_results JSON file (caller evidence)")
     ap.add_argument("--policy", required=True, help="PEP-owned capture policy JSON (pep-capture-policy/1)")
+    ap.add_argument("--execution-mode", default="full", choices=list(R.EXECUTION_MODES),
+                    help="coordinator execution intent, bound into cert-plan/1 (default: full)")
     ap.add_argument("--out-dir", required=True, help="directory for capture-evidence.json + cert-plan.json")
     ap.add_argument("--tmp-root", default=None, help="run-scoped scratch dir for streamed downloads")
     args = ap.parse_args(argv)
@@ -639,7 +646,7 @@ def main(argv=None):
             transport=transport, repo=repo, run_id=run_id,
             matrices=[rpm_matrix, deb_matrix], release_intent=release_intent,
             publication_results=publication_results, component_policy=component_policy,
-            provenance=provenance, tmp_root=tmp_root)
+            provenance=provenance, tmp_root=tmp_root, execution_mode=args.execution_mode)
     except (CaptureIOError, C.CaptureSystemError) as e:
         return _fail(out_dir, gh_output, redact(str(e)))
 

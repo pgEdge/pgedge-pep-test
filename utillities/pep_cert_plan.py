@@ -52,6 +52,12 @@ IDENTITY_STATES = ("confirmed", "mismatch", "unverified")
 FAMILIES = ("rpm", "deb")
 SUPPORTED_ARCHES = ("amd64", "arm64")
 CHANNELS = ("release", "staging", "daily")
+# Execution intent, owned by the coordinator (execution_mode). "full" is the strict,
+# certifiable path (published, non-simulated). "preview" is a DRY-RUN planning path that
+# additionally admits a simulated, built-and-identity-confirmed target that was truthfully
+# NOT published (see _strict_eligibility / _preview_eligibility). Absent == "full"
+# (backward-compatible strict default).
+EXECUTION_MODES = ("preview", "full")
 _ARCH_INDEPENDENT = {"noarch", "all"}
 
 # cert-result/1 boundary vocabulary — reused from PEP, emitted here ONLY as placeholders
@@ -288,12 +294,26 @@ def _resolve_build(cell, job_records, artifacts):
 
 # --- publication state ------------------------------------------------------
 def _resolve_publication(family, build_state, publication_results, simulated):
-    if simulated:
-        return "publish_skipped", "simulated"
+    """Resolve the TRUTHFUL publication state/reason for a family. A simulated run did NOT publish, so
+    its push outcomes are read fail-closed and NEVER collapsed into a confirmed publication:
+      * a genuinely absent/skipped family push is the simulated skip (``publish_skipped``/``simulated``)
+        -- the sole preview-eligibility basis;
+      * an explicit ``failure``/``cancelled`` stays ``publish_unconfirmed`` (fail-closed);
+      * a contradictory ``success`` (a simulated run cannot have published) is preserved fail-closed as
+        ``publish_unconfirmed``/``simulated_with_family_push_success`` -- never a confirmed publication
+        and never a simulated skip.
+    A non-simulated run keeps the ordinary mapping (success + available -> ``publish_confirmed``). The
+    raw outcome is preserved in the emitted state/reason rather than hidden."""
     push = (publication_results or {}).get(family)
     if push in (None, "skipped"):
-        return "publish_skipped", "family_push_skipped"
+        # Truthful skip: a simulated run's push jobs deliberately did not run (reason 'simulated');
+        # a normal missing/skipped family is 'family_push_skipped'. Only the former is preview-eligible.
+        return "publish_skipped", ("simulated" if simulated else "family_push_skipped")
     if push == "success":
+        if simulated:
+            # Contradiction: a simulated run did not publish, yet a family push reports success. Fail
+            # closed on the raw contradiction -- never a confirmed publication nor a simulated skip.
+            return "publish_unconfirmed", "simulated_with_family_push_success"
         if build_state == "available":
             return "publish_confirmed", "family_push_success"
         return "publish_skipped", "not_built"      # nothing of this cell to publish
@@ -440,8 +460,13 @@ def _select_targets(cell, art, policy, release_intent, provenance, family, allow
     return targets, "resolved", members_out
 
 
-def _eligibility(build_state, pub_state, identity, simulated, family, channel,
-                 plan_resolved, context_ok):
+def _strict_eligibility(build_state, pub_state, identity, simulated, family, channel,
+                        plan_resolved, context_ok):
+    """STRICT certification eligibility -- cert-plan/1's existing ``eligibility`` field, with its
+    UNCHANGED vocabulary (``eligible`` | ``ineligible``). A target is ``eligible`` only when the
+    build is available, the family push is CONFIRMED, the identity is confirmed and the release is
+    NOT simulated. A simulated (hence unpublished) target is therefore always ``ineligible`` here.
+    Existing consumers that know only this field keep treating a preview target as ineligible."""
     if not plan_resolved:
         return "ineligible", "plan_unresolved"
     if not context_ok:
@@ -459,6 +484,41 @@ def _eligibility(build_state, pub_state, identity, simulated, family, channel,
     if identity != "confirmed":
         return "ineligible", "identity_" + identity
     return "eligible", "built_published_identity_confirmed"
+
+
+def _preview_eligibility(build_state, pub_state, pub_reason, identity, simulated, family, channel,
+                         plan_resolved, context_ok, execution_mode):
+    """ADDITIVE dry-run eligibility -- cert-plan/1's new, self-describing ``preview_eligibility``
+    field (``eligible`` | ``ineligible``), SEPARATE from strict ``eligibility`` and mode-bound to the
+    stamped ``execution_mode``. It is ``eligible`` ONLY when the plan is a preview plan AND the target
+    is a truthfully-unpublished SIMULATED build: the family publication is the genuine simulated skip
+    (``publish_skipped`` with reason ``simulated``), the build is available, the package identity is
+    confirmed and the family/channel are supported -- "built and identity-confirmed, dry-run planning
+    only; NOT published". In a full plan it is uniformly ``ineligible`` (``not_preview_mode``). A real
+    publication failure/cancellation, a contradictory success, a non-simulated skip, an unavailable
+    build, an identity mismatch or missing context all stay ``ineligible``. It never asserts the
+    package was published; the planner additionally runs it only when the requested mode is preview."""
+    if not plan_resolved:
+        return "ineligible", "plan_unresolved"
+    if not context_ok:
+        return "ineligible", "incomplete_release_context"
+    if execution_mode != "preview":
+        return "ineligible", "not_preview_mode"
+    if not simulated:
+        return "ineligible", "not_simulated"
+    if not (pub_state == "publish_skipped" and pub_reason == "simulated"):
+        # failure / cancellation / contradictory success / non-simulated skip -> the raw pub truth,
+        # never a preview bypass.
+        return "ineligible", "publication_" + pub_state
+    if family not in FAMILIES:
+        return "ineligible", "unsupported_family"
+    if channel not in CHANNELS:
+        return "ineligible", "unsupported_channel"
+    if build_state != "available":
+        return "ineligible", "build_" + build_state
+    if identity != "confirmed":
+        return "ineligible", "identity_" + identity
+    return "eligible", "simulated_built_identity_confirmed_dry_run"
 
 
 def _cell_header(c):
@@ -562,6 +622,19 @@ def reduce(inp):
     sim_value, sim_valid = _parse_simulated(ri.get("simulated"))
     simulated = sim_value if sim_valid else True     # unknown -> fail closed (publish_skipped)
 
+    # execution_mode is the coordinator's single execution intent, bound into the plan so a preview
+    # plan cannot later be consumed as full (the invocation planner re-checks the stamped value).
+    # Absent -> "full" (backward-compatible strict default); a malformed value fails the plan closed.
+    em_raw = inp.get("execution_mode")
+    if em_raw is None:
+        execution_mode = "full"
+    elif em_raw in EXECUTION_MODES:
+        execution_mode = em_raw
+    else:
+        execution_mode = None
+        plan_resolved = False
+        errors.append("execution_mode %r is not one of %s" % (em_raw, list(EXECUTION_MODES)))
+
     # Minimum release-intent + provenance required before ANY target can be eligible: an
     # eligible target must not carry a null logical component or producer repository.
     context_missing = []
@@ -644,9 +717,16 @@ def reduce(inp):
         pub_state, pub_reason = _resolve_publication(family, build_state, pubs, simulated)
         targets, sel_state, members_out = _select_targets(c, art, policy, ri, provenance, family, allowed_set, pg_norm)
         for t in targets:
-            elig, reason = _eligibility(build_state, pub_state, t["package_identity_state"],
-                                        simulated, family, channel, plan_resolved, context_ok)
-            t["eligibility"], t["eligibility_reason"] = elig, reason
+            ident = t["package_identity_state"]
+            # STRICT (certifiable) eligibility — cert-plan/1's existing field, unchanged vocabulary.
+            t["eligibility"], t["eligibility_reason"] = _strict_eligibility(
+                build_state, pub_state, ident, simulated, family, channel, plan_resolved, context_ok)
+            # ADDITIVE dry-run eligibility — a SEPARATE, mode-bound field: _preview_eligibility returns
+            # "not_preview_mode" (ineligible) unless this plan's execution_mode is preview, so it is
+            # eligible only in a preview-stamped plan; the planner then runs it only in preview.
+            t["preview_eligibility"], t["preview_eligibility_reason"] = _preview_eligibility(
+                build_state, pub_state, pub_reason, ident, simulated, family, channel,
+                plan_resolved, context_ok, execution_mode)
         cells_out.append({**base, "build_state": build_state, "build_evidence": ev,
                           "members": members_out, "publication_state": pub_state,
                           "publication_reason": pub_reason, "targets": targets,
@@ -659,10 +739,13 @@ def reduce(inp):
     available_n = sum(1 for x in cells_out if x["build_state"] == "available")
     selected_n = sum(len(x["targets"]) for x in cells_out)
     eligible_n = sum(1 for x in cells_out for t in x["targets"] if t.get("eligibility") == "eligible")
+    preview_eligible_n = sum(1 for x in cells_out for t in x["targets"]
+                             if t.get("preview_eligibility") == "eligible")
 
     return {
         "schema": SCHEMA,
         "plan_resolved": plan_resolved,
+        "execution_mode": execution_mode,              # bound intent; null == malformed (fail closed)
         "errors": errors,
         "provenance": {k: provenance.get(k) for k in ("repository", "run_id", "run_attempt", "sha", "ref")},
         "release_intent": {                            # NO singular physical_package here
@@ -680,7 +763,8 @@ def reduce(inp):
             "planned_build_cells": len(planned_list),   # honest: original planned entries
             "available_build_cells": available_n,
             "selected_targets": selected_n,
-            "eligible_targets": eligible_n,
+            "eligible_targets": eligible_n,              # STRICT (certifiable) eligibility only
+            "preview_eligible_targets": preview_eligible_n,  # dry-run-only (simulated, unpublished)
             "required_invocations": None},               # policy-derived; later stage
         "cert_result_boundary": {                        # placeholder only; no results in Stage 1
             "schema": "cert-result/1",

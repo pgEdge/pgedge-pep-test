@@ -353,3 +353,16 @@ def test_actionlint_suppression_is_narrow_and_singular():
 # --------------------------------------------------------------------------- #
 def test_selftest_actionlint_includes_certify_workflow():
     assert ".github/workflows/pep-certify.yml" in _SELFTEST.read_text()
+
+
+# --------------------------------------------------------------------------- #
+# execution_mode is bound through BOTH the capture and plan path (preview intent)
+# --------------------------------------------------------------------------- #
+def test_execution_mode_bound_through_capture_and_plan():
+    # capture receives execution_mode (so the cert-plan is stamped with it)
+    cap = _job_block("capture")
+    assert re.search(r"execution_mode:\s*\$\{\{\s*inputs\.execution_mode\s*\}\}", cap)
+    # the planner receives it via env + the --execution-mode flag (re-checked against the stamp)
+    plan = _job_block("plan")
+    assert re.search(r"EXECUTION_MODE:\s*\$\{\{\s*inputs\.execution_mode\s*\}\}", plan)
+    assert re.search(r'--execution-mode\s+"\$\{EXECUTION_MODE\}"', plan)

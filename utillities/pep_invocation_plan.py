@@ -8,9 +8,13 @@ execution capability data, and emits a deterministic ``pep-invocation-plan/1``
 document whose ``matrix.include`` list is GitHub-matrix-ready for ``pep-integration.yml``.
 
 Scope of this slice (nothing else):
-  * Consider ONLY eligible package targets proven by capture (``eligibility == 'eligible'``).
-    A selective build's cert-plan simply contains fewer eligible targets; a broad/ALL build
-    contains more. Selection is the plan's own content — there is NO build-mode flag here.
+  * Consider the runnable package targets proven by capture: STRICT ``eligibility == 'eligible'``
+    (certifiable, in either mode) plus, in preview mode ONLY, the separate additive
+    ``preview_eligibility == 'eligible'`` (a simulated, built + identity-confirmed, truthfully-
+    unpublished dry-run target). The coordinator's ``execution_mode`` is the single intent: it is
+    stamped into the cert-plan at capture and RE-VALIDATED here (a preview plan cannot be consumed
+    as full, and vice versa). A selective build's cert-plan simply contains fewer runnable targets;
+    a broad/ALL build contains more. Selection is the plan's own content — there is NO build-mode flag.
   * Reconcile each eligible target with the platforms PEP can CURRENTLY execute — family,
     OS/platform, architecture and PostgreSQL applicability.
   * PG-coupled packages stay on their recorded build PG major; PG-decoupled packages expand
@@ -83,6 +87,7 @@ CERT_PLAN_SCHEMA = "cert-plan/1"
 
 FAMILIES = ("rpm", "deb")
 ARCHES = ("amd64", "arm64")
+EXECUTION_MODES = ("preview", "full")   # coordinator execution intent, bound into the plan
 
 # The reusable workflow (pep-integration.yml preflight) accepts an invocation_id only if it
 # matches this charset/length; the planner is the producer, so it enforces the SAME rule.
@@ -396,8 +401,16 @@ def _gap(target, reason, detail=None):
 # --------------------------------------------------------------------------- #
 # top-level pure planner
 # --------------------------------------------------------------------------- #
-def _eligible_targets(cert_plan):
-    """Yield eligible target dicts, each tagged with its owning ``_cell_id`` (never mutates input)."""
+def _eligible_targets(cert_plan, execution_mode):
+    """Yield runnable target dicts, each tagged with its owning ``_cell_id`` (never mutates input).
+
+    A target runs when its STRICT ``eligibility == 'eligible'`` (certifiable; either mode). In
+    ``preview`` mode ONLY, a target also runs when its separate additive ``preview_eligibility ==
+    'eligible'`` (a simulated, built + identity-confirmed, truthfully-unpublished dry-run target).
+    ``full`` mode never runs preview-only targets. The caller (build_invocation_plan) has already
+    verified the cert-plan's stamped mode equals ``execution_mode``, so a preview run here implies a
+    preview-stamped plan."""
+    preview = (execution_mode == "preview")
     cells = cert_plan.get("cells")
     if not isinstance(cells, list):
         return
@@ -409,14 +422,18 @@ def _eligible_targets(cert_plan):
         if not isinstance(targets, list):
             continue
         for t in targets:
-            if isinstance(t, dict) and t.get("eligibility") == "eligible":
+            if not isinstance(t, dict):
+                continue
+            runnable = (t.get("eligibility") == "eligible") \
+                or (preview and t.get("preview_eligibility") == "eligible")
+            if runnable:
                 tagged = dict(t)
                 tagged["_cell_id"] = cid
                 yield tagged
 
 
 def build_invocation_plan(cert_plan, exec_catalog, enabled_platforms, *,
-                          component_packages=None, valid_channels=None):
+                          component_packages=None, valid_channels=None, execution_mode="full"):
     """Reduce a resolved ``cert-plan/1`` + centralized execution data into a deterministic
     ``pep-invocation-plan/1`` dict. Never raises for JSON-compatible input; fail-closed shapes
     yield ``plan_resolved == false`` with ``errors`` and an EMPTY matrix.
@@ -430,12 +447,23 @@ def build_invocation_plan(cert_plan, exec_catalog, enabled_platforms, *,
         valid_channels = VALID_CHANNELS
 
     errors = []
+    if execution_mode not in EXECUTION_MODES:
+        return _unresolved(["invalid execution_mode %r (want one of %s)"
+                            % (execution_mode, list(EXECUTION_MODES))], execution_mode=None)
     if not isinstance(cert_plan, dict):
-        return _unresolved(["source cert-plan is not an object"])
+        return _unresolved(["source cert-plan is not an object"], execution_mode=execution_mode)
     if cert_plan.get("schema") != CERT_PLAN_SCHEMA:
         errors.append("source schema must be %r" % CERT_PLAN_SCHEMA)
     if cert_plan.get("plan_resolved") is not True:
         errors.append("source cert-plan is not resolved")
+    # Bind the execution intent: a plan captured for one mode must not be consumed as another
+    # (a preview plan admits simulated/unpublished dry-run targets and must never run as full).
+    # An absent stamp is treated as legacy "full". Mismatch => fail closed, no matrix.
+    plan_mode = cert_plan.get("execution_mode") if isinstance(cert_plan, dict) else None
+    if plan_mode is None:
+        plan_mode = "full"
+    if plan_mode != execution_mode:
+        errors.append("execution_mode mismatch: cert-plan=%r requested=%r" % (plan_mode, execution_mode))
 
     supported_pgs, os_map, cat_errors = validate_exec_catalog(exec_catalog)
     errors.extend(cat_errors)
@@ -468,11 +496,12 @@ def build_invocation_plan(cert_plan, exec_catalog, enabled_platforms, *,
 
     # Fail closed BEFORE emitting any invocation: a bad source/catalog/release must never yield a matrix.
     if errors:
-        return _unresolved(errors, release=release, provenance=provenance, supported_pgs=supported_pgs)
+        return _unresolved(errors, release=release, provenance=provenance,
+                           supported_pgs=supported_pgs, execution_mode=execution_mode)
 
     invocations, gaps = [], []
     eligible_n = 0
-    for target in _eligible_targets(cert_plan):
+    for target in _eligible_targets(cert_plan, execution_mode):
         eligible_n += 1
         family = target.get("family")
         arch = target.get("execution_arch")
@@ -513,10 +542,12 @@ def build_invocation_plan(cert_plan, exec_catalog, enabled_platforms, *,
         seen[iid] = inv
     if bad:
         return _unresolved(["invalid invocation identity: %r" % s for s in sorted(set(bad))],
-                           release=release, provenance=provenance, supported_pgs=supported_pgs)
+                           release=release, provenance=provenance, supported_pgs=supported_pgs,
+                           execution_mode=execution_mode)
     if dups:
         return _unresolved(["duplicate invocation identity: %s" % s for s in sorted(dups)],
-                           release=release, provenance=provenance, supported_pgs=supported_pgs)
+                           release=release, provenance=provenance, supported_pgs=supported_pgs,
+                           execution_mode=execution_mode)
 
     invocations.sort(key=lambda x: x["invocation_id"])
     gaps.sort(key=lambda g: (str(g.get("cell_id") or ""), str(g.get("target_id") or ""), g.get("reason") or ""))
@@ -525,6 +556,7 @@ def build_invocation_plan(cert_plan, exec_catalog, enabled_platforms, *,
     return {
         "schema": SCHEMA,
         "plan_resolved": True,
+        "execution_mode": execution_mode,              # bound intent (matches the cert-plan's stamp)
         "errors": [],
         "provenance": {k: provenance.get(k) for k in ("repository", "run_id", "run_attempt", "sha", "ref")},
         "release": {
@@ -546,12 +578,13 @@ def build_invocation_plan(cert_plan, exec_catalog, enabled_platforms, *,
     }
 
 
-def _unresolved(errors, release=None, provenance=None, supported_pgs=None):
+def _unresolved(errors, release=None, provenance=None, supported_pgs=None, execution_mode=None):
     release = release or {}
     provenance = provenance or {}
     return {
         "schema": SCHEMA,
         "plan_resolved": False,
+        "execution_mode": execution_mode,
         "errors": list(errors),
         "provenance": {k: provenance.get(k) for k in ("repository", "run_id", "run_attempt", "sha", "ref")},
         "release": {
@@ -593,13 +626,13 @@ def load_enabled_platforms(container_catalog_path):
     return enabled_platforms_from_catalog(catalog), None
 
 
-def plan_from_sources(cert_plan, exec_catalog_path, container_catalog_path):
+def plan_from_sources(cert_plan, exec_catalog_path, container_catalog_path, execution_mode="full"):
     """Convenience: load the exec catalog + container catalog from disk, then build the plan."""
     exec_catalog = load_exec_catalog(exec_catalog_path)
     enabled_platforms, cat_err = load_enabled_platforms(container_catalog_path)
     if cat_err is not None:
-        return _unresolved([cat_err])
-    return build_invocation_plan(cert_plan, exec_catalog, enabled_platforms)
+        return _unresolved([cat_err], execution_mode=execution_mode)
+    return build_invocation_plan(cert_plan, exec_catalog, enabled_platforms, execution_mode=execution_mode)
 
 
 def to_json(plan):
@@ -613,15 +646,18 @@ def main(argv=None):
     ap.add_argument("--cert-plan", required=True, help="resolved cert-plan/1 JSON file")
     ap.add_argument("--exec-catalog", required=True, help="pep-exec-catalog/1 JSON file")
     ap.add_argument("--containers", required=True, help="configuration/containers_list.json")
+    ap.add_argument("--execution-mode", default="full", choices=list(EXECUTION_MODES),
+                    help="coordinator execution intent; must match the cert-plan's stamp (default: full)")
     ap.add_argument("--out", default=None, help="write the invocation plan here (default: stdout)")
     args = ap.parse_args(argv)
     try:
         with open(args.cert_plan, "r", encoding="utf-8") as fh:
             cert_plan = json.load(fh)
     except (OSError, ValueError) as e:
-        plan = _unresolved(["source cert-plan unreadable: %s" % e])
+        plan = _unresolved(["source cert-plan unreadable: %s" % e], execution_mode=args.execution_mode)
     else:
-        plan = plan_from_sources(cert_plan, args.exec_catalog, args.containers)
+        plan = plan_from_sources(cert_plan, args.exec_catalog, args.containers,
+                                 execution_mode=args.execution_mode)
     text = to_json(plan)
     if args.out:
         with open(args.out, "w", encoding="utf-8") as fh:

@@ -1,0 +1,270 @@
+# PEP Certify Live -- TEMPORARY, throwaway live validation of the reusable certification
+# coordinator (.github/workflows/pep-certify.yml) pinned at b12dfff, before RAG integration.
+#
+# It exists ONLY on branch spike/pep-certify-live. A workflow absent from the default branch
+# cannot be started with workflow_dispatch, so it is triggered by push to its own branch only.
+#
+# Green-path, PEP-only, synthetic and inexpensive: it builds two tiny pgedge-capture-smoke
+# packages (RPM EL9 + DEB Trixie, both amd64), reuses the committed pep-package-receipt action
+# for evidence exactly like pep-capture-smoke.yml, then calls the real coordinator in
+# observe + preview mode so every leg is a dry run and the workflow stays green. It asserts the
+# full contract from the combined evidence. DELETE this branch after review.
+name: PEP Certify Live
+
+on:
+  push:
+    branches: [spike/pep-certify-live]
+
+# Least privilege at the top; each job grants only what it needs.
+permissions: {}
+
+jobs:
+  # --- build the two synthetic cells + receipts (reused from pep-capture-smoke.yml) ---
+  build:
+    name: build [pep-cell:${{ matrix.cell_id }}]
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - cell_id: certlive-rpm-el9-amd64
+            family: rpm
+          - cell_id: certlive-deb-trixie-amd64
+            family: deb
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: read      # checkout only; artifact upload uses the runtime token
+    steps:
+      - name: Checkout PEP (provides the local receipt action + inspector)
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803  # v6.1.0
+
+      - name: Build one tiny ${{ matrix.family }} package (pgedge-capture-smoke 1.0.0)
+        id: build
+        env:
+          FAMILY: ${{ matrix.family }}
+        run: |
+          set -euo pipefail
+          mkdir -p pkgout
+          if [ "$FAMILY" = "deb" ]; then
+            mkdir -p root/DEBIAN
+            cat > root/DEBIAN/control <<'EOF'
+          Package: pgedge-capture-smoke
+          Version: 1.0.0-1.trixie
+          Architecture: amd64
+          Maintainer: PEP Live <pep@example.invalid>
+          Description: tiny certify-live package (deb cell)
+          EOF
+            pkg="pgedge-capture-smoke_1.0.0-1.trixie_amd64.deb"
+            dpkg-deb --build root "pkgout/$pkg"
+          else
+            if ! command -v rpmbuild >/dev/null 2>&1; then
+              sudo apt-get update -qq
+              sudo apt-get install -y -qq rpm
+            fi
+            cat > tiny.spec <<'EOF'
+          Name: pgedge-capture-smoke
+          Version: 1.0.0
+          Release: 1.el9
+          Summary: tiny certify-live rpm (rpm cell)
+          License: MIT
+          BuildArch: noarch
+          %description
+          tiny certify live package
+          %files
+          %changelog
+          EOF
+            rpmbuild -bb --define "_topdir $PWD/rpmbuild" tiny.spec
+            pkg="pgedge-capture-smoke-1.0.0-1.el9.noarch.rpm"
+            cp "rpmbuild/RPMS/noarch/$pkg" "pkgout/$pkg"
+          fi
+
+      - name: Upload package artifact FIRST (producer-natural, unique name)
+        id: up
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
+        with:
+          name: certlive-pkg-${{ matrix.family }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: pkgout/
+          if-no-files-found: error
+
+      - name: Generate pep-receipt/2 for the cell (LOCAL composite action)
+        id: receipt
+        uses: ./.github/actions/pep-package-receipt
+        with:
+          cell_id: ${{ matrix.cell_id }}
+          family: ${{ matrix.family }}
+          package_dir: pkgout
+          package_artifact_id: ${{ steps.up.outputs.artifact-id }}
+          package_artifact_name: certlive-pkg-${{ matrix.family }}-${{ github.run_id }}-${{ github.run_attempt }}
+          package_artifact_digest: ${{ steps.up.outputs.artifact-digest }}
+
+  # --- one real reusable-coordinator call, pinned to the immutable implementation SHA ---
+  certify:
+    needs: build
+    if: ${{ !cancelled() }}      # a build failure must still reach the coordinator (truthful evidence)
+    uses: pgEdge/pgedge-pep-test/.github/workflows/pep-certify.yml@b12dfff97c7e57f63ce17d6b9b72972887dded88
+    permissions:
+      contents: read      # nested checkouts of the pinned PEP implementation
+      actions: read       # nested capture/aggregate list + download this run's artifacts by id
+    with:
+      # PG-independent (decoupled) cells stated EXPLICITLY, consistent with the detector contract
+      # (pg_coupled=false carries no build_pg_major/version); the planner then expands each cell
+      # across the supported PG majors {16,17,18}.
+      rpm_matrix: '{"include":[{"cell_id":"certlive-rpm-el9-amd64","family":"rpm","os":"el-9","normalized_arch":"amd64","pg_coupled":false}]}'
+      deb_matrix: '{"include":[{"cell_id":"certlive-deb-trixie-amd64","family":"deb","os":"trixie","normalized_arch":"amd64","pg_coupled":false}]}'
+      release_intent: '{"logical_component":"pgedge-capture-smoke","intended_version":"1.0.0","intended_buildnum":"1","effective_tag":"v1.0.0","channel":"daily","simulated":false}'
+      publication_results: '{"rpm":"success","deb":"success"}'
+      enforcement: observe
+      execution_mode: preview
+    # No secrets: preview does no rate-limited image pulls, so DockerHub creds are unnecessary.
+
+  # --- independently assert the full green-path contract from the combined evidence ---
+  assert-live:
+    needs: certify
+    if: ${{ always() }}      # run even if certify went red, and REQUIRE its success below
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      actions: read      # list this run's artifacts + download the combined evidence by id
+    steps:
+      - name: Require the coordinator to have succeeded
+        env:
+          R: ${{ needs.certify.result }}
+        run: |
+          set -euo pipefail
+          echo "certify job result: $R"
+          test "$R" = "success" || { echo "coordinator did not succeed"; exit 1; }
+
+      - name: Assert the coordinator public outputs
+        env:
+          CONCLUSION: ${{ needs.certify.outputs.certification_conclusion }}
+          STATE:      ${{ needs.certify.outputs.certification_state }}
+          ES:         ${{ needs.certify.outputs.execution_status }}
+          TV:         ${{ needs.certify.outputs.test_verdict }}
+          COV:        ${{ needs.certify.outputs.coverage_status }}
+          REASON:     ${{ needs.certify.outputs.reason_code }}
+          EV_ID:      ${{ needs.certify.outputs.evidence_artifact_id }}
+          EV_NAME:    ${{ needs.certify.outputs.evidence_artifact_name }}
+        run: |
+          set -euo pipefail
+          echo "conclusion=$CONCLUSION state=$STATE es=$ES tv=$TV cov=$COV reason=$REASON ev_id=$EV_ID ev_name=$EV_NAME"
+          test "$CONCLUSION" = "success"  || { echo "conclusion != success"; exit 1; }
+          test "$STATE"      = "preview"  || { echo "state != preview"; exit 1; }
+          test "$ES"         = "preview"  || { echo "execution_status != preview"; exit 1; }
+          test "$TV"         = "not_run"  || { echo "test_verdict != not_run"; exit 1; }
+          test "$COV"        = "partial"  || { echo "coverage_status != partial"; exit 1; }
+          test "$REASON"     = "preview"  || { echo "reason_code != preview"; exit 1; }
+          case "$EV_ID" in ''|*[!0-9]*) echo "evidence artifact id not a positive integer: '$EV_ID'"; exit 1;; esac
+          test -n "$EV_NAME" || { echo "blank evidence artifact name"; exit 1; }
+
+      - name: Download the combined certification evidence BY IMMUTABLE ID
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131  # v7.0.0
+        with:
+          artifact-ids: ${{ needs.certify.outputs.evidence_artifact_id }}
+          path: ev
+          github-token: ${{ github.token }}
+
+      - name: Download the invocation plan (for the leg distribution) by name
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131  # v7.0.0
+        with:
+          pattern: pep-invocation-plan-*
+          merge-multiple: true
+          path: plan
+          github-token: ${{ github.token }}
+
+      - name: Validate combined evidence, six-leg distribution, provenance and ledger sanitization
+        env:
+          PIN: b12dfff97c7e57f63ce17d6b9b72972887dded88
+          THIS_RUN: ${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          ls -R ev plan
+          python3 - <<'PY'
+          import json, os, sys
+          def fail(m):
+              print("ASSERT FAIL:", m); sys.exit(1)
+          pin = os.environ["PIN"]; this_run = os.environ["THIS_RUN"]
+          cr  = json.load(open("ev/cert-result.json"))
+          led = json.load(open("ev/collection-ledger.json"))
+          dec = json.load(open("ev/cert-decision.json"))
+          plan = json.load(open("plan/invocation-plan.json"))
+
+          # --- cert-result/1: resolved, no errors, preview axes ---
+          if cr.get("schema") != "cert-result/1": fail("cert-result schema %r" % cr.get("schema"))
+          if cr.get("result_resolved") is not True: fail("result_resolved=%r" % cr.get("result_resolved"))
+          if cr.get("errors"): fail("cert-result errors: %r" % cr.get("errors"))
+          if cr.get("execution_status") != "preview": fail("execution_status=%r" % cr.get("execution_status"))
+          if cr.get("test_verdict") != "not_run": fail("test_verdict=%r" % cr.get("test_verdict"))
+          if cr.get("coverage_status") != "partial": fail("coverage_status=%r" % cr.get("coverage_status"))
+          if cr.get("reason_code") is not None: fail("cert-result reason_code=%r (want null)" % cr.get("reason_code"))
+
+          # --- exactly six matched preview legs ---
+          legs = cr.get("legs") or []
+          if len(legs) != 6: fail("expected 6 legs, got %d" % len(legs))
+          for l in legs:
+              if l.get("reconciliation") != "matched": fail("leg %r not matched" % l.get("invocation_id"))
+              if l.get("execution_status") != "preview": fail("leg %r not preview" % l.get("invocation_id"))
+          leg_ids = sorted(l["invocation_id"] for l in legs)
+
+          # --- invocation plan: 6 invocations, correct family/alias/PG distribution ---
+          inc = (plan.get("matrix") or {}).get("include") or []
+          if len(inc) != 6: fail("plan matrix.include != 6 (%d)" % len(inc))
+          rpm = sorted(str(e["pg_major"]) for e in inc if e["family"] == "rpm")
+          deb = sorted(str(e["pg_major"]) for e in inc if e["family"] == "deb")
+          if rpm != ["16", "17", "18"]: fail("rpm PG majors %r" % rpm)
+          if deb != ["16", "17", "18"]: fail("deb PG majors %r" % deb)
+          if any(e["container_alias"] != "oel9-amd64" for e in inc if e["family"] == "rpm"):
+              fail("rpm legs not all on oel9-amd64")
+          if any(e["container_alias"] != "debian13-amd64" for e in inc if e["family"] == "deb"):
+              fail("deb legs not all on debian13-amd64")
+          plan_ids = sorted(e["invocation_id"] for e in inc)
+          if plan_ids != leg_ids: fail("plan ids %r != leg ids %r" % (plan_ids, leg_ids))
+
+          # --- decision: preview / report / success, reason preview ---
+          if dec.get("schema") != "pep-cert-decision/1": fail("decision schema %r" % dec.get("schema"))
+          if dec.get("certification_state") != "preview": fail("state=%r" % dec.get("certification_state"))
+          if dec.get("policy_decision") != "report": fail("policy_decision=%r" % dec.get("policy_decision"))
+          if dec.get("workflow_conclusion") != "success": fail("workflow_conclusion=%r" % dec.get("workflow_conclusion"))
+          if dec.get("reason_code") != "preview": fail("decision reason_code=%r" % dec.get("reason_code"))
+
+          # --- provenance: identifies THIS run; requested ref == resolved sha == pinned SHA ---
+          prov = cr.get("provenance") or {}
+          if str(prov.get("run_id")) != this_run: fail("provenance.run_id=%r != this run %r" % (prov.get("run_id"), this_run))
+          if (prov.get("pep_requested_ref") or "").lower() != pin.lower():
+              fail("pep_requested_ref=%r != pinned %r" % (prov.get("pep_requested_ref"), pin))
+          if (prov.get("pep_resolved_sha") or "").lower() != pin.lower():
+              fail("pep_resolved_sha=%r != pinned %r" % (prov.get("pep_resolved_sha"), pin))
+
+          # --- collection-ledger/1: no token / auth / signed URL / summary body ---
+          if led.get("schema") != "pep-collection-ledger/1": fail("ledger schema %r" % led.get("schema"))
+          blob = json.dumps(led).lower()
+          for bad in ("http://", "https://", "bearer ", "authorization", "x-amz", "sig=", "token=", "?sig", "&sig"):
+              if bad in blob: fail("ledger leaked %r" % bad)
+          for body_key in ('"test_verdict"', '"identity_evidence"', '"execution_status"', '"provenance"'):
+              if body_key in blob: fail("ledger appears to embed a summary body (%s)" % body_key)
+
+          print("OK cert-result resolved; 6 matched preview legs; rpm=oel9-amd64{16,17,18} deb=debian13-amd64{16,17,18};")
+          print("OK decision preview/report/success/preview; provenance run_id=%s ref==sha==%s; ledger sanitized" % (this_run, pin))
+          PY
+
+      - name: Assert artifact inventory + uniqueness (exactly 6 pep-summary-* + 1 combined)
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          RUN_ID: ${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          gh api "repos/${REPO}/actions/runs/${RUN_ID}/artifacts?per_page=100" > arts.json
+          python3 - <<'PY'
+          import json, sys
+          def fail(m):
+              print("ASSERT FAIL:", m); sys.exit(1)
+          arts = json.load(open("arts.json")).get("artifacts") or []
+          names = [a["name"] for a in arts]
+          summaries = [n for n in names if n.startswith("pep-summary-")]
+          combined  = [n for n in names if n.startswith("pep-certification-")]
+          if len(summaries) != 6: fail("expected 6 pep-summary-* artifacts, got %d: %r" % (len(summaries), summaries))
+          if len(set(summaries)) != 6: fail("pep-summary-* names not unique: %r" % summaries)
+          if len(combined) != 1: fail("expected exactly 1 combined pep-certification-* artifact, got %d: %r" % (len(combined), combined))
+          if len(set(names)) != len(names): fail("duplicate artifact names in the run: %r" % names)
+          print("OK artifacts: 6 unique pep-summary-* + 1 pep-certification-* (all run artifact names unique)")
+          PY

@@ -36,13 +36,16 @@ Security:
     is recorded honestly for the future all-platform run.
 
 Policy ownership: certification ``component_policy`` is PEP-owned. It is resolved
-internally from the PEP-owned capture policy file (``pep_capture_policy.json``,
-schema ``pep-capture-policy/1``) keyed by the release's logical component; it is
-NEVER a caller-supplied workflow input. That file defines ONLY capture-time
-component/package identity policy — it is NOT the set of platforms PEP can execute.
-Detector evidence says what was BUILT; the later coordinator forms the execution set
-by INTERSECTING the built cells with PEP's own execution catalog. Detector matrices,
-release intent and publication results ARE caller-supplied evidence.
+internally from the SINGLE PEP-owned component/package policy file (``pep_capture_policy.json``,
+schema ``pep-capture-policy/1`` — filename/schema retained historically) keyed by the release's
+logical component; it is NEVER a caller-supplied workflow input. That file is the ONE authority
+for which package names belong to each component, shared by capture, invocation planning and
+per-run request validation (see utillities/pep_request.py). ``expected_binary_version`` in it
+is capture-time identity policy; the file NEVER defines the platforms/OS/arch/PG PEP can execute
+— that universe is owned by the execution/container catalogs. Detector evidence says what was
+BUILT; the later coordinator forms the execution set by INTERSECTING the built cells with PEP's
+own execution catalog. Detector matrices, release intent and publication results ARE
+caller-supplied evidence.
 
 Stdlib only (plus the committed ``pep_capture`` / ``pep_cert_adapter`` /
 ``pep_cert_plan``). Offline-testable via ``pytest utillities/test_pep_capture_io.py``.
@@ -310,16 +313,18 @@ def _validate_policy_entry(policy, component):
 
 
 def resolve_component_policy(policy_path, component):
-    """Resolve the PEP-owned certification policy for ``component`` from the PEP-owned
-    capture policy file, validating the file's EXACT schema and the SELECTED entry's shape
-    BEFORE any network access (a malformed/unknown policy fails the job cleanly rather than
+    """Resolve the PEP-owned certification policy for ``component`` from the single PEP-owned
+    component/package policy file, validating the file's EXACT schema and the SELECTED entry's
+    shape BEFORE any network access (a malformed/unknown policy fails the job cleanly rather than
     surfacing mid-capture). The consumer supplies only the component NAME (release evidence);
     policy content is never a workflow input.
 
-    This file is capture-time component/package identity policy ONLY. It is NOT the set of
-    platforms/OS/arch/PG versions PEP can execute: detector evidence says what was BUILT, and
-    the later coordinator forms the execution set by INTERSECTING those built cells with PEP's
-    own execution catalog. This file never carries a caller-owned platform list."""
+    This file is the SHARED authority for which package names belong to each component — the same
+    source invocation planning and per-run request validation consume (utillities/pep_request.py).
+    ``expected_binary_version`` is capture-time identity policy. The file NEVER carries the
+    platforms/OS/arch/PG PEP can execute: that universe is owned by the execution/container
+    catalogs; detector evidence says what was BUILT, and the coordinator forms the execution set
+    by INTERSECTING those built cells with PEP's own execution catalog."""
     try:
         raw = Path(policy_path).read_text(encoding="utf-8")
     except OSError:

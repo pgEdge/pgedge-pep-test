@@ -1,7 +1,11 @@
 {
   "schema": "pep-capture-policy/1",
-  "_note": "PEP-OWNED capture-time policy, keyed by the release's logical component. It defines ONLY the component/package identity policy the capture stage checks: which runtime package names are certifiable for a component, and any expected binary version. It is NOT the set of platforms/OS/arch/PG versions PEP can execute. Detector evidence says what was BUILT; the later coordinator forms the execution set by INTERSECTING those built cells with PEP's own execution catalog. This file never carries a caller-owned platform list or a fixed target universe. It is the seed of the future centralized PEP policy source; today it carries only the capture-smoke fixture component.",
+  "_note": "The SINGLE PEP-OWNED component/package policy: the one authority for which runtime package names belong to each logical component (plus optional capture-time expected-binary policy). It is consumed by ALL THREE stages so they cannot diverge: release capture resolves a component's entry here (utillities/pep_capture_io.py), and both invocation planning and per-run request validation share the SAME mapping (utillities/pep_request.py derives COMPONENT_PACKAGES from this file; utillities/pep_invocation_plan.py reuses that in-memory object, never a copy). Add or retire a component/package mapping HERE ONLY -- there is no separate hardcoded registry. The filename and schema (pep-capture-policy/1) are retained to avoid churn; the 'capture' in the name is historical -- the role is the shared component/package policy, not capture-only. Package order matters: the FIRST allowed_runtime_package_names entry is the canonical/active package; later entries are still-accepted predecessors. expected_binary_version is optional capture-time identity policy (\"\" = none). This file NEVER carries platform / OS / architecture / PostgreSQL policy -- that universe is owned by configuration/containers_list.json + utillities/pep_exec_catalog.json and is formed by intersecting built cells with PEP's execution catalog. 'pgedge-capture-smoke' is the internal synthetic fixture component used by the capture smoke and the coordinator live-validation caller.",
   "components": {
+    "rag": {
+      "allowed_runtime_package_names": ["pgedge-rag-server2", "pgedge-rag-server"],
+      "expected_binary_version": ""
+    },
     "pgedge-capture-smoke": {
       "allowed_runtime_package_names": ["pgedge-capture-smoke"],
       "expected_binary_version": ""

@@ -10,10 +10,14 @@ name: PEP Capture
 # must grant at least these; a reusable workflow can never exceed the caller token.
 #
 # The consumer boundary is thin and GENERIC: detector matrices, release intent and
-# publication results are EVIDENCE the caller passes. Certification component_policy
-# is PEP-OWNED and resolved internally from utillities/pep_capture_policy.json
-# (schema pep-capture-policy/1) by the release's logical component — it is NOT a caller
-# input, and it is capture-time identity policy only, never a platform/target universe.
+# publication results are EVIDENCE the caller passes. Certification component_policy is
+# PEP-OWNED and resolved internally from utillities/pep_capture_policy.json (schema
+# pep-capture-policy/1, filename/schema retained historically) by the release's logical
+# component — it is NOT a caller input. That file is the SHARED PEP-owned component/package
+# authority (which package names belong to each component), also consumed by invocation
+# planning and per-run request validation; expected_binary_version in it is capture-time
+# identity policy. It never carries a platform/OS/arch/PG universe — that stays owned by the
+# execution/container catalogs.
 on:
   workflow_call:
     inputs:

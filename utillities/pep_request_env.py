@@ -2,10 +2,19 @@
 an explicit dict, defaults to os.environ) so it unit-tests without Docker."""
 from __future__ import annotations
 import os
+import sys as _sys
 import importlib.util as _ilu
 from pathlib import Path as _Path
-_spec = _ilu.spec_from_file_location("pep_request", str(_Path(__file__).with_name("pep_request.py")))
-_pr = _ilu.module_from_spec(_spec); _spec.loader.exec_module(_pr)
+# Reuse an already-loaded pep_request module when present so every PEP consumer and the tests share
+# ONE authoritative instance (and its COMPONENT_PACKAGES) and it is never replaced; otherwise load it
+# by path and register it. Standalone `python pep_request_env.py` still loads it on first use.
+if "pep_request" in _sys.modules:
+    _pr = _sys.modules["pep_request"]
+else:
+    _spec = _ilu.spec_from_file_location("pep_request", str(_Path(__file__).with_name("pep_request.py")))
+    _pr = _ilu.module_from_spec(_spec)
+    _sys.modules["pep_request"] = _pr
+    _spec.loader.exec_module(_pr)
 
 
 def build_request_from_env(env=None):

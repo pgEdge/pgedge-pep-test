@@ -14,13 +14,18 @@ rz = importlib.util.module_from_spec(_spec)
 sys.modules[_spec.name] = rz
 _spec.loader.exec_module(rz)
 
-# Load pep_request.py's allowlists so the resolver's validation stays in
-# lockstep with the request validator (single source of truth, no drift).
-_pr_spec = importlib.util.spec_from_file_location(
-    "pep_request", str(Path(__file__).with_name("pep_request.py")))
-_pr = importlib.util.module_from_spec(_pr_spec)
-sys.modules[_pr_spec.name] = _pr
-_pr_spec.loader.exec_module(_pr)
+# Load pep_request.py's allowlists so the resolver's validation stays in lockstep with the
+# request validator (single source of truth, no drift). Reuse an already-loaded pep_request
+# module when present so every consumer shares ONE authoritative instance (and its
+# COMPONENT_PACKAGES) and it is never replaced; otherwise load it by path and register it.
+if "pep_request" in sys.modules:
+    _pr = sys.modules["pep_request"]
+else:
+    _pr_spec = importlib.util.spec_from_file_location(
+        "pep_request", str(Path(__file__).with_name("pep_request.py")))
+    _pr = importlib.util.module_from_spec(_pr_spec)
+    sys.modules[_pr_spec.name] = _pr
+    _pr_spec.loader.exec_module(_pr)
 
 _ALLOW = {"repo": set(_pr.VALID_CHANNELS), "scenario": set(_pr.VALID_SCENARIOS)}
 _OUT = Path("test-logs/resolved-config.json")

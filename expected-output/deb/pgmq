@@ -1,7 +1,7 @@
 /usr/lib/postgresql/18/sbom/pgmq-sbom.json
 /usr/lib/postgresql/18/sbom/pgmq-sbom.json.asc
 /usr/share/doc/pgedge-postgresql-18-pgmq
-/usr/share/doc/pgedge-postgresql-18-pgmq/LICENSE.md.gz
+/usr/share/doc/pgedge-postgresql-18-pgmq/copyright
 /usr/share/doc/pgedge-postgresql-18-pgmq/README.md.gz
 /usr/share/doc/pgedge-postgresql-18-pgmq/changelog.Debian.gz
 /usr/share/postgresql/18/extension/pgmq--0.10.2--0.11.1.sql

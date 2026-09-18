@@ -1,5 +1,5 @@
 # PEP Certify Live -- TEMPORARY, throwaway live validation of the reusable certification
-# coordinator (.github/workflows/pep-certify.yml) pinned at b12dfff, before RAG integration.
+# coordinator (.github/workflows/pep-certify.yml) pinned at 95ca240 (main reconciled), before RAG integration.
 #
 # It exists ONLY on branch spike/pep-certify-live. A workflow absent from the default branch
 # cannot be started with workflow_dispatch, so it is triggered by push to its own branch only.
@@ -101,7 +101,7 @@ jobs:
   certify:
     needs: build
     if: ${{ !cancelled() }}      # a build failure must still reach the coordinator (truthful evidence)
-    uses: pgEdge/pgedge-pep-test/.github/workflows/pep-certify.yml@b12dfff97c7e57f63ce17d6b9b72972887dded88
+    uses: pgEdge/pgedge-pep-test/.github/workflows/pep-certify.yml@95ca240f3055825de9bdd5bc00e5cba6e08837fa
     permissions:
       contents: read      # nested checkouts of the pinned PEP implementation
       actions: read       # nested capture/aggregate list + download this run's artifacts by id
@@ -173,7 +173,7 @@ jobs:
 
       - name: Validate combined evidence, six-leg distribution, provenance and ledger sanitization
         env:
-          PIN: b12dfff97c7e57f63ce17d6b9b72972887dded88
+          PIN: 95ca240f3055825de9bdd5bc00e5cba6e08837fa
           THIS_RUN: ${{ github.run_id }}
         run: |
           set -euo pipefail

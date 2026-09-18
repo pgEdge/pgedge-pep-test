@@ -387,7 +387,7 @@ def test_verify_license_file(container_name, container_type):
     if container_type == "rhel":
         license_path = f"/usr/share/licenses/{package}/LICENSE"
     else:  # deb
-        license_path = f"/usr/share/doc/{package}/LICENSE.md.gz"
+        license_path = f"/usr/share/doc/{package}/copyright"
 
     print(f"\n--- Verifying license file {license_path} on {container_name} ({container_type}) ---")
 

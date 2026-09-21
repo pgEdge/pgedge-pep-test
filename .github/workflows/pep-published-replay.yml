@@ -1,0 +1,380 @@
+# PEP PUBLISHED-PACKAGE REPLAY -- NOT A RELEASE (spike; workflow_call only).
+#
+# A controlled replay that CERTIFIES already-published packages through the real
+# pinned coordinator WITHOUT building, publishing, tagging or releasing anything:
+#
+#   plan (validate matrices) -> retrieve per family -> receipts -> reconcile
+#     (all-or-nothing) -> pep-certify (full/observe) -> nested-marker acceptance -> report
+#
+# It retrieves the EXACT published runtime package for each detector cell from a
+# repository channel, inspects it, uploads it as a same-run package artifact,
+# generates the genuine pep-receipt/2, and reconciles per family. publication is
+# SYNTHESIZED from verified repository availability (never a real publish); the
+# fact that this is a replay lives only in the replay-metadata artifact, the
+# workflow identity and the summary -- never inside release_intent.
+#
+# Reuse is delivered as tested PEP-owned Python helpers invoked from a PEP self-
+# checkout (NOT a bespoke composite action): local `./` actions in a reusable
+# workflow resolve to the CALLER, so the shipping pep-package-receipt action is
+# referenced by ABSOLUTE SHA and the fetch/reconcile/accept logic runs from the
+# checked-out helpers. Two independent pins: THIS workflow + its helpers are
+# pinned by the consumer to the reviewed PEP spike SHA (self-resolved via
+# job.workflow_sha for checkouts); the certification implementation is pinned
+# ABSOLUTELY to 1081b32fcefdcf07a9f1d23e4c9cdf73bc9e121c.
+name: PEP Published-Package Replay (NOT A RELEASE)
+
+on:
+  workflow_call:
+    inputs:
+      rpm_matrix:        {required: true, type: string}   # detector rpm_matrix JSON ({"include":[...]})
+      deb_matrix:        {required: true, type: string}   # detector deb_matrix JSON ({"include":[...]})
+      logical_component: {required: true, type: string}   # e.g. rag; active package resolved from PEP policy
+      intended_version:  {required: true, type: string}   # e.g. 2.0.0
+      intended_buildnum: {required: true, type: string}   # e.g. 1
+      effective_tag:     {required: true, type: string}   # e.g. v2.0.0
+      channel:           {required: true, type: string}   # release | staging | daily
+    secrets:
+      DOCKERHUB_USERNAME: {required: false}   # optional; only reduces full-mode image pull rate limits
+      DOCKERHUB_TOKEN:    {required: false}
+    outputs:
+      certification_conclusion: {value: "${{ jobs.certify.outputs.certification_conclusion }}"}
+      certification_state:      {value: "${{ jobs.certify.outputs.certification_state }}"}
+      execution_status:         {value: "${{ jobs.certify.outputs.execution_status }}"}
+      test_verdict:             {value: "${{ jobs.certify.outputs.test_verdict }}"}
+      coverage_status:          {value: "${{ jobs.certify.outputs.coverage_status }}"}
+      reason_code:              {value: "${{ jobs.certify.outputs.reason_code }}"}
+      publication_results:      {value: "${{ jobs.reconcile.outputs.publication_results }}"}
+
+permissions: {}
+
+jobs:
+  # --- 0. identity: resolve THIS workflow's own commit (the spike SHA) ---------
+  # job.workflow_sha is the reusable workflow's own commit (github.workflow_sha is
+  # the caller's). The pinned actionlint's context model lags GitHub and flags
+  # job.workflow_sha; the Self-Test suppresses ONLY that exact property.
+  identity:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions: {}
+    outputs:
+      pep_ref: ${{ steps.id.outputs.pep_ref }}
+    steps:
+      - name: Resolve this workflow's own commit SHA
+        id: id
+        env:
+          WF_SHA: ${{ job.workflow_sha }}
+        run: |
+          set -euo pipefail
+          if ! printf '%s' "${WF_SHA:-}" | grep -Eq '^[0-9a-f]{40}$'; then
+            echo "::error::job.workflow_sha is not a full 40-hex commit SHA (${WF_SHA:-<empty>}); failing closed" >&2
+            exit 1
+          fi
+          echo "pep_ref=${WF_SHA}" >> "$GITHUB_OUTPUT"
+
+  # --- 1. plan: validate BOTH matrices before any retrieval; derive presence ---
+  plan:
+    needs: identity
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    outputs:
+      has_rpm: ${{ steps.validate.outputs.has_rpm }}
+      has_deb: ${{ steps.validate.outputs.has_deb }}
+      rpm_count: ${{ steps.validate.outputs.rpm_count }}
+      deb_count: ${{ steps.validate.outputs.deb_count }}
+    steps:
+      - name: Checkout PEP implementation (self, pinned)
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803  # v6.1.0
+        with:
+          repository: pgEdge/pgedge-pep-test
+          ref: ${{ needs.identity.outputs.pep_ref }}
+      - name: Set up Python (pinned)
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1  # v6.3.0
+        with: {python-version: "3.11"}
+      - name: Validate matrices + release identity; derive family presence
+        id: validate
+        env:
+          RPM_MATRIX: ${{ inputs.rpm_matrix }}
+          DEB_MATRIX: ${{ inputs.deb_matrix }}
+          LOGICAL_COMPONENT: ${{ inputs.logical_component }}
+          VERSION: ${{ inputs.intended_version }}
+          BUILDNUM: ${{ inputs.intended_buildnum }}
+          TAG: ${{ inputs.effective_tag }}
+          CHANNEL: ${{ inputs.channel }}
+        run: python3 utillities/pep_replay_reconcile.py validate
+
+  # --- 2a. retrieve RPM cells (skipped cleanly when the family is empty) -------
+  retrieve-rpm:
+    needs: [identity, plan]
+    if: ${{ needs.plan.outputs.has_rpm == 'true' }}
+    name: 'Fetch RPM (${{ matrix.image }} ${{ matrix.arch }}) [pep-cell:${{ matrix.cell_id }}]'
+    runs-on: ${{ matrix.arch == 'arm64' && 'ubuntu-24.04-arm' || 'ubuntu-latest' }}
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(inputs.rpm_matrix) }}
+    steps:
+      - name: Checkout PEP implementation (self, pinned)
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803  # v6.1.0
+        with:
+          repository: pgEdge/pgedge-pep-test
+          ref: ${{ needs.identity.outputs.pep_ref }}
+      - name: Set up Python (pinned)
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1  # v6.3.0
+        with: {python-version: "3.11"}
+      - name: Retrieve + verify exact package
+        env:
+          CELL_ID: ${{ matrix.cell_id }}
+          IMAGE: ${{ matrix.image }}
+          ARCH: ${{ matrix.arch }}
+          FAMILY: rpm
+          LOGICAL_COMPONENT: ${{ inputs.logical_component }}
+          VERSION: ${{ inputs.intended_version }}
+          BUILDNUM: ${{ inputs.intended_buildnum }}
+          CHANNEL: ${{ inputs.channel }}
+        run: bash utillities/replay_fetch_cell.sh
+      - name: Upload package artifact
+        id: up_pkg
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
+        with:
+          name: pep-replay-pkg-r${{ github.run_number }}-a${{ github.run_attempt }}-${{ matrix.cell_id }}
+          path: fetch-out/
+          if-no-files-found: error
+          retention-days: 7
+      - name: Generate genuine pep-receipt/2 (existing shipping action)
+        id: receipt
+        uses: pgEdge/pgedge-pep-test/.github/actions/pep-package-receipt@1081b32fcefdcf07a9f1d23e4c9cdf73bc9e121c
+        with:
+          cell_id: ${{ matrix.cell_id }}
+          family: rpm
+          package_dir: fetch-out
+          package_artifact_id: ${{ steps.up_pkg.outputs.artifact-id }}
+          package_artifact_name: pep-replay-pkg-r${{ github.run_number }}-a${{ github.run_attempt }}-${{ matrix.cell_id }}
+          package_artifact_digest: ${{ steps.up_pkg.outputs.artifact-digest }}
+      - name: Write per-cell success ledger
+        env:
+          CELL_ID: ${{ matrix.cell_id }}
+          RECEIPT_NAME: ${{ steps.receipt.outputs.receipt_artifact_name }}
+        run: bash utillities/replay_write_ledger.sh rpm
+      - name: Upload ledger
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
+        with:
+          name: pep-replay-ledger-r${{ github.run_number }}-a${{ github.run_attempt }}-${{ matrix.cell_id }}
+          path: ledger-out/
+          if-no-files-found: error
+          retention-days: 7
+
+  # --- 2b. retrieve DEB cells (skipped cleanly when the family is empty) -------
+  retrieve-deb:
+    needs: [identity, plan]
+    if: ${{ needs.plan.outputs.has_deb == 'true' }}
+    name: 'Fetch DEB (${{ matrix.image }} ${{ matrix.arch }}) [pep-cell:${{ matrix.cell_id }}]'
+    runs-on: ${{ matrix.arch == 'arm64' && 'ubuntu-24.04-arm' || 'ubuntu-latest' }}
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(inputs.deb_matrix) }}
+    steps:
+      - name: Checkout PEP implementation (self, pinned)
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803  # v6.1.0
+        with:
+          repository: pgEdge/pgedge-pep-test
+          ref: ${{ needs.identity.outputs.pep_ref }}
+      - name: Set up Python (pinned)
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1  # v6.3.0
+        with: {python-version: "3.11"}
+      - name: Retrieve + verify exact package
+        env:
+          CELL_ID: ${{ matrix.cell_id }}
+          IMAGE: ${{ matrix.image }}
+          ARCH: ${{ matrix.arch }}
+          FAMILY: deb
+          LOGICAL_COMPONENT: ${{ inputs.logical_component }}
+          VERSION: ${{ inputs.intended_version }}
+          BUILDNUM: ${{ inputs.intended_buildnum }}
+          CHANNEL: ${{ inputs.channel }}
+        run: bash utillities/replay_fetch_cell.sh
+      - name: Upload package artifact
+        id: up_pkg
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
+        with:
+          name: pep-replay-pkg-r${{ github.run_number }}-a${{ github.run_attempt }}-${{ matrix.cell_id }}
+          path: fetch-out/
+          if-no-files-found: error
+          retention-days: 7
+      - name: Generate genuine pep-receipt/2 (existing shipping action)
+        id: receipt
+        uses: pgEdge/pgedge-pep-test/.github/actions/pep-package-receipt@1081b32fcefdcf07a9f1d23e4c9cdf73bc9e121c
+        with:
+          cell_id: ${{ matrix.cell_id }}
+          family: deb
+          package_dir: fetch-out
+          package_artifact_id: ${{ steps.up_pkg.outputs.artifact-id }}
+          package_artifact_name: pep-replay-pkg-r${{ github.run_number }}-a${{ github.run_attempt }}-${{ matrix.cell_id }}
+          package_artifact_digest: ${{ steps.up_pkg.outputs.artifact-digest }}
+      - name: Write per-cell success ledger
+        env:
+          CELL_ID: ${{ matrix.cell_id }}
+          RECEIPT_NAME: ${{ steps.receipt.outputs.receipt_artifact_name }}
+        run: bash utillities/replay_write_ledger.sh deb
+      - name: Upload ledger
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
+        with:
+          name: pep-replay-ledger-r${{ github.run_number }}-a${{ github.run_attempt }}-${{ matrix.cell_id }}
+          path: ledger-out/
+          if-no-files-found: error
+          retention-days: 7
+
+  # --- 3. reconcile: per-family all-or-nothing (uses matrix-job RESULTS too) ---
+  reconcile:
+    needs: [identity, plan, retrieve-rpm, retrieve-deb]
+    if: ${{ always() }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      actions: read
+    outputs:
+      release_intent: ${{ steps.compose.outputs.release_intent }}
+      publication_results: ${{ steps.compose.outputs.publication_results }}
+      expected_cells: ${{ steps.compose.outputs.expected_cells }}
+    steps:
+      - name: Checkout PEP implementation (self, pinned)
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803  # v6.1.0
+        with:
+          repository: pgEdge/pgedge-pep-test
+          ref: ${{ needs.identity.outputs.pep_ref }}
+      - name: Set up Python (pinned)
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1  # v6.3.0
+        with: {python-version: "3.11"}
+      - name: Download all per-cell ledgers (this run + attempt)
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131  # v7.0.0
+        with:
+          pattern: pep-replay-ledger-r${{ github.run_number }}-a${{ github.run_attempt }}-*
+          path: ledgers
+          merge-multiple: true
+          github-token: ${{ github.token }}
+      - name: Reconcile + compose certification inputs
+        id: compose
+        env:
+          RPM_MATRIX: ${{ inputs.rpm_matrix }}
+          DEB_MATRIX: ${{ inputs.deb_matrix }}
+          LOGICAL_COMPONENT: ${{ inputs.logical_component }}
+          VERSION: ${{ inputs.intended_version }}
+          BUILDNUM: ${{ inputs.intended_buildnum }}
+          TAG: ${{ inputs.effective_tag }}
+          CHANNEL: ${{ inputs.channel }}
+          RPM_JOB_RESULT: ${{ needs.retrieve-rpm.result }}
+          DEB_JOB_RESULT: ${{ needs.retrieve-deb.result }}
+          LEDGER_DIR: ledgers
+          OUT_DIR: recon-out
+        run: bash utillities/replay_reconcile_step.sh
+      - name: Upload replay metadata (separate audit artifact)
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
+        with:
+          name: pep-replay-metadata-r${{ github.run_number }}-a${{ github.run_attempt }}
+          path: recon-out/replay-metadata.json
+          if-no-files-found: error
+          retention-days: 14
+
+  # --- 4. certify: the REAL coordinator, full mode, observe policy -------------
+  certify:
+    needs: [reconcile]
+    if: ${{ always() && needs.reconcile.result == 'success' }}
+    permissions:
+      contents: read
+      actions: read
+    uses: pgEdge/pgedge-pep-test/.github/workflows/pep-certify.yml@1081b32fcefdcf07a9f1d23e4c9cdf73bc9e121c
+    with:
+      rpm_matrix: ${{ inputs.rpm_matrix }}
+      deb_matrix: ${{ inputs.deb_matrix }}
+      release_intent: ${{ needs.reconcile.outputs.release_intent }}
+      publication_results: ${{ needs.reconcile.outputs.publication_results }}
+      enforcement: observe
+      execution_mode: full
+    secrets:
+      DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+      DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+
+  # --- 5. accept: automated nested-marker acceptance ---------------------------
+  accept:
+    needs: [identity, reconcile, certify]
+    if: ${{ always() && needs.certify.result != 'skipped' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      actions: read
+    steps:
+      - name: Checkout PEP implementation (self, pinned)
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803  # v6.1.0
+        with:
+          repository: pgEdge/pgedge-pep-test
+          ref: ${{ needs.identity.outputs.pep_ref }}
+      - name: Set up Python (pinned)
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1  # v6.3.0
+        with: {python-version: "3.11"}
+      - name: Assert nested-marker acceptance from same-run evidence
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EXPECTED_CELLS: ${{ needs.reconcile.outputs.expected_cells }}
+        run: bash utillities/replay_accept_step.sh
+
+  # --- 6. report: developer-facing summary (never fails the run) ---------------
+  report:
+    needs: [plan, reconcile, certify, accept]
+    if: ${{ always() }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions: {}
+    steps:
+      - name: Write summary
+        env:
+          HAS_RPM: ${{ needs.plan.outputs.has_rpm }}
+          HAS_DEB: ${{ needs.plan.outputs.has_deb }}
+          RECON_RESULT: ${{ needs.reconcile.result }}
+          CERTIFY_RESULT: ${{ needs.certify.result }}
+          ACCEPT_RESULT: ${{ needs.accept.result }}
+          PUBLICATION: ${{ needs.reconcile.outputs.publication_results }}
+          CERT_CONCLUSION: ${{ needs.certify.outputs.certification_conclusion }}
+          CERT_STATE: ${{ needs.certify.outputs.certification_state }}
+          EXEC_STATUS: ${{ needs.certify.outputs.execution_status }}
+          TEST_VERDICT: ${{ needs.certify.outputs.test_verdict }}
+          COVERAGE_STATUS: ${{ needs.certify.outputs.coverage_status }}
+          REASON_CODE: ${{ needs.certify.outputs.reason_code }}
+        run: |
+          {
+            echo "## PEP Published-Package Replay (NOT A RELEASE)"
+            echo ""
+            echo "Controlled replay of already-published packages through the real pinned coordinator."
+            echo "This run did **not** build, publish, tag or release anything; publication was"
+            echo "synthesized from verified repository availability."
+            echo ""
+            echo "families present: rpm=${HAS_RPM} deb=${HAS_DEB}"
+            echo ""
+            echo "| Phase | Result |"
+            echo "|---|---|"
+            echo "| reconcile | ${RECON_RESULT} |"
+            echo "| certify   | ${CERTIFY_RESULT} |"
+            echo "| accept    | ${ACCEPT_RESULT} |"
+            echo ""
+            echo "publication_results (synthesized from retrieval): \`${PUBLICATION}\`"
+            echo ""
+            echo "| Certification axis | Value |"
+            echo "|---|---|"
+            echo "| certification_conclusion | ${CERT_CONCLUSION} |"
+            echo "| certification_state | ${CERT_STATE} |"
+            echo "| execution_status | ${EXEC_STATUS} |"
+            echo "| test_verdict | ${TEST_VERDICT} |"
+            echo "| coverage_status | ${COVERAGE_STATUS} |"
+            echo "| reason_code | ${REASON_CODE} |"
+            echo ""
+            echo "_coverage_status vocabulary is complete | partial | none._"
+            echo "_Policy is observe (report-only): a product failure or partial coverage is recorded"
+            echo "but does not fail the workflow._"
+          } >> "$GITHUB_STEP_SUMMARY"

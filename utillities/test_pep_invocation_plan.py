@@ -281,12 +281,14 @@ def planned_cell(cell_id, targets=(), *, build_state="available", evidence=None,
     return c
 
 
-def member(name, *reasons, cls="runtime", native=None, sha=None):
+def member(name, *reasons, cls="runtime", native=None, sha=None, path=None):
     m = {"package_name": name, "package_class": cls, "selected": not reasons}
     if native is not None:
         m["native_arch"] = native
     if sha is not None:
         m["sha256"] = sha
+    if path is not None:
+        m["artifact_member_path"] = path
     if reasons:
         m["exclusion_reasons"] = list(reasons)
     return m
@@ -347,14 +349,15 @@ def test_built_cell_without_a_certifiable_target_is_one_cell_gap():
 
 
 def test_each_rejected_allowed_file_beside_a_valid_target_is_one_member_gap():
-    wrong_arch = member(RAG_PACKAGE, "arch_mismatch", native="aarch64", sha="c" * 64)
-    members = [member(RAG_PACKAGE, native="x86_64", sha="a" * 64),                # the selected target
+    wrong_arch = member(RAG_PACKAGE, "arch_mismatch", native="aarch64", sha="c" * 64, path="b.aarch64.rpm")
+    members = [member(RAG_PACKAGE, native="x86_64", sha="a" * 64, path="a.x86_64.rpm"),  # the selected target
                wrong_arch,                                   # same NAME, distinct file: still uncertified
-               dict(wrong_arch),                             # the same file recorded twice: one gap
-               member("pgedge-rag-server2-dbgsym", "non_runtime", cls="debug"),  # policy: never a gap
-               member("unrelated-tool", "package_not_allowed"),                # policy: never a gap
-               member("pgedge-rag-server", "missing_checksum", native="x86_64"),
-               member("pgedge-rag-server", "invalid_checksum", "missing_version", native="x86_64", sha="e" * 64)]
+               dict(wrong_arch, artifact_member_path="c.aarch64.rpm"),   # same metadata, another file
+               member("pgedge-rag-server2-dbgsym", "non_runtime", cls="debug", path="dbg.rpm"),  # policy
+               member("unrelated-tool", "package_not_allowed", path="tool.rpm"),               # policy
+               member("pgedge-rag-server", "missing_checksum", native="x86_64", path="d.x86_64.rpm"),
+               member("pgedge-rag-server", "invalid_checksum", "missing_version", native="x86_64", sha="e" * 64,
+                      path="e.x86_64.rpm")]
     t = target("rpm", "el-9", "amd64", cell_id="c")
     plan = build([planned_cell("c", [t], members=members, family="rpm", os="el-9", normalized_arch="amd64")])
     assert len(plan["matrix"]["include"]) == 3                                  # the valid target still runs
@@ -362,11 +365,15 @@ def test_each_rejected_allowed_file_beside_a_valid_target_is_one_member_gap():
            for g in plan["coverage_gaps"]]
     assert got == [
         ("member", P.GAP_MEMBER_REJECTED, "pgedge-rag-server", None,
-         "invalid_checksum,missing_version; native_arch=x86_64; sha256=eeeeeeeeeeee"),
-        ("member", P.GAP_MEMBER_REJECTED, "pgedge-rag-server", None, "missing_checksum; native_arch=x86_64"),
-        ("member", P.GAP_MEMBER_REJECTED, RAG_PACKAGE, None, "arch_mismatch; native_arch=aarch64; sha256=cccccccccccc"),
+         "invalid_checksum,missing_version; path=e.x86_64.rpm; native_arch=x86_64; sha256=eeeeeeeeeeee"),
+        ("member", P.GAP_MEMBER_REJECTED, "pgedge-rag-server", None,
+         "missing_checksum; path=d.x86_64.rpm; native_arch=x86_64"),
+        ("member", P.GAP_MEMBER_REJECTED, RAG_PACKAGE, None,
+         "arch_mismatch; path=b.aarch64.rpm; native_arch=aarch64; sha256=cccccccccccc"),
+        ("member", P.GAP_MEMBER_REJECTED, RAG_PACKAGE, None,
+         "arch_mismatch; path=c.aarch64.rpm; native_arch=aarch64; sha256=cccccccccccc"),
     ]
-    assert plan["counts"]["gaps_by_scope"] == {"cell": 0, "target": 0, "member": 3}
+    assert plan["counts"]["gaps_by_scope"] == {"cell": 0, "target": 0, "member": 4}
     _assert_reconciles(plan)
 
 

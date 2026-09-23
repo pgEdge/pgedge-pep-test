@@ -472,29 +472,25 @@ def _no_target_gap(cell):
 
 
 def _rejected_member_gaps(cell):
-    """Member-scope gaps for a cell that DID yield a target: one per distinct inspected FILE of an
-    allowed runtime package that the cert-plan rejected for its evidence. Policy exclusions are
-    intentional and never gaps. A valid target certifies only its own file, so a rejected file that
-    shares its package name (wrong arch, bad checksum, ...) is still uncertified and still a gap;
-    the detail carries the file's native arch and checksum prefix so such rows stay distinguishable."""
-    rejected = {}
+    """Member-scope gaps for a cell that DID yield a target: one per inspected FILE of an allowed
+    runtime package that the cert-plan rejected for its evidence. Policy exclusions are intentional
+    and never gaps. The cert-plan keeps one member record per receipt file (receipts reject duplicate
+    paths), so each rejected record is its own gap and is never merged by metadata, which distinct
+    files can share. A valid target certifies only its own file, so a rejected file sharing its
+    package name is still a gap. The detail names the file's artifact path, native arch and checksum."""
+    gaps = []
     for m in _members(cell):
         rs = _exclusions(m)
         if not rs or _POLICY_EXCLUSIONS.intersection(rs):
             continue
-        ident = tuple(m.get(k) if _nonblank_str(m.get(k)) else None
-                      for k in ("package_name", "native_arch", "version", "release", "sha256"))
-        rejected.setdefault(ident, set()).update(rs)
-    gaps = []
-    for ident in sorted(rejected, key=lambda i: tuple(v or "" for v in i)):
-        name, native, _, _, sha = ident
-        detail = ",".join(sorted(rejected[ident]))
-        if native:
-            detail += "; native_arch=%s" % native
-        if sha:
-            detail += "; sha256=%s" % sha[:12]
+        name, path, native, sha = (m.get(k) if _nonblank_str(m.get(k)) else None
+                                   for k in ("package_name", "artifact_member_path", "native_arch", "sha256"))
+        detail = ",".join(rs)
+        for label, value in (("path", path), ("native_arch", native), ("sha256", sha and sha[:12])):
+            if value:
+                detail += "; %s=%s" % (label, value)
         gaps.append(_cell_gap(cell, GAP_SCOPE_MEMBER, GAP_MEMBER_REJECTED, detail, physical_package=name))
-    return gaps
+    return gaps          # ordered by the plan-wide gap sort; each detail carries its unique path
 
 
 def _cells_structure_errors(cert_plan):

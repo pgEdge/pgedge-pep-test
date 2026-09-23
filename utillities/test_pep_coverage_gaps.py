@@ -36,14 +36,15 @@ ENABLED = {("rpm", "amd64", "rocky9"): "rocky9-amd64", ("rpm", "arm64", "rocky9"
 # --------------------------------------------------------------------------- #
 # builders: one planned cell = detector cell + its build job + its verified package artifact
 # --------------------------------------------------------------------------- #
-def pkg(family, os_token, arch, *, name=PKG, cls="runtime", release=None, sha=None, native=None):
+def pkg(family, os_token, arch, *, name=PKG, cls="runtime", release=None, sha=None, native=None, path=None):
     dist = os_token.replace("-", "") if family == "rpm" else os_token
     if native is None:
         native = {"amd64": "x86_64", "arm64": "aarch64"}[arch] if family == "rpm" else arch
-    return {"package_name": name, "epoch": None, "version": "2.0.0",
-            "release": release if release is not None else "1." + dist,
+    release = release if release is not None else "1." + dist
+    return {"package_name": name, "epoch": None, "version": "2.0.0", "release": release,
             "native_arch": native, "package_class": cls,
-            "sha256": sha if sha is not None else (name + os_token + arch).encode().hex()[:64].ljust(64, "0")}
+            "sha256": sha if sha is not None else (name + os_token + arch).encode().hex()[:64].ljust(64, "0"),
+            "artifact_member_path": path or "%s-2.0.0-%s.%s.%s" % (name, release, native, family)}
 
 
 def planned(family, os_token, arch, *, job="success", members="default"):
@@ -190,9 +191,9 @@ def test_mixed_members_policy_exclusions_are_silent_each_rejected_file_is_a_gap(
         ("cell", "deb.trixie.arm64.pkg", None, P.GAP_NO_RUNTIME_TARGET,
          "missing_checksum, non_runtime, package_not_allowed"),
         ("member", "rpm.el-9.amd64.pkg", "pgedge-rag-server", P.GAP_MEMBER_REJECTED,
-         "missing_checksum; native_arch=x86_64"),
+         "missing_checksum; path=pgedge-rag-server-2.0.0-1.el9.x86_64.rpm; native_arch=x86_64"),
         ("member", "rpm.el-9.amd64.pkg", PKG, P.GAP_MEMBER_REJECTED,
-         "arch_mismatch; native_arch=aarch64; sha256=cccccccccccc"),
+         "arch_mismatch; path=pgedge-rag-server2-2.0.0-1.el9.aarch64.rpm; native_arch=aarch64; sha256=cccccccccccc"),
     ]
     assert plan["counts"]["gaps_by_scope"] == {"cell": 1, "target": 0, "member": 2}
     assert [i["source_cell_id"] for i in plan["matrix"]["include"]] == ["pepcell.v1.rpm.el-9.amd64.pkg"]
@@ -201,14 +202,15 @@ def test_mixed_members_policy_exclusions_are_silent_each_rejected_file_is_a_gap(
 
 
 @pytest.mark.parametrize("override, detail", [
-    ({"sha256": ""}, "missing_checksum; native_arch=x86_64"),
-    ({"native_arch": "aarch64", "sha256": "c" * 64}, "arch_mismatch; native_arch=aarch64; sha256=cccccccccccc"),
-    ({"version": "", "sha256": "e" * 64}, "missing_version; native_arch=x86_64; sha256=eeeeeeeeeeee"),
+    ({"sha256": ""}, "missing_checksum; path=bad.rpm; native_arch=x86_64"),
+    ({"native_arch": "aarch64", "sha256": "c" * 64},
+     "arch_mismatch; path=bad.rpm; native_arch=aarch64; sha256=cccccccccccc"),
+    ({"version": "", "sha256": "e" * 64}, "missing_version; path=bad.rpm; native_arch=x86_64; sha256=eeeeeeeeeeee"),
 ])
 def test_valid_target_never_hides_a_distinct_rejected_file_of_the_same_package(override, detail):
     # Two VALID same-name files already block the cell (target_ambiguous); one valid file plus a
     # distinct rejected one must not quietly certify clean either, since only the valid file is tested.
-    bad = dict(pkg("rpm", "el-9", "amd64"), **override)
+    bad = dict(pkg("rpm", "el-9", "amd64", path="bad.rpm"), **override)
     cp, plan, decided = certify([planned("rpm", "el-9", "amd64", members=[pkg("rpm", "el-9", "amd64"), bad])])
     [gap] = plan["coverage_gaps"]
     assert (gap["scope"], gap["physical_package"], gap["reason"], gap["detail"]) == (
@@ -218,9 +220,32 @@ def test_valid_target_never_hides_a_distinct_rejected_file_of_the_same_package(o
     assert outcomes(decided) == PARTIAL                            # never clean_pass
 
 
+def test_rejected_files_sharing_metadata_and_checksum_stay_distinct_by_path(tmp_path):
+    # Receipts key files by artifact_member_path (duplicate paths are rejected, identical content is
+    # not), so two rejected copies with identical metadata AND checksum are two uncertified files.
+    copy = pkg("rpm", "el-9", "amd64", native="aarch64", sha="f" * 64)                 # arch_mismatch
+    cp, plan, decided = certify([planned("rpm", "el-9", "amd64", members=[
+        pkg("rpm", "el-9", "amd64"), dict(copy, artifact_member_path="copy-b.rpm"),
+        dict(copy, artifact_member_path="copy-a.rpm")])])
+    assert gaps(plan) == [
+        ("member", "rpm.el-9.amd64.pkg", PKG, P.GAP_MEMBER_REJECTED,
+         "arch_mismatch; path=copy-a.rpm; native_arch=aarch64; sha256=ffffffffffff"),
+        ("member", "rpm.el-9.amd64.pkg", PKG, P.GAP_MEMBER_REJECTED,
+         "arch_mismatch; path=copy-b.rpm; native_arch=aarch64; sha256=ffffffffffff"),
+    ]
+    assert plan["counts"]["gaps_by_scope"] == {"cell": 0, "target": 0, "member": 2}
+    assert len(plan["matrix"]["include"]) == 1                      # the valid file is still tested
+    assert_reconciles(cp, plan)
+    assert outcomes(decided) == PARTIAL                             # never clean_pass
+    result, decision = decided["gate"]
+    R.render_report(result, decision, {}, Path(tmp_path))
+    table = (Path(tmp_path) / "consolidated-report.html").read_text().split("planned but not certified", 1)[1]
+    assert "path=copy-a.rpm" in table and "path=copy-b.rpm" in table
+
+
 def test_ambiguous_runtime_packages_are_one_cell_gap():
-    dup = planned("deb", "trixie", "amd64", members=[pkg("deb", "trixie", "amd64", sha="1" * 64),
-                                                    pkg("deb", "trixie", "amd64", sha="2" * 64)])
+    dup = planned("deb", "trixie", "amd64", members=[pkg("deb", "trixie", "amd64", sha="1" * 64, path="one.deb"),
+                                                    pkg("deb", "trixie", "amd64", sha="2" * 64, path="two.deb")])
     cp, plan, decided = certify([planned("rpm", "el-9", "amd64"), dup])
     assert gaps(plan) == [("cell", "deb.trixie.amd64.pkg", None, P.GAP_TARGET_AMBIGUOUS, PKG)]
     assert_reconciles(cp, plan)

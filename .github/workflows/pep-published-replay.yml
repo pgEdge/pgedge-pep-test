@@ -20,7 +20,7 @@
 # checked-out helpers. Two independent pins: THIS workflow + its helpers are
 # pinned by the consumer to the reviewed PEP spike SHA (self-resolved via
 # job.workflow_sha for checkouts); the certification implementation is pinned
-# ABSOLUTELY to 1081b32fcefdcf07a9f1d23e4c9cdf73bc9e121c.
+# ABSOLUTELY to 6854a7b6ddf885907587dcc85bb3391932ae2fb2.
 name: PEP Published-Package Replay (NOT A RELEASE)
 
 on:
@@ -146,7 +146,7 @@ jobs:
           retention-days: 7
       - name: Generate genuine pep-receipt/2 (existing shipping action)
         id: receipt
-        uses: pgEdge/pgedge-pep-test/.github/actions/pep-package-receipt@1081b32fcefdcf07a9f1d23e4c9cdf73bc9e121c
+        uses: pgEdge/pgedge-pep-test/.github/actions/pep-package-receipt@6854a7b6ddf885907587dcc85bb3391932ae2fb2
         with:
           cell_id: ${{ matrix.cell_id }}
           family: rpm
@@ -209,7 +209,7 @@ jobs:
           retention-days: 7
       - name: Generate genuine pep-receipt/2 (existing shipping action)
         id: receipt
-        uses: pgEdge/pgedge-pep-test/.github/actions/pep-package-receipt@1081b32fcefdcf07a9f1d23e4c9cdf73bc9e121c
+        uses: pgEdge/pgedge-pep-test/.github/actions/pep-package-receipt@6854a7b6ddf885907587dcc85bb3391932ae2fb2
         with:
           cell_id: ${{ matrix.cell_id }}
           family: deb
@@ -289,7 +289,7 @@ jobs:
     permissions:
       contents: read
       actions: read
-    uses: pgEdge/pgedge-pep-test/.github/workflows/pep-certify.yml@1081b32fcefdcf07a9f1d23e4c9cdf73bc9e121c
+    uses: pgEdge/pgedge-pep-test/.github/workflows/pep-certify.yml@6854a7b6ddf885907587dcc85bb3391932ae2fb2
     with:
       rpm_matrix: ${{ inputs.rpm_matrix }}
       deb_matrix: ${{ inputs.deb_matrix }}

@@ -18,7 +18,7 @@ from pep_cert_plan import _expected_native
 _REPO = Path(__file__).resolve().parent.parent
 _WF = _REPO / ".github" / "workflows" / "pep-published-replay.yml"
 _TEXT = _WF.read_text()
-_CERT_PIN = "1081b32fcefdcf07a9f1d23e4c9cdf73bc9e121c"
+_CERT_PIN = "6854a7b6ddf885907587dcc85bb3391932ae2fb2"
 
 
 def _job_block(job):

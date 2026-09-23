@@ -26,6 +26,11 @@ Scope of this slice (nothing else):
     downstream test pins the exact package (L2a) rather than installing 'latest'.
   * Report unsupported/unmapped/uncertifiable eligible cells EXPLICITLY as coverage gaps — never
     silently drop an eligible package, and never return an apparently-complete empty matrix.
+  * Account for EVERY planned cell (the cert-plan cells are the build intent): a cell with no
+    selected target is one cell-scope gap, a selected target that is not runnable in this mode is
+    one target-scope gap, and each rejected file of an allowed runtime package (in a cell that
+    still yielded a target) is one member-scope gap. Packages excluded by policy (source/debug, or
+    names the component does not ship as runtime) are intentional and never gaps.
 
 Sources of truth (this module does NOT re-encode a fixed platform universe):
   * OS / architecture / currently-runnable containers: ``configuration/containers_list.json``,
@@ -106,6 +111,26 @@ GAP_UNSUPPORTED_COMPONENT = "unsupported_component"  # logical component/physica
 GAP_IDENTITY_UNCONFIRMED = "identity_unconfirmed"   # package_identity_state != 'confirmed'
 GAP_PACKAGE_HAS_EPOCH = "package_has_epoch"         # epoch-bearing package (not pinnable as version-release)
 GAP_MALFORMED_TARGET = "malformed_target"           # a required field is missing/blank/wrong-typed
+
+# Gap SCOPE: which planned unit went uncertified. Every planned cell yields >=1 invocation or >=1
+# gap, and every selected target is covered or carries exactly one target-scope gap.
+GAP_SCOPE_CELL = "cell"        # a planned cell that yielded no selected target
+GAP_SCOPE_TARGET = "target"    # a selected target that is not runnable, or runnable but not executable
+GAP_SCOPE_MEMBER = "member"    # a rejected allowed runtime file in a cell that still has a target
+
+# Cell-scope reasons. A build that never became available is ``build_<build_state>`` (the cert-plan's
+# own vocabulary), except a SUCCESSFUL build job without a verified package artifact (absent,
+# rejected or ambiguous receipt): the build ran but its evidence was lost.
+GAP_PACKAGE_EVIDENCE_MISSING = "package_evidence_missing"
+GAP_TARGET_AMBIGUOUS = "target_ambiguous"           # >1 package with the same name + arch in one cell
+GAP_NO_RUNTIME_TARGET = "no_runtime_target"         # built, but no allowed runtime package with valid evidence
+# A selected target not runnable in the requested mode; the cert-plan's reason is the gap detail.
+GAP_TARGET_INELIGIBLE = "target_ineligible"
+# An allowed runtime package the cert-plan rejected for its evidence; its exclusion reasons are the detail.
+GAP_MEMBER_REJECTED = "member_rejected"
+
+# cert-plan/1 member exclusions that are deliberate policy, not evidence defects: never gaps.
+_POLICY_EXCLUSIONS = frozenset({"non_runtime", "package_not_allowed"})
 
 
 def _nonblank_str(x):
@@ -387,6 +412,7 @@ def _invocation(target, release, provenance, alias, pg_major):
 
 def _gap(target, reason, detail=None):
     return {
+        "scope": GAP_SCOPE_TARGET,
         "cell_id": target.get("_cell_id"),
         "target_id": target.get("target_id"),
         "family": target.get("family"),
@@ -398,38 +424,127 @@ def _gap(target, reason, detail=None):
     }
 
 
+def _cell_gap(cell, scope, reason, detail=None, physical_package=None):
+    return {
+        "scope": scope,
+        "cell_id": cell.get("cell_id"),
+        "target_id": None,
+        "family": cell.get("family"),
+        "os": cell.get("os"),
+        "arch": cell.get("normalized_arch"),
+        "physical_package": physical_package,
+        "reason": reason,
+        "detail": detail,
+    }
+
+
+def _members(cell):
+    members = cell.get("members")
+    return [m for m in members if isinstance(m, dict)] if isinstance(members, list) else []
+
+
+def _exclusions(member):
+    rs = member.get("exclusion_reasons")
+    return sorted({r for r in rs if isinstance(r, str)}) if isinstance(rs, list) else []
+
+
+def _no_target_gap(cell):
+    """The single cell-scope gap for a planned cell that yielded no selected target."""
+    state = cell.get("build_state")
+    if state != "available":
+        ev = cell.get("build_evidence") if isinstance(cell.get("build_evidence"), dict) else {}
+        if (state == "incomplete" and ev.get("latest_status") == "completed"
+                and ev.get("latest_conclusion") == "success" and ev.get("artifact_present") is not True):
+            return _cell_gap(cell, GAP_SCOPE_CELL, GAP_PACKAGE_EVIDENCE_MISSING,
+                             "build job succeeded but no verified package artifact")
+        detail = next((v for v in (cell.get("ambiguity_reason"), ev.get("invalid_reason"),
+                                   ev.get("latest_conclusion"), ev.get("latest_status"))
+                       if _nonblank_str(v)), None)
+        return _cell_gap(cell, GAP_SCOPE_CELL, "build_%s" % (state if _nonblank_str(state) else "unknown"),
+                         detail)
+    members = _members(cell)
+    if cell.get("target_selection_state") == "target_ambiguous":
+        names = sorted({str(m.get("package_name")) for m in members if not _exclusions(m)})
+        return _cell_gap(cell, GAP_SCOPE_CELL, GAP_TARGET_AMBIGUOUS, ", ".join(names) or None)
+    reasons = sorted({r for m in members for r in _exclusions(m)})
+    return _cell_gap(cell, GAP_SCOPE_CELL, GAP_NO_RUNTIME_TARGET,
+                     ", ".join(reasons) or "no inspected packages")
+
+
+def _rejected_member_gaps(cell):
+    """Member-scope gaps for a cell that DID yield a target: one per distinct inspected FILE of an
+    allowed runtime package that the cert-plan rejected for its evidence. Policy exclusions are
+    intentional and never gaps. A valid target certifies only its own file, so a rejected file that
+    shares its package name (wrong arch, bad checksum, ...) is still uncertified and still a gap;
+    the detail carries the file's native arch and checksum prefix so such rows stay distinguishable."""
+    rejected = {}
+    for m in _members(cell):
+        rs = _exclusions(m)
+        if not rs or _POLICY_EXCLUSIONS.intersection(rs):
+            continue
+        ident = tuple(m.get(k) if _nonblank_str(m.get(k)) else None
+                      for k in ("package_name", "native_arch", "version", "release", "sha256"))
+        rejected.setdefault(ident, set()).update(rs)
+    gaps = []
+    for ident in sorted(rejected, key=lambda i: tuple(v or "" for v in i)):
+        name, native, _, _, sha = ident
+        detail = ",".join(sorted(rejected[ident]))
+        if native:
+            detail += "; native_arch=%s" % native
+        if sha:
+            detail += "; sha256=%s" % sha[:12]
+        gaps.append(_cell_gap(cell, GAP_SCOPE_MEMBER, GAP_MEMBER_REJECTED, detail, physical_package=name))
+    return gaps
+
+
+def _cells_structure_errors(cert_plan):
+    """A resolved cert-plan always carries identified cell objects with target-object lists; any
+    other shape would let a planned cell vanish unaccounted, so it fails the plan closed."""
+    cells = cert_plan.get("cells")
+    if not isinstance(cells, list):
+        return ["source cert-plan cells must be a list"]
+    errors = []
+    for i, cell in enumerate(cells):
+        if not isinstance(cell, dict) or not _nonblank_str(cell.get("cell_id")):
+            errors.append("source cert-plan cells[%d] must be an object with a nonblank cell_id" % i)
+        elif not (isinstance(cell.get("targets"), list)
+                  and all(isinstance(t, dict) for t in cell["targets"])):
+            errors.append("source cert-plan cells[%d].targets must be a list of objects" % i)
+    return errors
+
+
 # --------------------------------------------------------------------------- #
 # top-level pure planner
 # --------------------------------------------------------------------------- #
-def _eligible_targets(cert_plan, execution_mode):
-    """Yield runnable target dicts, each tagged with its owning ``_cell_id`` (never mutates input).
+def _account_cells(cert_plan, execution_mode):
+    """Split every planned cell into runnable targets and coverage gaps (never mutates input).
 
-    A target runs when its STRICT ``eligibility == 'eligible'`` (certifiable; either mode). In
-    ``preview`` mode ONLY, a target also runs when its separate additive ``preview_eligibility ==
-    'eligible'`` (a simulated, built + identity-confirmed, truthfully-unpublished dry-run target).
-    ``full`` mode never runs preview-only targets. The caller (build_invocation_plan) has already
-    verified the cert-plan's stamped mode equals ``execution_mode``, so a preview run here implies a
-    preview-stamped plan."""
+    Returns ``(runnable, gaps, n_selected)``. Each runnable target is tagged with its owning
+    ``_cell_id``. A target runs when its STRICT ``eligibility == 'eligible'`` (certifiable; either
+    mode). In ``preview`` mode ONLY, a target also runs when its separate additive
+    ``preview_eligibility == 'eligible'`` (a simulated, built + identity-confirmed,
+    truthfully-unpublished dry-run target); a non-runnable preview target reports that preview
+    reason. ``full`` mode never runs preview-only targets. The caller (build_invocation_plan) has
+    already verified the stamped mode and the cell structure."""
     preview = (execution_mode == "preview")
-    cells = cert_plan.get("cells")
-    if not isinstance(cells, list):
-        return
-    for cell in cells:
-        if not isinstance(cell, dict):
+    reason_key = "preview_eligibility_reason" if preview else "eligibility_reason"
+    runnable, gaps, n_selected = [], [], 0
+    for cell in cert_plan["cells"]:
+        targets = cell["targets"]
+        if not targets:
+            gaps.append(_no_target_gap(cell))
             continue
-        cid = cell.get("cell_id")
-        targets = cell.get("targets")
-        if not isinstance(targets, list):
-            continue
+        n_selected += len(targets)
         for t in targets:
-            if not isinstance(t, dict):
-                continue
-            runnable = (t.get("eligibility") == "eligible") \
-                or (preview and t.get("preview_eligibility") == "eligible")
-            if runnable:
-                tagged = dict(t)
-                tagged["_cell_id"] = cid
-                yield tagged
+            tagged = dict(t)
+            tagged["_cell_id"] = cell["cell_id"]
+            if (t.get("eligibility") == "eligible") or (preview and t.get("preview_eligibility") == "eligible"):
+                runnable.append(tagged)
+            else:
+                detail = t.get(reason_key)
+                gaps.append(_gap(tagged, GAP_TARGET_INELIGIBLE, detail if _nonblank_str(detail) else None))
+        gaps.extend(_rejected_member_gaps(cell))
+    return runnable, gaps, n_selected
 
 
 def build_invocation_plan(cert_plan, exec_catalog, enabled_platforms, *,
@@ -493,16 +608,17 @@ def build_invocation_plan(cert_plan, exec_catalog, enabled_platforms, *,
     bn = release.get("intended_buildnum")
     if bn is not None and str(bn).strip() != "" and not _pr._BUILDNUM_RE.match(str(bn).strip()):
         errors.append("release intended_buildnum %r is malformed" % (bn,))
+    errors.extend(_cells_structure_errors(cert_plan))
 
     # Fail closed BEFORE emitting any invocation: a bad source/catalog/release must never yield a matrix.
     if errors:
         return _unresolved(errors, release=release, provenance=provenance,
                            supported_pgs=supported_pgs, execution_mode=execution_mode)
 
-    invocations, gaps = [], []
-    eligible_n = 0
-    for target in _eligible_targets(cert_plan, execution_mode):
-        eligible_n += 1
+    invocations = []
+    runnable, gaps, selected_n = _account_cells(cert_plan, execution_mode)
+    covered_n = 0
+    for target in runnable:
         family = target.get("family")
         arch = target.get("execution_arch")
         os_token = target.get("os")
@@ -525,6 +641,7 @@ def build_invocation_plan(cert_plan, exec_catalog, enabled_platforms, *,
         if plat_gap is not None:
             gaps.append(_gap(target, plat_gap, detail=str(os_token)))
             continue
+        covered_n += 1
         for alias in aliases:
             for pg in pgs:
                 invocations.append(_invocation(target, release, provenance, alias, pg))
@@ -550,8 +667,14 @@ def build_invocation_plan(cert_plan, exec_catalog, enabled_platforms, *,
                            execution_mode=execution_mode)
 
     invocations.sort(key=lambda x: x["invocation_id"])
-    gaps.sort(key=lambda g: (str(g.get("cell_id") or ""), str(g.get("target_id") or ""), g.get("reason") or ""))
-    covered_targets = eligible_n - len(gaps)
+    gaps.sort(key=lambda g: (str(g.get("cell_id") or ""), str(g.get("target_id") or ""),
+                             str(g.get("physical_package") or ""), g.get("reason") or "",
+                             str(g.get("detail") or "")))
+    # Every count is tallied from the plan itself, never by subtracting gaps. They reconcile:
+    # selected_targets == covered_targets + gaps_by_scope.target, and gaps_by_scope.cell is the
+    # number of planned cells that yielded no selected target.
+    by_scope = {s: sum(1 for g in gaps if g["scope"] == s)
+                for s in (GAP_SCOPE_CELL, GAP_SCOPE_TARGET, GAP_SCOPE_MEMBER)}
 
     return {
         "schema": SCHEMA,
@@ -570,9 +693,12 @@ def build_invocation_plan(cert_plan, exec_catalog, enabled_platforms, *,
         "matrix": {"include": invocations},
         "coverage_gaps": gaps,
         "counts": {
-            "eligible_targets": eligible_n,
-            "covered_targets": covered_targets,
+            "planned_cells": len(cert_plan["cells"]),
+            "selected_targets": selected_n,
+            "eligible_targets": len(runnable),     # runnable in the requested mode
+            "covered_targets": covered_n,          # runnable targets that produced >=1 invocation
             "coverage_gaps": len(gaps),
+            "gaps_by_scope": by_scope,
             "invocations": len(invocations),
         },
     }
@@ -597,7 +723,10 @@ def _unresolved(errors, release=None, provenance=None, supported_pgs=None, execu
         "supported_pg_majors": list(supported_pgs or []),
         "matrix": {"include": []},          # NEVER a matrix from a fail-closed plan
         "coverage_gaps": [],
-        "counts": {"eligible_targets": 0, "covered_targets": 0, "coverage_gaps": 0, "invocations": 0},
+        "counts": {"planned_cells": 0, "selected_targets": 0, "eligible_targets": 0,
+                   "covered_targets": 0, "coverage_gaps": 0,
+                   "gaps_by_scope": {GAP_SCOPE_CELL: 0, GAP_SCOPE_TARGET: 0, GAP_SCOPE_MEMBER: 0},
+                   "invocations": 0},
     }
 
 

@@ -384,6 +384,18 @@ def test_planned_coverage_gaps_are_listed_as_not_tested(tmp_path):
     assert "Not tested" in run.html and "NO ENABLED PLATFORM" in run.html and "bookworm" in run.html
 
 
+def test_cell_scope_gap_shows_dashes_not_none(tmp_path):
+    # the shape pep_invocation_plan emits for a planned cell whose build failed (no target/package)
+    gap = {"scope": "cell", "cell_id": "pepcell.v1.deb.trixie.arm64.pkg", "target_id": None,
+           "family": "deb", "os": "trixie", "arch": "arm64", "physical_package": None,
+           "reason": "build_failed", "detail": "failure"}
+    leg_artifact(tmp_path / "dl", "pep-summary-a-a1", INV_A)
+    run = pipeline(tmp_path, [planned(INV_A)], ["pep-summary-a-a1"], gaps=[gap])
+    table = run.html[run.html.index("planned but not certified"):]
+    assert "BUILD FAILED" in table and "failure" in table and "trixie" in table
+    assert "<code>—</code>" in table and ">None<" not in table
+
+
 # --------------------------------------------------------------------------- #
 # Unit tests of defensive helpers (small hand-built inputs, labelled as such)
 # --------------------------------------------------------------------------- #

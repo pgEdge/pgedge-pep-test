@@ -130,7 +130,9 @@ def test_selective_rpm_only():
     assert sorted(i["pg_major"] for i in incl) == ["16", "17", "18"]
     assert all(i["container_alias"] == "oel9-amd64" for i in incl)
     _assert_ids_workflow_valid(plan)
-    assert plan["counts"] == {"eligible_targets": 1, "covered_targets": 1, "coverage_gaps": 0, "invocations": 3}
+    assert plan["counts"] == {"planned_cells": 1, "selected_targets": 1, "eligible_targets": 1,
+                              "covered_targets": 1, "coverage_gaps": 0,
+                              "gaps_by_scope": {"cell": 0, "target": 0, "member": 0}, "invocations": 3}
 
 
 def test_selective_deb_only():
@@ -245,12 +247,19 @@ def test_unsupported_family_is_gap():
 # --------------------------------------------------------------------------- #
 # E. no eligible targets (req 7)
 # --------------------------------------------------------------------------- #
-def test_no_eligible_targets_is_empty_but_resolved():
+def test_ineligible_target_is_a_target_gap_never_silent():
     inelig = target("rpm", "el-9", "amd64", cell_id="c")
     inelig["eligibility"] = "ineligible"
+    inelig["eligibility_reason"] = "publication_publish_unconfirmed"
     plan = build([cell("c", [inelig])])
     assert plan["plan_resolved"] is True and plan["matrix"]["include"] == []
-    assert plan["counts"] == {"eligible_targets": 0, "covered_targets": 0, "coverage_gaps": 0, "invocations": 0}
+    [gap] = plan["coverage_gaps"]
+    assert (gap["scope"], gap["reason"], gap["detail"]) == (
+        "target", P.GAP_TARGET_INELIGIBLE, "publication_publish_unconfirmed")
+    assert gap["target_id"] == "c::%s" % RAG_PACKAGE and gap["physical_package"] == RAG_PACKAGE
+    assert plan["counts"] == {"planned_cells": 1, "selected_targets": 1, "eligible_targets": 0,
+                              "covered_targets": 0, "coverage_gaps": 1,
+                              "gaps_by_scope": {"cell": 0, "target": 1, "member": 0}, "invocations": 0}
 
 
 def test_eligible_but_all_gapped_is_not_silent_empty():
@@ -258,6 +267,163 @@ def test_eligible_but_all_gapped_is_not_silent_empty():
     plan = build([cell("c", [target("deb", "bullseye", "arm64", cell_id="c")])])
     assert plan["matrix"]["include"] == [] and plan["counts"]["eligible_targets"] == 1
     assert plan["counts"]["coverage_gaps"] == 1
+
+
+# --------------------------------------------------------------------------- #
+# E2. every planned cell is accounted for: cell / target / member gap scopes
+# --------------------------------------------------------------------------- #
+def planned_cell(cell_id, targets=(), *, build_state="available", evidence=None, members=(),
+                 selection="resolved", **extra):
+    c = {"cell_id": cell_id, "family": "deb", "os": "trixie", "normalized_arch": "arm64",
+         "build_state": build_state, "build_evidence": evidence or {}, "members": list(members),
+         "targets": list(targets), "target_selection_state": selection}
+    c.update(extra)
+    return c
+
+
+def member(name, *reasons, cls="runtime", native=None, sha=None):
+    m = {"package_name": name, "package_class": cls, "selected": not reasons}
+    if native is not None:
+        m["native_arch"] = native
+    if sha is not None:
+        m["sha256"] = sha
+    if reasons:
+        m["exclusion_reasons"] = list(reasons)
+    return m
+
+
+def _assert_reconciles(plan):
+    c = plan["counts"]
+    assert all(v >= 0 for v in list(c.values()) + list(c["gaps_by_scope"].values()) if isinstance(v, int))
+    assert c["covered_targets"] + c["gaps_by_scope"]["target"] == c["selected_targets"]
+    assert c["eligible_targets"] <= c["selected_targets"] and c["covered_targets"] <= c["eligible_targets"]
+    assert sum(c["gaps_by_scope"].values()) == c["coverage_gaps"] == len(plan["coverage_gaps"])
+    accounted = ({i["source_cell_id"] for i in plan["matrix"]["include"]}
+                 | {g["cell_id"] for g in plan["coverage_gaps"]})
+    assert c["planned_cells"] == len(accounted)          # every planned cell: an invocation or a gap
+
+
+@pytest.mark.parametrize("state, evidence, extra, reason, detail", [
+    ("failed", {"latest_status": "completed", "latest_conclusion": "failure"}, {},
+     "build_failed", "failure"),
+    ("never_ran", {}, {}, "build_never_ran", None),
+    ("incomplete", {"latest_status": "in_progress", "latest_conclusion": None}, {},
+     "build_incomplete", "in_progress"),
+    ("incomplete", {"latest_status": "completed", "latest_conclusion": "success", "artifact_present": False},
+     {}, P.GAP_PACKAGE_EVIDENCE_MISSING, "build job succeeded but no verified package artifact"),
+    ("ambiguous", {}, {"ambiguity_reason": "duplicate_cell_id"}, "build_ambiguous", "duplicate_cell_id"),
+])
+def test_unbuilt_cell_is_exactly_one_cell_gap(state, evidence, extra, reason, detail):
+    plan = build([planned_cell("c", build_state=state, evidence=evidence, selection="target_unresolved",
+                               **extra)])
+    [gap] = plan["coverage_gaps"]
+    assert gap == {"scope": "cell", "cell_id": "c", "target_id": None, "family": "deb", "os": "trixie",
+                   "arch": "arm64", "physical_package": None, "reason": reason, "detail": detail}
+    assert plan["counts"]["gaps_by_scope"] == {"cell": 1, "target": 0, "member": 0}
+    _assert_reconciles(plan)
+
+
+def test_built_cell_without_a_certifiable_target_is_one_cell_gap():
+    ambiguous = planned_cell("a", selection="target_ambiguous",
+                             members=[member(RAG_PACKAGE), member(RAG_PACKAGE)])
+    policy_only = planned_cell("p", selection="target_unresolved",
+                               members=[member("pgedge-rag-server2-dbgsym", "non_runtime", cls="debug"),
+                                        member("other-pkg", "package_not_allowed")])
+    rejected = planned_cell("r", selection="target_unresolved",
+                            members=[member(RAG_PACKAGE, "missing_checksum"),
+                                     member("pgedge-rag-server2-dbgsym", "non_runtime", cls="debug")])
+    empty = planned_cell("e", selection="target_unresolved")
+    plan = build([ambiguous, policy_only, rejected, empty])
+    got = {g["cell_id"]: (g["scope"], g["reason"], g["detail"]) for g in plan["coverage_gaps"]}
+    assert got == {
+        "a": ("cell", P.GAP_TARGET_AMBIGUOUS, RAG_PACKAGE),
+        "p": ("cell", P.GAP_NO_RUNTIME_TARGET, "non_runtime, package_not_allowed"),
+        # a cell with no target reports ONE cell gap; its rejected member is not a second gap
+        "r": ("cell", P.GAP_NO_RUNTIME_TARGET, "missing_checksum, non_runtime"),
+        "e": ("cell", P.GAP_NO_RUNTIME_TARGET, "no inspected packages"),
+    }
+    assert len(plan["coverage_gaps"]) == 4
+    _assert_reconciles(plan)
+
+
+def test_each_rejected_allowed_file_beside_a_valid_target_is_one_member_gap():
+    wrong_arch = member(RAG_PACKAGE, "arch_mismatch", native="aarch64", sha="c" * 64)
+    members = [member(RAG_PACKAGE, native="x86_64", sha="a" * 64),                # the selected target
+               wrong_arch,                                   # same NAME, distinct file: still uncertified
+               dict(wrong_arch),                             # the same file recorded twice: one gap
+               member("pgedge-rag-server2-dbgsym", "non_runtime", cls="debug"),  # policy: never a gap
+               member("unrelated-tool", "package_not_allowed"),                # policy: never a gap
+               member("pgedge-rag-server", "missing_checksum", native="x86_64"),
+               member("pgedge-rag-server", "invalid_checksum", "missing_version", native="x86_64", sha="e" * 64)]
+    t = target("rpm", "el-9", "amd64", cell_id="c")
+    plan = build([planned_cell("c", [t], members=members, family="rpm", os="el-9", normalized_arch="amd64")])
+    assert len(plan["matrix"]["include"]) == 3                                  # the valid target still runs
+    got = [(g["scope"], g["reason"], g["physical_package"], g["target_id"], g["detail"])
+           for g in plan["coverage_gaps"]]
+    assert got == [
+        ("member", P.GAP_MEMBER_REJECTED, "pgedge-rag-server", None,
+         "invalid_checksum,missing_version; native_arch=x86_64; sha256=eeeeeeeeeeee"),
+        ("member", P.GAP_MEMBER_REJECTED, "pgedge-rag-server", None, "missing_checksum; native_arch=x86_64"),
+        ("member", P.GAP_MEMBER_REJECTED, RAG_PACKAGE, None, "arch_mismatch; native_arch=aarch64; sha256=cccccccccccc"),
+    ]
+    assert plan["counts"]["gaps_by_scope"] == {"cell": 0, "target": 0, "member": 3}
+    _assert_reconciles(plan)
+
+
+def test_preview_non_runnable_target_reports_the_preview_reason():
+    t = target("rpm", "el-9", "amd64", cell_id="c", eligibility="ineligible",
+               preview_eligibility="ineligible")
+    t["eligibility_reason"] = "simulated_not_eligible"
+    t["preview_eligibility_reason"] = "build_failed"
+    plan = build([planned_cell("c", [t])], execution_mode="preview", simulated=True)
+    [gap] = plan["coverage_gaps"]
+    assert (gap["reason"], gap["detail"]) == (P.GAP_TARGET_INELIGIBLE, "build_failed")
+
+
+def test_mixed_plan_counts_reconcile_without_subtraction():
+    covered = target("rpm", "el-9", "amd64", cell_id="ok")
+    unsupported = target("deb", "bookworm", "amd64", cell_id="unsup")        # no enabled container
+    inelig = target("rpm", "el-9", "amd64", cell_id="pub", eligibility="ineligible")
+    plan = build([planned_cell("ok", [covered], members=[member("pgedge-rag-server", "missing_checksum")]),
+                  planned_cell("unsup", [unsupported]),
+                  planned_cell("pub", [inelig]),
+                  planned_cell("failed", build_state="failed", selection="target_unresolved")])
+    assert plan["counts"] == {"planned_cells": 4, "selected_targets": 3, "eligible_targets": 2,
+                              "covered_targets": 1, "coverage_gaps": 4,
+                              "gaps_by_scope": {"cell": 1, "target": 2, "member": 1}, "invocations": 3}
+    assert gap_reasons(plan) == sorted(["build_failed", P.GAP_NO_ENABLED_PLATFORM,
+                                        P.GAP_TARGET_INELIGIBLE, P.GAP_MEMBER_REJECTED])
+    _assert_reconciles(plan)
+
+
+def test_hostile_resolved_cells_never_raise_and_stay_accounted():
+    bad_target = target("rpm", "el-9", "amd64", cell_id="t", eligibility="ineligible")
+    bad_target["physical_package"] = ["not", "a", "name"]
+    bad_target["eligibility_reason"] = {"not": "a string"}
+    cells = [planned_cell("t", [bad_target], members=[{"package_name": ["x"], "exclusion_reasons": ["missing_checksum", 7]},
+                                                      {"package_name": None, "exclusion_reasons": "junk"}, "junk"]),
+             planned_cell("s", build_state={"odd": 1}, evidence=["x"], members="junk"),
+             planned_cell("a", selection="target_ambiguous", members=[{"package_name": ["x"]}])]
+    plan = build(cells)
+    assert plan["plan_resolved"] is True
+    assert gap_reasons(plan) == sorted(["build_unknown", P.GAP_TARGET_AMBIGUOUS, P.GAP_TARGET_INELIGIBLE,
+                                        P.GAP_MEMBER_REJECTED])
+    _assert_reconciles(plan)
+
+
+@pytest.mark.parametrize("mutate, fragment", [
+    (lambda cp: cp.__setitem__("cells", {"c": {}}), "cells must be a list"),
+    (lambda cp: cp["cells"].append("not-a-cell"), "cells[1] must be an object with a nonblank cell_id"),
+    (lambda cp: cp["cells"].append({"cell_id": " ", "targets": []}), "cells[1] must be an object"),
+    (lambda cp: cp["cells"].append({"cell_id": "x", "targets": None}), "cells[1].targets must be a list"),
+    (lambda cp: cp["cells"].append({"cell_id": "x", "targets": ["t"]}), "cells[1].targets must be a list"),
+])
+def test_malformed_cell_structure_fails_closed(mutate, fragment):
+    cp = cert_plan([cell("c", [target("rpm", "el-9", "amd64", cell_id="c")])], execution_mode="full")
+    mutate(cp)
+    plan = P.build_invocation_plan(cp, exec_catalog(), enabled(("rpm", "amd64", "oel9")))
+    assert plan["plan_resolved"] is False and plan["matrix"]["include"] == []
+    assert any(fragment in e for e in plan["errors"])
 
 
 # --------------------------------------------------------------------------- #
@@ -735,9 +901,11 @@ def test_real_catalogs_load_and_plan_rag():
         assert inv["component"] == RAG_COMPONENT and inv["package_name"] == RAG_PACKAGE
     _assert_ids_workflow_valid(plan)
     assert ids(plan) == sorted(ids(plan)) and len(ids(plan)) == len(set(ids(plan)))
-    # nothing eligible silently vanished: covered + gaps accounts for every eligible target.
+    # nothing planned silently vanished: every selected target is covered or has one target gap.
     c = plan["counts"]
-    assert c["covered_targets"] + c["coverage_gaps"] == c["eligible_targets"] == len(cells)
+    assert c["planned_cells"] == c["selected_targets"] == c["eligible_targets"] == len(cells)
+    assert c["covered_targets"] + c["gaps_by_scope"]["target"] == c["selected_targets"]
+    assert c["gaps_by_scope"] == {"cell": 0, "target": c["coverage_gaps"], "member": 0}
 
 
 def test_committed_exec_catalog_is_valid_and_omits_bullseye():

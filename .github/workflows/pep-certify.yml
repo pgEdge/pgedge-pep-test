@@ -205,8 +205,10 @@ jobs:
   # fail-fast:false so one failing leg never cancels the others; matrix outputs are
   # deliberately ignored (they collapse to the last successful setter) -- the aggregate
   # reads each leg's uploaded summary artifact instead. The caller's enforcement mode is
-  # passed THROUGH to every leg so gate-mode product failures make the leg job red and
-  # stay eligible for "re-run failed jobs".
+  # passed THROUGH to every leg so gate-mode product failures make the leg job red.
+  # "Re-run failed jobs" is diagnostic: the aggregate counts a leg only from the current
+  # attempt, so any carried-forward (previously green) leg is missing and that rerun cannot
+  # certify. Recover with a fresh certification run.
   run:
     needs: [identity, plan]      # identity for pep_ref (per-leg checkout), plan for the matrix
     if: ${{ needs.plan.outputs.has_targets == 'true' }}

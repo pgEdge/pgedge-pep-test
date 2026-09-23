@@ -611,21 +611,33 @@ def _target_table(views: list) -> str:
     return '<h2>Tested targets (failures first)</h2><table>%s%s</table>' % (header, "".join(rows))
 
 
+def _dash(value) -> str:
+    """Display value for an optional gap field: a blank or absent value is an em dash, never 'None'."""
+    if value is None or (isinstance(value, str) and not value.strip()):
+        return "—"
+    return str(value)
+
+
 def _gaps_table(gaps: list) -> str:
     if not gaps:
         return ""
-    header = ("<tr><th>Package</th><th>Family</th><th>Arch</th><th>OS</th>"
-              "<th>Cell</th><th>Reason</th></tr>")
+    header = ("<tr><th>Scope</th><th>Cell</th><th>Package</th><th>Family</th><th>OS</th>"
+              "<th>Arch</th><th>Reason</th><th>Detail</th></tr>")
     rows = "".join(
-        "<tr><td><code>%s</code></td><td>%s</td><td>%s</td><td>%s</td>"
-        "<td><code>%s</code></td><td>%s</td></tr>" % (
-            _esc(g.get("physical_package", "—")), _esc(g.get("family", "—")),
-            _esc(g.get("arch", "—")), _esc(g.get("os", g.get("detail", "—"))),
-            _esc(g.get("cell_id", "—")),
-            _pill(str(g.get("reason", "not tested")).upper().replace("_", " "), "gap"))
+        "<tr><td>%s</td><td><code>%s</code></td><td><code>%s</code></td><td>%s</td><td>%s</td>"
+        "<td>%s</td><td>%s</td><td>%s</td></tr>" % (
+            _esc(_dash(g.get("scope"))), _esc(_dash(g.get("cell_id"))),
+            _esc(_dash(g.get("physical_package"))), _esc(_dash(g.get("family"))),
+            _esc(_dash(g.get("os"))), _esc(_dash(g.get("arch"))),
+            _pill(_dash(g.get("reason")).upper().replace("_", " "), "gap"),
+            _esc(_dash(g.get("detail"))))
         for g in gaps if isinstance(g, dict))
-    return ('<h2>Not tested (planned but no enabled platform)</h2><table>%s%s</table>'
-            % (header, rows))
+    return ('<h2>Not tested (planned but not certified)</h2>'
+            '<p class="sub">Each row is a planned build cell, package target or rejected package '
+            'that produced no certification result, so coverage cannot be complete; the '
+            '<code>coverage_status</code> axis above is authoritative. Source/debug packages '
+            'and packages the component does not ship as runtime are excluded by policy and are '
+            'not listed.</p><table>%s%s</table>' % (header, rows))
 
 
 def _issues_table(views: list) -> str:

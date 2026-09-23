@@ -388,6 +388,26 @@ jobs:
           print("test_verdict=%s" % _s(axes.get("test_verdict")))
           print("coverage_status=%s" % _s(axes.get("coverage_status")))
           PY
+      - name: Render the human-readable certification report
+        # A REPORT, not a gate. It runs AFTER the decision + outputs are final and
+        # only ADDS files to out/ (consolidated-report.html + details/ + legs/).
+        # It never edits the three JSON files or the policy above, and on bad or
+        # missing per-leg detail it writes a truthful report-issue/fallback -- never
+        # a false pass. It cannot fail the job: the JSON evidence uploads regardless.
+        if: ${{ always() }}
+        run: |
+          set +e
+          python3 utillities/pep_cert_report.py \
+            --result out/cert-result.json \
+            --decision out/cert-decision.json \
+            --ledger out/collection-ledger.json \
+            --legs dl \
+            --out out
+          rc=$?
+          if [ "${rc}" -ne 0 ]; then
+            echo "::warning::certification report generation exited ${rc}; JSON evidence is preserved"
+          fi
+          exit 0
       - name: Compute run-attempt-safe evidence artifact name
         id: names
         run: |

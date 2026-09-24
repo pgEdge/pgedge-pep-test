@@ -1,0 +1,124 @@
+name: PEP amd64 probe (spike)
+
+# Branch-only validation spike. It runs the certification leg (pep-integration.yml) for the four
+# RAG2 2.0.0 build 1 amd64 targets that the replay certification could not schedule
+# (coverage gap no_enabled_platform: no enabled PEP test container for this OS/arch), at PG17,
+# in full execution and observe enforcement.
+#
+# Each leg installs its exact version-release pin from the staging channel and runs the RAG
+# test file inside the container, then uploads one pep-summary artifact. Nothing is built,
+# signed, published, tagged or pushed, and the catalog is not changed: each container alias is
+# the resolver's implicit amd64 counterpart of an arm64 sibling that is enabled today.
+#
+# Legs were derived with the real planner from the replay cert-plan (run 35971595067,
+# artifact pep-cert-plan-r2-a1, cert-plan.json sha256
+# a9d175d4e62d8afe7029c29db08549fb58d73f4a245cb69d64ef1def82ac34a8); the invocation ids are
+# the ones a certification run would compute for the same targets.
+#
+# The only trigger is a push to this spike branch; there is no dispatch, schedule or
+# pull_request trigger, and the job refuses to run for any other repository or ref.
+
+on:
+  push:
+    branches: [spike/pep-amd64-probe]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pep-amd64-probe-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  probe:
+    name: probe
+    if: ${{ github.repository == 'pgEdge/pgedge-pep-test' && github.ref == 'refs/heads/spike/pep-amd64-probe' }}
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false            # every leg reports, whatever the others do
+      matrix:
+        include:
+          # pepcell.v1.deb.bookworm.amd64.pkg::pgedge-rag-server2 -> sha256 eba1a2c463ad2ad8ed392e953387a80353103fff144bb72b377d22dc51fe0754
+          - container_alias: "debian12-amd64"
+            family: "deb"
+            arch: "amd64"
+            pg_major: "17"
+            component: "rag"
+            package_name: "pgedge-rag-server2"
+            channel: "staging"
+            expected_version: "2.0.0"
+            expected_buildnum: "1"
+            effective_tag: "v2.0.0"
+            expected_rpm: ""
+            expected_deb: "2.0.0-1.bookworm"
+            expected_binary: ""
+            invocation_id: "rag-debian12-amd64-pg17-d79f27f6dde7e5b2"
+          # pepcell.v1.deb.jammy.amd64.pkg::pgedge-rag-server2 -> sha256 429dd6fd08cf0865cf5fdc02de24f2ba4c167cbdc1c8f9421363275ccaf61104
+          - container_alias: "ubuntu2204-amd64"
+            family: "deb"
+            arch: "amd64"
+            pg_major: "17"
+            component: "rag"
+            package_name: "pgedge-rag-server2"
+            channel: "staging"
+            expected_version: "2.0.0"
+            expected_buildnum: "1"
+            effective_tag: "v2.0.0"
+            expected_rpm: ""
+            expected_deb: "2.0.0-1.jammy"
+            expected_binary: ""
+            invocation_id: "rag-ubuntu2204-amd64-pg17-0088097562f758c3"
+          # pepcell.v1.deb.noble.amd64.pkg::pgedge-rag-server2 -> sha256 37873caaec638aa14053296faf4425f7cc9638fe6d825762c4ec0a0abea40afb
+          - container_alias: "ubuntu2404-amd64"
+            family: "deb"
+            arch: "amd64"
+            pg_major: "17"
+            component: "rag"
+            package_name: "pgedge-rag-server2"
+            channel: "staging"
+            expected_version: "2.0.0"
+            expected_buildnum: "1"
+            effective_tag: "v2.0.0"
+            expected_rpm: ""
+            expected_deb: "2.0.0-1.noble"
+            expected_binary: ""
+            invocation_id: "rag-ubuntu2404-amd64-pg17-485f387d343368bc"
+          # pepcell.v1.rpm.el-10.amd64.pkg::pgedge-rag-server2 -> sha256 68dd2971842bb458d8c77844d98a01dd63baa8697382589559ca89439658f5ba
+          - container_alias: "alma10-amd64"
+            family: "rpm"
+            arch: "amd64"
+            pg_major: "17"
+            component: "rag"
+            package_name: "pgedge-rag-server2"
+            channel: "staging"
+            expected_version: "2.0.0"
+            expected_buildnum: "1"
+            effective_tag: "v2.0.0"
+            expected_rpm: "2.0.0-1.el10"
+            expected_deb: ""
+            expected_binary: ""
+            invocation_id: "rag-alma10-amd64-pg17-8be49418ecb72cce"
+    uses: ./.github/workflows/pep-integration.yml
+    with:
+      component:         ${{ matrix.component }}
+      package_name:      ${{ matrix.package_name }}
+      channel:           ${{ matrix.channel }}
+      expected_version:  ${{ matrix.expected_version }}
+      container_alias:   ${{ matrix.container_alias }}
+      pg_major:          ${{ matrix.pg_major }}
+      family:            ${{ matrix.family }}
+      arch:              ${{ matrix.arch }}
+      expected_buildnum: ${{ matrix.expected_buildnum }}
+      effective_tag:     ${{ matrix.effective_tag }}
+      expected_rpm:      ${{ matrix.expected_rpm }}
+      expected_deb:      ${{ matrix.expected_deb }}
+      expected_binary:   ${{ matrix.expected_binary }}
+      invocation_id:     ${{ matrix.invocation_id }}
+      scenario:          certification
+      mode:              observe
+      execution_mode:    full
+      pep_implementation_ref: ${{ github.sha }}
+    secrets:
+      DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+      DOCKERHUB_TOKEN:    ${{ secrets.DOCKERHUB_TOKEN }}

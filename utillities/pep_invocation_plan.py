@@ -38,6 +38,12 @@ Sources of truth (this module does NOT re-encode a fixed platform universe):
   * Supported PG majors + the packaging-os-token -> container-os bridge: the PEP-owned
     ``pep_exec_catalog.json`` (schema ``pep-exec-catalog/1``), which COMPOSES with the container
     catalog rather than duplicating arch/enabled state.
+  * Certification-only counterparts: the exec catalog's optional ``certification_counterparts``
+    names implicit opposite-arch containers (``container_resolver`` counterparts of ENABLED
+    physical entries) that certification may run although ``containers_list.json`` lists only the
+    other arch. They are admitted only through ``plan_from_sources``, fail closed when stale or
+    malformed, and never change the container catalog, so the regression workflow's default and
+    ``all`` selections are untouched.
   * The logical-component -> accepted physical-package registry and the valid release channels:
     REUSED from ``pep_request`` (``COMPONENT_PACKAGES`` / ``VALID_CHANNELS``) through a single
     by-path import — the same authoritative contract ``normalize_request`` enforces downstream,
@@ -219,9 +225,86 @@ def validate_exec_catalog(doc):
                     errors.append("exec catalog has an ambiguous mapping for os_token %r family %r" % (tok, fam))
                 else:
                     os_map[key] = tuple(cos)
+    errors.extend(_counterpart_tokens(doc)[1])
     if errors:
         return [], {}, errors
     return pgs, os_map, errors
+
+
+def _counterpart_tokens(doc):
+    """``(aliases, errors)`` for the exec catalog's optional ``certification_counterparts``.
+
+    Absent means none. Present, it must be a list of canonical, distinct (case-insensitively)
+    container alias strings; any malformed entry fails the whole list closed."""
+    if not isinstance(doc, dict) or "certification_counterparts" not in doc:
+        return [], []
+    raw = doc.get("certification_counterparts")
+    if not isinstance(raw, list):
+        return [], ["exec catalog certification_counterparts must be a list of container aliases"]
+    errors, seen = [], set()
+    for i, alias in enumerate(raw):
+        if not _is_canonical_token(alias):
+            errors.append("exec catalog certification_counterparts[%d] must be a canonical nonblank "
+                          "alias string" % i)
+            continue
+        if alias.lower() in seen:
+            errors.append("exec catalog certification_counterparts lists %r more than once" % alias)
+        seen.add(alias.lower())
+    return ([] if errors else list(raw)), errors
+
+
+def admit_certification_counterparts(exec_catalog, catalog, enabled_platforms):
+    """Add the exec catalog's explicit certification counterparts to ``enabled_platforms``.
+
+    Each listed alias must resolve, through ``container_resolver.resolve_token``, to an IMPLICIT
+    opposite-arch counterpart (never a physical ``containers_list.json`` entry, whose own enabled
+    flag governs it) of a physical sibling that is ENABLED, for a container OS that an exec-catalog
+    ``platforms`` entry maps. Returns ``(platforms, errors)``: with any error the input map is
+    returned unchanged and the caller fails the plan closed, so a stale or mistyped opt-in never
+    silently becomes a gap or a leg on an unintended container."""
+    import container_resolver as CR
+    aliases, errors = _counterpart_tokens(exec_catalog)
+    if errors or not aliases:
+        return dict(enabled_platforms), errors
+    _, os_map, cat_errors = validate_exec_catalog(exec_catalog)
+    if cat_errors:
+        return dict(enabled_platforms), []   # the core reports the malformed catalog and fails closed
+    mapped = {(fam, cos) for (_tok, fam), coss in os_map.items() for cos in coss}
+    physical = {e.name for e in getattr(catalog, "entries", ())}
+    out = dict(enabled_platforms)
+    for alias in aliases:
+        what = "certification counterpart %r" % alias
+        entry = CR.resolve_token(catalog, alias)
+        if entry is None:
+            errors.append("%s is unknown: containers_list.json has that OS under neither arch" % what)
+            continue
+        if entry.name in physical:
+            errors.append("%s is a physical containers_list.json entry (%s, enabled=%s); its own "
+                          "enabled flag governs it" % (what, entry.name, entry.enabled))
+            continue
+        if alias != entry.alias:
+            errors.append("%s must be written as the alias %r" % (what, entry.alias))
+            continue
+        if entry.family not in FAMILIES or entry.arch not in ARCHES:
+            errors.append("%s has an unsupported family/arch %s/%s" % (what, entry.family, entry.arch))
+            continue
+        catalog_os = entry.alias[: -len("-" + entry.arch)]
+        other = [a for a in ARCHES if a != entry.arch][0]
+        sibling = CR.resolve_token(catalog, "%s-%s" % (catalog_os, other))
+        if sibling is None or sibling.name not in physical or sibling.enabled is not True:
+            errors.append("%s is no longer eligible: its %s sibling %s-%s is not an enabled "
+                          "containers_list.json entry" % (what, other, catalog_os, other))
+            continue
+        if (entry.family, catalog_os) not in mapped:
+            errors.append("%s is unmapped: no exec catalog platforms entry lists %r for %s"
+                          % (what, catalog_os, entry.family))
+            continue
+        key = (entry.family, entry.arch, catalog_os)
+        if key in out:
+            errors.append("%s duplicates the enabled container %r" % (what, out[key]))
+            continue
+        out[key] = entry.alias
+    return (dict(enabled_platforms) if errors else out), errors
 
 
 def enabled_platforms_from_catalog(catalog):
@@ -739,24 +822,39 @@ def load_exec_catalog(path):
         return {"schema": None}   # the core records a schema error and fails closed
 
 
+def _load_container_catalog(container_catalog_path):
+    import container_resolver as CR
+    try:
+        return CR.load_catalog(container_catalog_path), None
+    except CR.ResolverError as e:
+        return None, "container catalog unusable: %s" % (e,)
+
+
 def load_enabled_platforms(container_catalog_path):
     """Load ``configuration/containers_list.json`` via the authoritative ``container_resolver`` and
     normalize its ENABLED entries. Returns ``(enabled_platforms, error_or_None)`` — a malformed
     container catalog fails closed rather than raising."""
-    import container_resolver as CR
-    try:
-        catalog = CR.load_catalog(container_catalog_path)
-    except CR.ResolverError as e:
-        return {}, "container catalog unusable: %s" % (e,)
+    catalog, err = _load_container_catalog(container_catalog_path)
+    if err is not None:
+        return {}, err
     return enabled_platforms_from_catalog(catalog), None
+
+
+def load_certification_platforms(container_catalog_path, exec_catalog):
+    """The platforms certification may run: the container catalog's ENABLED entries plus the exec
+    catalog's admitted certification counterparts. Returns ``(platforms, errors)``."""
+    catalog, err = _load_container_catalog(container_catalog_path)
+    if err is not None:
+        return {}, [err]
+    return admit_certification_counterparts(exec_catalog, catalog, enabled_platforms_from_catalog(catalog))
 
 
 def plan_from_sources(cert_plan, exec_catalog_path, container_catalog_path, execution_mode="full"):
     """Convenience: load the exec catalog + container catalog from disk, then build the plan."""
     exec_catalog = load_exec_catalog(exec_catalog_path)
-    enabled_platforms, cat_err = load_enabled_platforms(container_catalog_path)
-    if cat_err is not None:
-        return _unresolved([cat_err], execution_mode=execution_mode)
+    enabled_platforms, errors = load_certification_platforms(container_catalog_path, exec_catalog)
+    if errors:
+        return _unresolved(errors, execution_mode=execution_mode)
     return build_invocation_plan(cert_plan, exec_catalog, enabled_platforms, execution_mode=execution_mode)
 
 

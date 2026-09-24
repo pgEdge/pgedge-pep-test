@@ -1031,3 +1031,174 @@ def test_preview_matrix_is_deterministic():
     a = P.to_json(build(_preview_cell(), execution_mode="preview", simulated=True))
     b = P.to_json(build(_preview_cell(), execution_mode="preview", simulated=True))
     assert a == b
+
+
+# --------------------------------------------------------------------------- #
+# M. certification-only counterparts (exec catalog opt-in, resolved by container_resolver)
+# --------------------------------------------------------------------------- #
+import container_resolver as CR
+
+COUNTERPARTS = ["alma10-amd64", "debian12-amd64", "ubuntu2204-amd64", "ubuntu2404-amd64"]
+
+
+def _shipped_exec_catalog():
+    return json.loads(EXEC_CATALOG_FILE.read_text())
+
+
+def _write(tmp_path, name, doc):
+    p = tmp_path / name
+    p.write_text(json.dumps(doc))
+    return str(p)
+
+
+def _plan(tmp_path, cells, *, ec=None, containers=None):
+    """The certification entry point pep-certify uses: plan_from_sources with files on disk."""
+    ec_path = _write(tmp_path, "ec.json", ec) if ec is not None else str(EXEC_CATALOG_FILE)
+    ct_path = _write(tmp_path, "ct.json", containers) if containers is not None else str(CONTAINERS_FILE)
+    return P.plan_from_sources(cert_plan(cells, execution_mode="full"), ec_path, ct_path)
+
+
+def _without_counterparts():
+    ec = _shipped_exec_catalog()
+    del ec["certification_counterparts"]
+    return ec
+
+
+def test_shipped_counterparts_are_the_four_proven_implicit_amd64_containers():
+    ec = _shipped_exec_catalog()
+    assert ec["certification_counterparts"] == COUNTERPARTS
+    catalog = CR.load_catalog(CONTAINERS_FILE)
+    base = P.enabled_platforms_from_catalog(catalog)
+    admitted, errors = P.load_certification_platforms(str(CONTAINERS_FILE), ec)
+    assert errors == []
+    added = {k: v for k, v in admitted.items() if k not in base}
+    assert added == {("rpm", "amd64", "alma10"): "alma10-amd64", ("deb", "amd64", "debian12"): "debian12-amd64",
+                     ("deb", "amd64", "ubuntu2204"): "ubuntu2204-amd64", ("deb", "amd64", "ubuntu2404"): "ubuntu2404-amd64"}
+    assert {k: admitted[k] for k in base} == base                  # nothing already enabled changes
+    physical = {e.name for e in catalog.entries}
+    for alias in COUNTERPARTS:                                     # each one is a synthesized counterpart
+        entry = CR.resolve_token(catalog, alias)
+        assert entry is not None and entry.name not in physical and entry.alias == alias
+
+
+def test_counterparts_turn_the_four_amd64_gaps_into_legs_and_keep_every_other_invocation(tmp_path):
+    cells = _rag_cells_from_fixture()                              # 16 RAG cells, incl. 2 EOL bullseye
+    before = _plan(tmp_path, cells, ec=_without_counterparts())
+    after = _plan(tmp_path, cells)
+    assert before["plan_resolved"] is True and after["plan_resolved"] is True
+    four = {("deb", "bookworm"), ("deb", "jammy"), ("deb", "noble"), ("rpm", "el-10")}
+    was = [(g["family"], g["os"], g["arch"], g["reason"]) for g in before["coverage_gaps"]]
+    assert sorted(x for x in was if x[3] == P.GAP_NO_ENABLED_PLATFORM) == sorted(
+        (f, o, "amd64", P.GAP_NO_ENABLED_PLATFORM) for f, o in four)
+    assert all(g["reason"] == P.GAP_UNSUPPORTED_OS and g["os"] == "bullseye" for g in after["coverage_gaps"])
+    assert len(after["coverage_gaps"]) == len(before["coverage_gaps"]) - 4
+    old = {i["invocation_id"]: i for i in before["matrix"]["include"]}
+    new = {i["invocation_id"]: i for i in after["matrix"]["include"]}
+    assert all(new[k] == v for k, v in old.items())               # identical, not merely present
+    extra = [new[k] for k in sorted(set(new) - set(old))]
+    assert len(extra) == 12 and sorted({i["container_alias"] for i in extra}) == COUNTERPARTS
+    assert sorted(i["pg_major"] for i in extra) == ["16"] * 4 + ["17"] * 4 + ["18"] * 4
+    assert after["counts"]["covered_targets"] == before["counts"]["covered_targets"] + 4
+    _assert_ids_workflow_valid(after)
+
+
+def test_without_the_opt_in_the_planner_behaves_as_before(tmp_path):
+    cells = _rag_cells_from_fixture()
+    enabled_platforms, err = P.load_enabled_platforms(str(CONTAINERS_FILE))   # the shared enabled set
+    assert err is None
+    legacy = P.build_invocation_plan(cert_plan(cells, execution_mode="full"), _without_counterparts(),
+                                     enabled_platforms)
+    assert P.to_json(_plan(tmp_path, cells, ec=_without_counterparts())) == P.to_json(legacy)
+
+
+def test_counterparts_never_enter_the_regression_selection():
+    """containers_list.json is untouched, so the older workflow's default (empty) and 'all'
+    selections stay exactly as before for every family/arch."""
+    catalog = CR.load_catalog(CONTAINERS_FILE)
+    names = {CR.resolve_token(catalog, a).name for a in COUNTERPARTS}
+    assert not names & {e.name for e in catalog.entries}
+    for fam in ("rpm", "deb"):
+        for arch in ("amd64", "arm64"):
+            default, _, src = CR.resolve_for_target(catalog, "", None, fam, arch)
+            everything, _, _ = CR.resolve_for_target(catalog, "all", None, fam, arch)
+            assert src == "default" and not names & set(default) and not names & set(everything)
+            assert default == [e.name for e in catalog.entries if e.enabled and e.family == fam and e.arch == arch]
+
+
+def _containers(mutate):
+    doc = json.loads(CONTAINERS_FILE.read_text())
+    mutate(doc)
+    return doc
+
+
+def _deb_entry(doc, alias):
+    return next(e for e in doc["deb"] if e["alias"] == alias)
+
+
+@pytest.mark.parametrize("counterparts, containers, expect", [
+    (["ubuntu2004-amd64"], None, "is unknown"),
+    (["debian12-arm64"], None, "is a physical containers_list.json entry (auto-debian12-arm, enabled=True)"),
+    (["rocky9-amd64"], None, "is a physical containers_list.json entry (my-rocky9-amd, enabled=False)"),
+    (["auto-debian12-amd"], None, "must be written as the alias 'debian12-amd64'"),
+    (["oel10-amd64"], None, "is no longer eligible: its arm64 sibling oel10-arm64 is not an enabled"),
+    (["debian11-amd64"], None, "is no longer eligible: its arm64 sibling debian11-arm64"),
+    (COUNTERPARTS, lambda d: _deb_entry(d, "debian12-arm64").update(enabled=False),
+     "'debian12-amd64' is no longer eligible"),
+    (COUNTERPARTS, lambda d: d["deb"].append({"name": "auto-debian12-amd", "alias": "debian12-amd64",
+                                              "description": "Debian 12 / AMD64", "enabled": False}),
+     "'debian12-amd64' is a physical containers_list.json entry (auto-debian12-amd, enabled=False)"),
+], ids=["unknown", "wrong-arch-physical", "physical-disabled", "canonical-name", "sibling-disabled",
+        "eol-sibling-disabled", "sibling-later-disabled", "became-physical"])
+def test_ineligible_counterparts_fail_the_plan_closed(tmp_path, counterparts, containers, expect):
+    ec = dict(_shipped_exec_catalog(), certification_counterparts=counterparts)
+    plan = _plan(tmp_path, _rag_cells_from_fixture(), ec=ec,
+                 containers=_containers(containers) if containers else None)
+    assert plan["plan_resolved"] is False and plan["matrix"]["include"] == []
+    assert any(expect in e for e in plan["errors"]), plan["errors"]
+
+
+def test_unmapped_counterpart_fails_the_plan_closed(tmp_path):
+    ec = _shipped_exec_catalog()
+    ec["platforms"] = [p for p in ec["platforms"] if p["os_token"] != "bookworm"]
+    plan = _plan(tmp_path, _rag_cells_from_fixture(), ec=ec)
+    assert plan["plan_resolved"] is False and plan["matrix"]["include"] == []
+    assert plan["errors"] == ["certification counterpart 'debian12-amd64' is unmapped: no exec catalog "
+                              "platforms entry lists 'debian12' for deb"]
+
+
+@pytest.mark.parametrize("value, expect", [
+    (["debian12-amd64", "debian12-amd64"], "lists 'debian12-amd64' more than once"),
+    (["debian12-amd64", "Debian12-amd64"], "lists 'Debian12-amd64' more than once"),
+    ("debian12-amd64", "must be a list of container aliases"),
+    ([1], "certification_counterparts[0] must be a canonical nonblank alias string"),
+    ([" debian12-amd64"], "certification_counterparts[0] must be a canonical nonblank alias string"),
+    ([""], "certification_counterparts[0] must be a canonical nonblank alias string"),
+], ids=["duplicate", "duplicate-case", "not-a-list", "not-a-string", "padded", "blank"])
+def test_malformed_counterpart_lists_fail_closed_on_every_path(tmp_path, value, expect):
+    ec = dict(_shipped_exec_catalog(), certification_counterparts=value)
+    via_sources = _plan(tmp_path, _rag_cells_from_fixture(), ec=ec)
+    enabled_platforms, _ = P.load_enabled_platforms(str(CONTAINERS_FILE))
+    via_core = P.build_invocation_plan(cert_plan(_rag_cells_from_fixture(), execution_mode="full"), ec,
+                                       enabled_platforms)
+    for plan in (via_sources, via_core):
+        assert plan["plan_resolved"] is False and plan["matrix"]["include"] == []
+        assert any(expect in e for e in plan["errors"]), plan["errors"]
+
+
+def test_empty_opt_in_list_admits_nothing(tmp_path):
+    plan = _plan(tmp_path, _rag_cells_from_fixture(),
+                 ec=dict(_shipped_exec_catalog(), certification_counterparts=[]))
+    assert plan["plan_resolved"] is True
+    assert P.to_json(plan) == P.to_json(_plan(tmp_path, _rag_cells_from_fixture(), ec=_without_counterparts()))
+
+
+def test_counterpart_colliding_with_an_already_enabled_key_fails_closed():
+    """Defensive (hand-built map): a caller-supplied platform map that already runs the same
+    family/arch/OS is never silently overwritten by a counterpart."""
+    catalog = CR.load_catalog(CONTAINERS_FILE)
+    base = P.enabled_platforms_from_catalog(catalog)
+    base[("deb", "amd64", "debian12")] = "other-alias"
+    ec = dict(_shipped_exec_catalog(), certification_counterparts=["debian12-amd64"])
+    out, errors = P.admit_certification_counterparts(ec, catalog, base)
+    assert out == base and errors == ["certification counterpart 'debian12-amd64' duplicates the "
+                                      "enabled container 'other-alias'"]

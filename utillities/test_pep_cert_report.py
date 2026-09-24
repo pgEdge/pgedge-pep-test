@@ -310,7 +310,7 @@ def test_missing_leg_without_any_artifact(tmp_path):
     cell = re.search(r'<a class="h cell issue" href="#leg-%s"[^>]*>MISSING</a>' % INV_B, run.html)
     assert cell, "missing leg is not an amber MISSING cell"
     assert (card(run.html, "Passed"), card(run.html, "Incomplete / not run")) == (1, 1)
-    assert "1 planned leg produced no result" in run.html
+    assert "1 planned test run produced no result" in run.html
     assert_links(run.out, run.html)
 
 
@@ -350,7 +350,7 @@ def test_zero_parsed_cases_while_leg_claims_tests(tmp_path):
     assert run.result["legs"][0]["test_verdict"] == "pass"            # authoritative
     row = run.row(INV_A)
     assert "st-pass" in row and "NO DETAIL" in row
-    assert "report parsed zero test cases (leg claims 5)" in run.html
+    assert "report parsed zero test cases (the test run claims 5)" in run.html
     assert not run.detail(INV_A).exists()
 
 
@@ -359,7 +359,7 @@ def test_parsed_counts_disagree_with_authoritative_counts(tmp_path):
                  xml=junit(n_pass=2, n_skip=1, suite_tests=4))    # 3 elements, attrs say 4
     run = pipeline(tmp_path, [planned(INV_A)], ["pep-summary-a-a1"])
     assert run.result["legs"][0]["counts"]["tests"] == 4
-    assert "counts differ from authoritative leg counts" in run.html
+    assert "counts differ from authoritative test-run counts" in run.html
     assert VIEW in run.row(INV_A) and "st-pass" in run.row(INV_A)
     # a report issue stays visible on a passing leg: matrix marker, row link, card, banner
     assert re.search(r'<a class="h cell ok issue-marker" href="details/cert-detail-%s.html"[^>]*>'
@@ -377,7 +377,7 @@ def test_manifest_without_reports_while_leg_claims_tests(tmp_path, manifest):
     run = pipeline(tmp_path, [planned(INV_A)], ["pep-summary-a-a1"])
     row = run.row(INV_A)
     assert "st-fail" in row and "NO DETAIL" in row
-    assert "no test-case report listed for this leg" in run.html
+    assert "no test-case report listed for this test run" in run.html
 
 
 def test_single_artifact_flat_download_layout(tmp_path):
@@ -502,17 +502,17 @@ def test_replay_shape_matrix_cards_and_family_chips_reconcile(tmp_path):
     assert run.decision["reason_code"] == "product_fail"
     html, grid = run.html, heat(run.html)
     # cards: legs partition exactly; gaps are counted beside the legs, not inside them
-    legs = card(html, "Legs")
+    legs = card(html, "Test runs")
     assert legs == 6 == len(run.result["legs"])
     assert (card(html, "Passed"), card(html, "Failed"), card(html, "Incomplete / not run")) == (4, 2, 0)
     assert card(html, "Coverage gaps") == 4
     scopes = "1 build cell · 1 package target · 2 rejected package files"
     assert '<div class="sub">%s</div>' % scopes in html
-    assert "coverage <b>partial</b>: 4 coverage gaps with no test leg (%s)" % scopes in html
+    assert "coverage <b>partial</b>: 4 coverage gaps with no test run (%s)" % scopes in html
     # family chips (section summaries) add up to the cards
     rpm, deb = group(html, "fam-rpm"), group(html, "fam-deb")
     sums = [s[:s.index("</summary>")] for s in (rpm, deb)]
-    assert sum(chip(x, "leg") for x in sums) == legs
+    assert sum(chip(x, "test run") for x in sums) == legs
     assert sum(chip(x, "passed") for x in sums) == 4 and sum(chip(x, "failed<") for x in sums) == 2
     assert sum(chip(x, "not tested") for x in sums) == 4
     # rpm has a failure -> open; deb has only a gap -> flagged for attention but closed
@@ -529,10 +529,10 @@ def test_replay_shape_matrix_cards_and_family_chips_reconcile(tmp_path):
     assert "build-cell gap: build failed" in grid
     assert "package-target gap: No enabled PEP test container for this OS/arch" in grid
     assert grid.count("rejected-package-file gap: member rejected") == 2
-    assert grid.count("&middot; no test leg on any PG</span>") == 4     # never a PG result
+    assert grid.count("&middot; no test run on any PG</span>") == 4     # never a PG result
     assert "planned target" not in html and "spans every PG" not in html
     legend = html[html.index('<div class="legend">'):]
-    assert "with no test leg on any PG; it is not a PG result" in legend
+    assert "with no test run on any PG; it is not a PG result" in legend
     # the machine reason code stays in the JSON and the gap table; readers get the sentence
     assert GAP_T["reason"] in {g["reason"] for g in run.result["coverage_gaps"]}
     table = html[html.index("planned but not certified"):]
@@ -553,8 +553,8 @@ def test_selective_build_leaves_unplanned_pg_empty_never_pass(tmp_path):
                    ["pep-summary-" + i for i, _, _ in legs])
     grid = heat(run.html)
     assert grid.count('class="h cell ok"') == 3                          # only real legs are green
-    assert '<div class="h cell empty" title="oel9-amd64 PG17 — no leg planned">&mdash;</div>' in grid
-    assert "no leg planned" in run.html[run.html.index('<div class="legend">'):]
+    assert '<div class="h cell empty" title="oel9-amd64 PG17 — no test run planned">&mdash;</div>' in grid
+    assert "no test run planned" in run.html[run.html.index('<div class="legend">'):]
 
 
 def test_two_legs_in_one_bucket_each_keep_their_own_link(tmp_path):
@@ -568,13 +568,13 @@ def test_two_legs_in_one_bucket_each_keep_their_own_link(tmp_path):
               source_target_id="pepcell.v1.rpm.y.amd64.pkg::pgedge-rag-server2")
     run = pipeline(tmp_path, [planned(one), e2], ["pep-summary-one", "pep-summary-two"])
     grid = heat(run.html)
-    m = re.search(r'<div class="h cell multi bad" title="oel9-amd64 PG16 — 2 legs">(.*?)</div>', grid)
+    m = re.search(r'<div class="h cell multi bad" title="oel9-amd64 PG16 — 2 test runs">(.*?)</div>', grid)
     assert m, "aggregate bucket not rendered as a multi-leg cell"
     links = re.findall(r'href="([^"]+)"', m.group(1))
     assert links == ["details/cert-detail-%s.html" % one, "details/cert-detail-%s.html" % two]
     assert "11111111: 1/4<span>FAIL</span>" in m.group(1) and "22222222: 0/3" in m.group(1)
     assert '<div class="h total failtotal">1/7</div>' in grid           # both legs counted once
-    assert card(run.html, "Legs") == 2
+    assert card(run.html, "Test runs") == 2
 
 
 def test_multiple_packages_get_their_own_rows_and_package_column(tmp_path):
@@ -617,8 +617,8 @@ def test_zero_legs_with_gaps_shows_only_not_tested_rows(tmp_path):
     grid = heat(run.html)
     assert '<div class="h head">Result</div>' in grid and "PG" not in grid.split("Result", 1)[0]
     assert grid.count('style="grid-column:span 1"') == 2 and "h cell ok" not in grid
-    assert card(run.html, "Legs") == 0 and card(run.html, "Coverage gaps") == 2
-    assert vstate(run.html) == "INCOMPLETE" and "no test legs ran" in run.html
+    assert card(run.html, "Test runs") == 0 and card(run.html, "Coverage gaps") == 2
+    assert vstate(run.html) == "INCOMPLETE" and "no test runs were executed" in run.html
     assert_links(run.out, run.html)
 
 
@@ -697,7 +697,7 @@ def test_fallback_with_a_valid_pass_decision_never_shows_a_trusted_green_pass(tm
     verdict = re.search(r'<div class="verdict".*?</div></div>', body, re.S).group(0)
     assert 'data-trusted="false"' in verdict and "--vc:#64748b" in verdict and "#10b981" not in verdict
     assert 'class="vlabel">Recorded decision (not verified)<' in verdict and vstate(verdict) == "PASS"
-    assert "cannot show or confirm legs, coverage or gaps" in verdict
+    assert "cannot show or confirm test runs, coverage or gaps" in verdict
     assert "allows the workflow" not in verdict                      # no trusted policy gloss
     assert 'class="heat' not in html and 'class="summary"' not in html
 
@@ -745,7 +745,7 @@ def test_every_leg_category_has_one_bucket_and_only_pass_is_green(tmp_path):
         assert re.search(r'<a class="h cell %s" href="#leg-inv-%s" [^>]*>%s</a>'
                          % (cls, c, re.escape(text)), grid), c
     assert grid.count("h cell ok") == 2                           # the two real passes only
-    n = card(html, "Legs")
+    n = card(html, "Test runs")
     assert n == 9 == (card(html, "Passed") + card(html, "Failed")
                       + card(html, "Incomplete / not run") + card(html, "Preview"))
     assert (card(html, "Passed"), card(html, "Failed"), card(html, "Incomplete / not run")) == (2, 1, 5)
@@ -889,3 +889,31 @@ def test_main_missing_inputs_write_fallback_without_false_pass(tmp_path):
     assert _main(tmp_path, result=tmp_path / "nope.json", decision=tmp_path / "nope2.json") == 0
     html = (tmp_path / "consolidated-report.html").read_text()
     assert vstate(html) == "UNKNOWN" and 'class="vstate">PASS<' not in html
+
+
+def _visible(html):
+    """Text a reader can see: page text plus tooltips, without styles, scripts or ids/hrefs."""
+    body = re.sub(r"<(style|script)\b.*?</\1>", " ", html, flags=re.S)
+    titles = re.findall(r'\btitle="([^"]*)"', body)
+    return re.sub(r"<[^>]+>", " ", body) + " " + " ".join(titles)
+
+
+def test_reader_facing_wording_says_test_runs_not_legs(tmp_path):
+    """One package/platform/PG suite execution is a "test run"; its individual cases are
+    "test cases"; the GitHub run is the "workflow run". Covers the banners, issue table, gap
+    rows and a fallback page, where the older wording used to appear."""
+    leg_artifact(tmp_path / "dl", "pep-summary-a-a1", INV_A,
+                 xml=junit(n_pass=2, n_skip=1, suite_tests=4))              # a report issue
+    run = pipeline(tmp_path, [planned(INV_A), planned(INV_B, alias="alma10-arm64", arch="arm64")],
+                   ["pep-summary-a-a1"], gaps=[GAP_T])                      # INV_B has no result
+    text = _visible(run.html)
+    assert not re.search(r"\blegs?\b", text, re.I), re.findall(r".{40}\blegs?\b.{40}", text, re.I)
+    assert card(run.html, "Test runs") == 2 and "1 planned test run produced no result" in text
+    assert "workflow run 100" in text and "Test cases" in text
+    assert ">Test run</th>" in run.html                                     # report-issues table header
+    (tmp_path / "bad.json").write_text("{not json")
+    fb_out = tmp_path / "fb"
+    R.main(["--result", str(tmp_path / "bad.json"), "--decision", str(run.out / "cert-decision.json"),
+            "--ledger", str(run.out / "collection-ledger.json"), "--legs", str(tmp_path / "dl"),
+            "--out", str(fb_out)])
+    assert not re.search(r"\blegs?\b", _visible((fb_out / "consolidated-report.html").read_text()), re.I)

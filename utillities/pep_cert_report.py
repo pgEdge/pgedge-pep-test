@@ -273,15 +273,15 @@ def select_leg_evidence(leg: dict, index: dict) -> tuple:
         return None, "none", None
     prov = leg.get("provenance")
     if not isinstance(prov, dict) or not prov:
-        return None, "no_summary", "matched leg carries no provenance to link its evidence"
+        return None, "no_summary", "matched test run carries no provenance to link its evidence"
     exact = [c for c in index.get(leg.get("invocation_id", ""), [])
              if c.get("provenance") == prov]
     if len(exact) == 1:
         return exact[0], "found", None
     if not exact:
-        return None, "no_summary", ("the accepted summary for this matched leg was not "
+        return None, "no_summary", ("the accepted summary for this matched test run was not "
                                     "found among the ledger-accepted artifacts")
-    return None, "ambiguous", "more than one accepted artifact carries this leg's exact provenance"
+    return None, "ambiguous", "more than one accepted artifact carries this test run's exact provenance"
 
 
 # --------------------------------------------------------------------------- #
@@ -381,17 +381,17 @@ def _build_leg_views(legs: list, index: dict,
             issues.extend(p for p in problems
                           if claimed > 0 or p.startswith("report path escapes artifact"))
             if claimed > 0 and not reports:
-                issues.append("no test-case report listed for this leg (claims %d)" % claimed)
+                issues.append("no test-case report listed for this test run (claims %d)" % claimed)
                 state = "no_detail"
             elif claimed > 0 and not records:
-                issues.append("report parsed zero test cases (leg claims %d)" % claimed)
+                issues.append("report parsed zero test cases (the test run claims %d)" % claimed)
                 state = "no_detail"
             elif records:
                 pc, ac = _parsed_counts(records), _auth_counts(leg)
                 if (pc["tests"], pc["failed"], pc["skipped"]) != (
                         ac["tests"], ac["failed"], ac["skipped"]):
                     issues.append(
-                        "test-case counts differ from authoritative leg counts "
+                        "test-case counts differ from authoritative test-run counts "
                         "(parsed tests/fail/skip=%d/%d/%d vs %d/%d/%d)" % (
                             pc["tests"], pc["failed"], pc["skipped"],
                             ac["tests"], ac["failed"], ac["skipped"]))
@@ -580,7 +580,7 @@ def _layout(views: list, gaps: list) -> dict:
 
 def _chips(st: dict, with_tests: bool = True) -> str:
     cats = st["cats"]
-    chips = ['<span class="chip">%s</span>' % _plural(st["legs"], "leg")]
+    chips = ['<span class="chip">%s</span>' % _plural(st["legs"], "test run")]
     if cats["pass"]:
         chips.append('<span class="chip ok">%d passed</span>' % cats["pass"])
     if cats["fail"]:
@@ -735,20 +735,20 @@ def _summary_line(result: dict, st: dict) -> str:
         return "Result <b>unresolved</b>: the reducer failed closed (see below)."
     n, cats, parts = st["legs"], st["cats"], []
     if cats["fail"]:
-        parts.append("<b>%d of %d</b> legs failed" % (cats["fail"], n))
+        parts.append("<b>%d of %d</b> test runs failed" % (cats["fail"], n))
     if st["unfinished"]:
-        parts.append("<b>%d of %d</b> legs incomplete or not run (%s)"
+        parts.append("<b>%d of %d</b> test runs incomplete or not run (%s)"
                      % (st["unfinished"], n, _esc(_breakdown(cats))))
     if cats["preview"]:
-        parts.append("%d of %d legs preview only" % (cats["preview"], n))
+        parts.append("%d of %d test runs preview only" % (cats["preview"], n))
     if n and cats["pass"] == n:
-        parts.append("all <b>%d</b> legs passed" % n)
+        parts.append("all <b>%d</b> test runs passed" % n)
     if not n:
-        parts.append("no test legs ran")
+        parts.append("no test runs were executed")
     cov = result.get("coverage_status")
     cov_txt = "coverage <b>%s</b>" % _esc(_dash(cov))
     if st["gaps"]:
-        cov_txt += ": %s with no test leg (%s)" % (_plural(st["gaps"], "coverage gap"),
+        cov_txt += ": %s with no test run (%s)" % (_plural(st["gaps"], "coverage gap"),
                                                   _esc(_gap_breakdown(st.get("gap_scopes") or Counter())))
     parts.append(cov_txt)
     if st["issues"]:
@@ -799,7 +799,7 @@ def _banner(decision, result: dict = None, st: dict = None, trusted: bool = True
     if not trusted:
         label, color = "Recorded decision (not verified)", "#64748b"
         why = ("This page could not read the certification result, so it cannot show or "
-               "confirm legs, coverage or gaps. The state above is copied from "
+               "confirm test runs, coverage or gaps. The state above is copied from "
                "cert-decision.json as written; check the JSON evidence before relying on it.")
     elif not consistent:
         label, color = "Certification", "#64748b"
@@ -839,7 +839,7 @@ def _header(result: dict, decision, layout: dict, st: dict) -> str:
     prov = result.get("provenance") if isinstance(result.get("provenance"), dict) else {}
     ac = result.get("attempt_context") if isinstance(result.get("attempt_context"), dict) else {}
     repo, run_id = _txt(prov.get("repository")), _txt(prov.get("run_id"))
-    run = "run %s" % _esc(run_id or "—")
+    run = "workflow run %s" % _esc(run_id or "—")
     if re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", repo) and run_id.isdigit():
         run = '<a href="https://github.com/%s/actions/runs/%s">%s</a>' % (repo, run_id, run)
     views = [v for f in layout["families"] for v in f["views"]]
@@ -866,7 +866,7 @@ def _header(result: dict, decision, layout: dict, st: dict) -> str:
          _esc(", ".join(p for p in layout["pgs"] if p) or "—"),
          _esc(", ".join(f["key"] for f in layout["families"] if f["views"] and f["key"]) or "—"),
          _esc(", ".join(arches) or "—"), _plural(len(platforms), "platform"),
-         _plural(st["legs"], "leg"), _esc(_dash(mode)))
+         _plural(st["legs"], "test run"), _esc(_dash(mode)))
 
 
 def _cards(st: dict) -> str:
@@ -875,17 +875,17 @@ def _cards(st: dict) -> str:
     beside the legs, never inside them; report issues overlay legs of any category."""
     cats, n = st["cats"], st["legs"]
     gap_scopes = st.get("gap_scopes") or Counter()
-    items = [("total", "Legs", n, "planned test legs"),
-             ("passed", "Passed", cats["pass"], "of %d legs" % n),
-             ("failed", "Failed", cats["fail"], "of %d legs" % n),
+    items = [("total", "Test runs", n, "planned test runs"),
+             ("passed", "Passed", cats["pass"], "of %d test runs" % n),
+             ("failed", "Failed", cats["fail"], "of %d test runs" % n),
              ("other", "Incomplete / not run", st["unfinished"], _breakdown(cats) or "missing, infra, incomplete, not run")]
     if cats["preview"]:
         items.append(("preview", "Preview", cats["preview"], "not a certification"))
     items.append(("gap", "Coverage gaps", st["gaps"], _gap_breakdown(gap_scopes) or "none"))
-    items.append(("issues", "Report issues", st["issues"], "legs with unusable detail"))
+    items.append(("issues", "Report issues", st["issues"], "test runs with unusable detail"))
     cards = "".join('<div class="card %s"><h3>%s</h3><div class="value">%d</div><div class="sub">%s</div></div>'
                     % (cls, _esc(title), value, _esc(sub)) for cls, title, value, sub in items)
-    tcline = ('<div class="tcline">Test cases (supporting detail, from each leg\'s authoritative counts): '
+    tcline = ('<div class="tcline">Test cases (supporting detail, from each test run\'s authoritative counts): '
               '<b>%d</b> total &middot; <b>%d</b> passed &middot; <b>%d</b> failed &middot; '
               '<b>%d</b> skipped</div>' % (st["tests"], st["passed"], st["failed"], st["skipped"]))
     return '<div class="summary">%s</div>%s' % (cards, tcline)
@@ -896,11 +896,11 @@ def _attention_banners(st: dict) -> str:
     if st["cats"]["missing"]:
         out.append('<div class="banner banner-issue"><strong>&#9888;</strong> %s produced no result '
                    '&mdash; shown as MISSING below, never as a pass.</div>'
-                   % _plural(st["cats"]["missing"], "planned leg"))
+                   % _plural(st["cats"]["missing"], "planned test run"))
     if st["issues"]:
         out.append('<div class="banner banner-issue"><strong>&#9888;</strong> %s %s a report issue '
                    '&mdash; see <a href="#issues">report issues</a>. Their verdicts stay authoritative.</div>'
-                   % (_plural(st["issues"], "leg"), "has" if st["issues"] == 1 else "have"))
+                   % (_plural(st["issues"], "test run"), "has" if st["issues"] == 1 else "have"))
     return "".join(out)
 
 
@@ -940,7 +940,7 @@ def _cell_text(v: dict, prefix: str = "") -> str:
 
 def _matrix_cell(vs: list, where: str) -> str:
     if not vs:
-        return '<div class="h cell empty" title="%s">&mdash;</div>' % _esc(where + " — no leg planned")
+        return '<div class="h cell empty" title="%s">&mdash;</div>' % _esc(where + " — no test run planned")
     if len(vs) == 1:
         v = vs[0]
         cls = "h cell %s%s" % (_CELL_CLASS.get(v["cat"], "c-unknown"), " issue-marker" if v["issues"] else "")
@@ -954,7 +954,7 @@ def _matrix_cell(vs: list, where: str) -> str:
     links = "".join('<a href="%s" title="%s">%s</a>' % (
         _esc(_leg_href(v)), _esc(_leg_tip(v, where)),
         _cell_text(v, prefix=v["inv"].rsplit("-", 1)[-1][:8] + ": ")) for v in vs)
-    return '<div class="%s" title="%s">%s</div>' % (cls, _esc("%s — %d legs" % (where, len(vs))), links)
+    return '<div class="%s" title="%s">%s</div>' % (cls, _esc("%s — %d test runs" % (where, len(vs))), links)
 
 
 def _row_total(row: dict) -> str:
@@ -996,8 +996,8 @@ def _matrix(layout: dict) -> str:
     parts = ['<div class="heat-wrap"><div class="heat cert" style="--cols:%d">' % cols,
              '<div class="h head sticky-left">Platform</div>']
     for pg in pgs:
-        parts.append('<div class="h head">%s<span>%s</span></div>' % (_esc(_pg_label(pg)), _plural(per_pg[pg], "leg")))
-    parts.append('<div class="h head">Total<span>failed / tests</span></div>' if pgs
+        parts.append('<div class="h head">%s<span>%s</span></div>' % (_esc(_pg_label(pg)), _plural(per_pg[pg], "test run")))
+    parts.append('<div class="h head">Total<span>failed / test cases</span></div>' if pgs
                  else '<div class="h head">Result</div>')
     for f in fams:
         parts.append('<button type="button" class="h grp" onclick="openComponent(%s)" '
@@ -1022,17 +1022,17 @@ def _matrix(layout: dict) -> str:
                          % (_esc(_gap_tip(g)), _esc(_gap_label(g)),
                             _esc(" · " + pkg) if layout["multi"] and pkg else ""))
             parts.append('<a class="h cell c-gap" style="grid-column:span %d" href="#gap-%d" title="%s">'
-                         '<b>NOT TESTED</b> &middot; %s<span>%s &middot; no test leg on any PG</span></a>'
+                         '<b>NOT TESTED</b> &middot; %s<span>%s &middot; no test run on any PG</span></a>'
                          % (cols, i, _esc(_gap_tip(g)), _esc(_gap_words(g)), _esc(_dash(g.get("detail")))))
     parts.append("</div></div>")
     parts.append(
-        '<div class="legend"><span>Colour = the leg&#39;s certification verdict; numbers are '
+        '<div class="legend"><span>Colour = the test run&#39;s certification verdict; numbers are '
         'failed/total test cases.</span><span><i class="sw ok"></i>pass</span>'
         '<span><i class="sw bad"></i>fail</span><span><i class="sw issue"></i>missing / infra / incomplete</span>'
         '<span><i class="sw c-notrun"></i>not run</span><span><i class="sw c-preview"></i>preview</span>'
         '<span><i class="sw c-gap"></i>not tested: a coverage gap (build cell, package target or '
-        'rejected file) with no test leg on any PG; it is not a PG result</span>'
-        '<span><i class="sw empty"></i>&mdash; no leg planned</span><span>&#9888; report issue</span></div>')
+        'rejected file) with no test run on any PG; it is not a PG result</span>'
+        '<span><i class="sw empty"></i>&mdash; no test run planned</span><span>&#9888; report issue</span></div>')
     return "".join(parts)
 
 
@@ -1101,7 +1101,7 @@ def _gap_row(i: int, g: dict, multi: bool) -> str:
         '<div class="inv"><code>%s</code></div></td>'
         '<td title="coverage gaps are not PG-specific">&mdash;</td><td>%s</td>%s'
         '<td>%s<div class="rc">%s</div></td>'
-        '<td class="muted" colspan="4">no test leg on any PG</td>'
+        '<td class="muted" colspan="4">no test run on any PG</td>'
         '<td><a class="report-link" href="#gap-%d">Gap detail &darr;</a></td></tr>'
     ) % (i, _esc(_gap_label(g)), _esc(_dash(_txt(g.get("cell_id")))), _esc(_dash(_txt(g.get("arch")))),
          ('<td class="mono">%s</td>' % _esc(_dash(_txt(g.get("physical_package"))))) if multi else "",
@@ -1118,7 +1118,7 @@ def _section(fam: dict, multi: bool) -> str:
     head = ('<thead><tr><th><button onclick="sortGroup(this,\'platform\')">Platform</button></th>'
             '<th><button onclick="sortGroup(this,\'pg\')">PG</button></th>'
             '<th><button onclick="sortGroup(this,\'arch\')">Arch</button></th>%s'
-            '<th>Status</th><th>Tests</th><th>Passed</th><th>Failed</th><th>Skipped</th>'
+            '<th>Status</th><th>Test cases</th><th>Passed</th><th>Failed</th><th>Skipped</th>'
             '<th>Detail</th></tr></thead>') % (
         '<th><button onclick="sortGroup(this,\'package\')">Package</button></th>' if multi else "")
     legs = "".join(_leg_row(v, multi) for v in sorted(fam["views"], key=_view_sort_key))
@@ -1198,9 +1198,9 @@ def _issues_table(views: list) -> str:
     body = "".join('<tr id="issue-%s"><td><code>%s</code></td><td>%s</td></tr>'
                    % (_esc(v["anchor"][4:]), _esc(v["inv"]), _esc(m)) for v, m in rows)
     return ('<h2 id="issues">Report issues (detail evidence unavailable or inconsistent)</h2>'
-            '<p class="sub">These legs keep their authoritative verdict above; only their '
+            '<p class="sub">These test runs keep their authoritative verdict above; only their '
             'per-test-case detail could not be attached or did not agree with the counts.</p>'
-            '<div class="scroll"><table><tr><th>Invocation</th><th>Problem</th></tr>%s</table></div>' % body)
+            '<div class="scroll"><table><tr><th>Test run</th><th>Problem</th></tr>%s</table></div>' % body)
 
 
 def _as_list_of_dicts(value) -> list:
@@ -1216,7 +1216,7 @@ def _unresolved_block(result: dict) -> str:
         if isinstance(result.get("errors"), list) else []
     items = "".join("<li><code>%s</code></li>" % _esc(e) for e in errs) or "<li>(no errors listed)</li>"
     return ('<div class="unresolved"><h2>Result unresolved &mdash; certification failed closed</h2>'
-            '<p class="sub">The reducer could not build trustworthy legs from the collected '
+            '<p class="sub">The reducer could not build trustworthy test runs from the collected '
             'evidence (reason_code <code>%s</code>). Its errors:</p><ul>%s</ul></div>'
             % (_esc(result.get("reason_code") or "—"), items))
 
@@ -1237,8 +1237,8 @@ def _audit_section(result: dict) -> str:
                 _esc(u.get("invocation_id") or "—"), _esc(prov.get("caller_run_attempt", "—")),
                 _esc(ev.get("reason", "—"))))
         parts.append('<h2>Unexpected result records (%d)</h2><p class="sub">Collected summaries '
-                     'the reducer rejected; they never fill a leg.</p><div class="scroll"><table><tr><th>Kind</th>'
-                     '<th>Invocation</th><th>Producing attempt</th><th>Reason</th></tr>%s</table></div>'
+                     'the reducer rejected; they never count as a test run.</p><div class="scroll"><table><tr><th>Kind</th>'
+                     '<th>Test run</th><th>Producing attempt</th><th>Reason</th></tr>%s</table></div>'
                      % (len(unexpected), "".join(rows)))
     hist = _as_list_of_dicts(result.get("historical_results"))
     if hist:
@@ -1248,7 +1248,7 @@ def _audit_section(result: dict) -> str:
             _esc(h.get("execution_status", "—")), _esc(h.get("test_verdict", "—"))) for h in hist)
         parts.append('<details class="audit"><summary><b>Prior-attempt results (%d)</b> &mdash; '
                      'retained for audit, never shown as current detail or counted in totals '
-                     '(aggregation attempt %s)</summary><div class="scroll"><table><tr><th>Invocation</th>'
+                     '(aggregation attempt %s)</summary><div class="scroll"><table><tr><th>Test run</th>'
                      '<th>Producing attempt</th><th>Execution</th><th>Verdict</th></tr>%s</table></div>'
                      '</details>' % (len(hist), _esc(ac.get("aggregation_run_attempt", "—")), rows))
     return "".join(parts)
@@ -1306,7 +1306,7 @@ def _fallback(out_dir: Path, message: str, decision=None) -> None:
     doc = (_HEAD % _css()
            + '<div class="header"><h1>PEP Certification Report</h1></div>'
            + '<div class="banner banner-issue"><strong>&#9888; Human report incomplete.</strong> '
-             'The certification result could not be read, so no legs, coverage or gaps are shown '
+             'The certification result could not be read, so no test runs, coverage or gaps are shown '
              'here and nothing on this page is a verified certification result. See the report '
              'generation issue below.</div>'
            + _banner(decision, trusted=False)

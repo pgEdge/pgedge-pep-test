@@ -88,8 +88,9 @@ def junit(container="auto-oel9-amd-rhel", *, n_pass=2, n_skip=1, n_error=0,
 
 
 def leg_artifact(dl, name, inv, *, attempt="1", xml=None, manifest="ok", preview=False,
-                 extra_reports=(), flat=False):
-    """Write one uploaded pep-summary artifact the way a real leg produces it."""
+                 extra_reports=(), flat=False, digest="e" * 64):
+    """Write one uploaded pep-summary artifact the way a real leg produces it. `digest`
+    is the verified install's package digest (default: planned()'s "e"*64)."""
     root = Path(dl) if flat else Path(dl) / name
     root.mkdir(parents=True, exist_ok=True)
     reports = []
@@ -109,7 +110,8 @@ def leg_artifact(dl, name, inv, *, attempt="1", xml=None, manifest="ok", preview
             "pep_requested_ref": PEP, "pep_resolved_sha": PEP}
     summary, _ = RS.build_summary(reports=reports, mode="observe", preview=preview,
                                   identity_evidence=PROVEN, provenance=prov,
-                                  invocation_id=inv)
+                                  invocation_id=inv,
+                                  installed_package_sha256=None if preview else digest)
     (root / "summary.json").write_text(json.dumps(summary))
     listed = ["test-logs/" + str(r.relative_to(root)) for r in reports]
     if manifest == "ok":
@@ -917,3 +919,24 @@ def test_reader_facing_wording_says_test_runs_not_legs(tmp_path):
             "--ledger", str(run.out / "collection-ledger.json"), "--legs", str(tmp_path / "dl"),
             "--out", str(fb_out)])
     assert not re.search(r"\blegs?\b", _visible((fb_out / "consolidated-report.html").read_text()), re.I)
+
+
+def test_package_proof_is_explained_in_source_neutral_words(tmp_path):
+    """A digest mismatch reads as unproven bytes (never a product pass or fail) and says
+    so in words that hold for a build receipt and a published-package replay alike; a
+    matching test run's tooltip says its bytes match."""
+    dl = tmp_path / "dl"
+    leg_artifact(dl, "pep-summary-a-a1", INV_A)                              # planned digest
+    leg_artifact(dl, "pep-summary-b-a1", INV_B, digest="0" * 64)             # other bytes
+    run = pipeline(tmp_path, [planned(INV_A), planned(INV_B, alias="alma10-arm64", arch="arm64")],
+                   ["pep-summary-a-a1", "pep-summary-b-a1"])
+    assert run.decision["reason_code"] == "package_digest_mismatch"
+    assert vstate(run.html) == "INCOMPLETE"
+    bad = run.row(INV_B)
+    assert "INCOMPLETE" in bad and "package_digest_mismatch" in bad
+    assert "SHA-256 differs from the captured package" in bad
+    assert _nums(bad) == [3, 2, 0, 1]                                        # counts still shown
+    assert "installed package SHA-256 matches the captured package" in run.html
+    text = _visible(run.html)
+    assert not re.search(r"\b(receipt|replay|release build)\b", text, re.I)
+    assert not re.search(r"\blegs?\b", text, re.I)

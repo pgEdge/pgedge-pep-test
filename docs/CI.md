@@ -421,7 +421,30 @@ Every call **always** uploads the `test-logs/` directory, but **its contents var
 - **L2b — exact binary version identity (strong):** the binary's self-reported version string equals `expected_binary`.
 - **L1 — component version (weak / degraded):** the component's reported version *contains* the normalized `expected_version`. This is a coarse substring/containment check — it confirms the right version line, **not** the exact build. A run that proves only L1 must not be described as exact-build.
 
-L2a and L2b are **exact version-string** matches, not a byte-level or checksum/content assertion (there is no L3 content proof in this POC). Each rung is independent and reported separately; a rung that is attemptable but unproven (mismatch or missing observation) makes `test_verdict=fail`. L2 is reachable only when the corresponding explicit `expected_*` string is supplied.
+L2a and L2b are **exact version-string** matches, not a byte-level or checksum/content assertion; the package bytes are proven separately (below). Each rung is independent and reported separately; a rung that is attemptable but unproven (mismatch or missing observation) makes `test_verdict=fail`. L2 is reachable only when the corresponding explicit `expected_*` string is supplied.
+
+### Package bytes (certification)
+
+A pinned install (L2a) is a **verified install**, and it is still an ordinary signed-repository install:
+1. The package manager downloads the exact pin into its own cache: `apt-get install --download-only` or `dnf install --downloadonly`.
+2. PEP identifies the **one** cached file whose own metadata names that package, version-release and native (or arch-independent) architecture, and hashes it with SHA-256.
+3. The package manager installs the same pin **from its cache only**: `apt-get install --no-download` or `dnf -C install`. It re-verifies the cached file against its repository metadata and refuses changed bytes.
+4. PEP ties the install to the hashed file:
+   - DEB: the hash must equal the one SHA256 the authenticated APT index records for the pin.
+   - RPM: the installed package's `SHA256HEADER` must equal the hashed file's.
+
+A pin that is already installed is refused, because a no-op install could not be tied to the download. A missing, ambiguous or unreadable cached file is also refused. A local-file install is never used: `dnf`'s `localpkg_gpgcheck` defaults to off, and a local `.deb` bypasses APT's authenticated index. `install-evidence.json` records the digest as `installed_sha256`, and the atomic summary carries it as `installed_package_sha256` (null when no file was verified). The latest/L1 path records null.
+
+`pep-certify.yml`'s reducer compares that digest with the planned package's captured `sha256` for every non-preview test run. It also requires the planned identity rungs: L1 and L2a always, and L2b only when the component policy plans an expected binary version. Every plan entry must carry its family's exact pin, equal to the planned package's version-release, with the other family's pin empty. A plan entry that does not fails the whole result closed. A completed test run whose digest is **mismatched** (`package_digest_mismatch`) or **missing** (`package_digest_missing`), or whose planned identity is unproven (`identity_unproven`), becomes `incomplete`, with its test counts and failures kept. It blocks in **both** `observe` and `gate`. Preview is exempt. A test run that was already incomplete or an infra failure keeps its own status and reason, but a digest mismatch is still recorded on it. The decision names the first reason present, in this order:
+1. `package_digest_mismatch`;
+2. `missing_result`;
+3. an infra failure;
+4. mixed preview/full test runs;
+5. `package_digest_missing`;
+6. `identity_unproven`;
+7. any other incomplete test run.
+
+The gate also refuses a completed result whose test runs do not all carry a matching digest and proven planned identity (`contradictory_axes`). The digest proves the installed bytes are the captured bytes. What that means depends on where the captured digest came from: a build receipt proves the repository served the built package, while a published-package replay proves the test used the bytes that were captured.
 
 ### DockerHub credentials (optional)
 

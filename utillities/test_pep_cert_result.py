@@ -95,6 +95,10 @@ def _summary(iid, *, execution_status="completed", test_verdict="pass",
         "counts": _consistent_counts(execution_status, test_verdict) if counts is None else counts,
         "provenance": _caller_prov() if provenance is None else provenance,
     }
+    # A verified full-mode install records the planned package digest (_inv's "d"*64);
+    # preview never installs. Tests override or delete it to exercise the proof rules.
+    if execution_status != "preview":
+        s["installed_package_sha256"] = "d" * 64
     s.update(extra)
     return s
 
@@ -1066,3 +1070,321 @@ def test_numeric_grouping_preserves_original_spelling_and_ordering():
     # sorted by numeric attempt (1 before 2), original spelling "01" preserved verbatim
     assert [h["producing_attempt"] for h in fwd["historical_results"]] == ["01", "2"]
     assert pcr.to_json(fwd) == pcr.to_json(rev)           # deterministic under reorder
+
+
+# --------------------------------------------------------------------------- #
+# package proof: the installed digest and the planned identity rungs
+# --------------------------------------------------------------------------- #
+_OTHER = "e" * 64
+
+
+def _one(summary, **inv_over):
+    return _build(_plan([_inv("rag-a-pg17-aaaa", **inv_over)]), [summary])
+
+
+def _no_digest(**kw):
+    s = _summary("rag-a-pg17-aaaa", **kw)
+    del s["installed_package_sha256"]                    # a summary that predates the field
+    return s
+
+
+def test_matching_digest_and_proven_identity_certify():
+    res = _one(_summary("rag-a-pg17-aaaa"))
+    leg = res["legs"][0]
+    assert (leg["execution_status"], leg["reason_code"], leg["package_digest"]) == ("completed", None, "match")
+    assert leg["installed_package_sha256"] == "d" * 64 and leg["unproven_identity_rungs"] == []
+    assert (res["execution_status"], res["coverage_status"], res["reason_code"]) == ("completed", "complete", None)
+
+
+def test_planned_digest_compares_case_insensitively():
+    inv = _inv("rag-a-pg17-aaaa")
+    inv["package"]["sha256"] = "D" * 64
+    res = _build(_plan([inv]), [_summary("rag-a-pg17-aaaa")])
+    assert res["legs"][0]["package_digest"] == "match" and res["execution_status"] == "completed"
+
+
+def test_mismatched_digest_blocks_but_keeps_the_verdict_and_counts():
+    res = _one(_summary("rag-a-pg17-aaaa", installed_package_sha256=_OTHER))
+    leg = res["legs"][0]
+    assert (leg["execution_status"], leg["test_verdict"], leg["reason_code"]) == (
+        "incomplete", "pass", "package_digest_mismatch")
+    assert leg["package_digest"] == "mismatch" and leg["installed_package_sha256"] == _OTHER
+    assert leg["counts"] == {"tests": 3, "failures": 0, "errors": 0, "skipped": 0}
+    assert (res["execution_status"], res["test_verdict"], res["reason_code"]) == (
+        "incomplete", "pass", "package_digest_mismatch")
+    assert res["coverage_status"] == "partial"
+    assert res["counts"]["completed"] == 0 and res["counts"]["incomplete"] == 1
+
+
+@pytest.mark.parametrize("summary", [
+    pytest.param(_summary("rag-a-pg17-aaaa", installed_package_sha256=None), id="null"),
+    pytest.param(_no_digest(), id="absent-older-summary"),
+])
+def test_missing_digest_blocks(summary):
+    res = _one(summary)
+    leg = res["legs"][0]
+    assert res["result_resolved"] is True                 # an absent field is not malformed
+    assert (leg["execution_status"], leg["reason_code"], leg["package_digest"]) == (
+        "incomplete", "package_digest_missing", "missing")
+    assert leg["installed_package_sha256"] is None
+    assert res["reason_code"] == "package_digest_missing"
+
+
+@pytest.mark.parametrize("bad", ["D" * 64, "d" * 63, "g" * 64, 7, True, ["d" * 64], ""])
+def test_malformed_observed_digest_fails_closed(bad):
+    res = _one(_summary("rag-a-pg17-aaaa", installed_package_sha256=bad))
+    assert res["result_resolved"] is False and res["reason_code"] == "validation_failure"
+    assert res["unexpected_results"][0]["kind"] == "malformed"
+    assert "installed_package_sha256" in res["unexpected_results"][0]["evidence"]["reason"]
+
+
+@pytest.mark.parametrize("pkg", [
+    {"name": "x"}, {"name": "x", "sha256": ""}, {"name": "x", "sha256": "d" * 63}, None, "d" * 64])
+def test_plan_without_a_valid_planned_digest_fails_closed(pkg):
+    inv = _inv("rag-a-pg17-aaaa")
+    inv["package"] = pkg
+    res = _build(_plan([inv]), [_summary("rag-a-pg17-aaaa")])
+    assert res["result_resolved"] is False
+    assert any("package.sha256" in e for e in res["errors"])
+
+
+# Every JSON type a corrupt plan could carry where a string belongs.
+_NON_STRINGS = [None, 7, 1.5, True, [], ["2.0.0-1.el9"], {}, {"rpm": "2.0.0-1.el9"}]
+
+
+def _assert_fails_closed(res):
+    """A fail-closed validation result: well formed, serializable, blocking in both modes."""
+    spec = importlib.util.spec_from_file_location("pep_cert_gate", str(Path(__file__).parent / "pep_cert_gate.py"))
+    G = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(G)
+    assert res["result_resolved"] is False and res["reason_code"] == "validation_failure"
+    assert res["legs"] == [] and res["execution_status"] == "infra_failure"
+    pcr.to_json(res)
+    for mode in ("observe", "gate"):
+        assert G.decide(res, mode)["workflow_conclusion"] == "failure"
+
+
+@pytest.mark.parametrize("family", ["rpm", "deb"])
+@pytest.mark.parametrize("key,bad", [
+    ("own", ""), ("own", "   "), ("own", "absent"),
+    ("own", "2.0.0-2.el9"),                        # a pin, but not the planned package's version-release
+    ("other", "2.0.0-1.el9"), ("other", "absent"),  # opposite family must be ""
+    ("expected_binary", "absent"), ("expected_binary", " "), ("expected_binary", "\t"),
+] + [(k, v) for k in ("own", "other", "expected_binary") for v in _NON_STRINGS])
+def test_plan_entry_without_its_exact_family_pin_fails_closed(family, key, bad):
+    # Every planner-produced certification invocation pins its exact package; a corrupt
+    # entry must never read as "L2a not planned".
+    inv = _inv("rag-a-pg17-aaaa", family=family)
+    field = {"own": "expected_" + family, "other": "expected_" + ("deb" if family == "rpm" else "rpm")}.get(key, key)
+    if bad == "absent":
+        del inv[field]
+    else:
+        inv[field] = bad
+    res = _build(_plan([inv]), [_summary("rag-a-pg17-aaaa")])
+    _assert_fails_closed(res)
+    assert any(field in e for e in res["errors"]), res["errors"]
+
+
+@pytest.mark.parametrize("family", ["", "RPM", "apk", "absent"] + _NON_STRINGS + [["rpm"], {"deb": 1}])
+def test_plan_entry_with_an_invalid_family_fails_closed_never_raises(family):
+    # Regression: an array/object family is unhashable and used to raise TypeError.
+    inv = _inv("rag-a-pg17-aaaa")
+    if family == "absent":
+        del inv["family"]
+    else:
+        inv["family"] = family
+    res = _build(_plan([inv]), [_summary("rag-a-pg17-aaaa")])
+    _assert_fails_closed(res)
+    assert any("is not rpm or deb" in e for e in res["errors"])
+
+
+@pytest.mark.parametrize("field", ["version", "release"])
+@pytest.mark.parametrize("bad", ["", "  ", "absent"] + _NON_STRINGS)
+def test_plan_package_without_string_version_release_fails_closed(field, bad):
+    inv = _inv("rag-a-pg17-aaaa")
+    if bad == "absent":
+        del inv["package"][field]
+    else:
+        inv["package"][field] = bad
+    res = _build(_plan([inv]), [_summary("rag-a-pg17-aaaa")])
+    _assert_fails_closed(res)
+    assert any("version and release must be nonblank strings" in e for e in res["errors"])
+
+
+@pytest.mark.parametrize("family", ["rpm", "deb"])
+def test_blanked_pins_cannot_turn_an_unproven_l2a_into_a_pass(family):
+    # Regression: both pins blanked in the plan, l2a not_proven, digest still matching.
+    # This used to read as "L2a not planned" and reach clean_pass.
+    spec = importlib.util.spec_from_file_location("pep_cert_gate", str(Path(__file__).parent / "pep_cert_gate.py"))
+    G = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(G)
+    inv = _inv("rag-a-pg17-aaaa", family=family, expected_rpm="", expected_deb="")
+    s = _summary("rag-a-pg17-aaaa", identity_evidence=_ident(l2a="not_proven", l2b="not_attempted"))
+    res = _build(_plan([inv]), [s])
+    assert res["result_resolved"] is False
+    for mode in ("observe", "gate"):
+        dec = G.decide(res, mode)
+        assert (dec["certification_state"], dec["workflow_conclusion"]) == ("incomplete", "failure")
+
+
+def test_l2a_is_always_required_for_a_certification_invocation():
+    res = _one(_summary("rag-a-pg17-aaaa", identity_evidence=_ident(l2a="not_attempted")))
+    leg = res["legs"][0]
+    assert (leg["reason_code"], leg["unproven_identity_rungs"]) == ("identity_unproven", ["l2a"])
+
+
+def test_preview_leg_is_exempt_from_package_proof():
+    s = _summary("rag-a-pg17-aaaa", execution_status="preview", test_verdict="not_run",
+                 identity_evidence={"l2a": "not_attempted", "l2b": "not_attempted", "l1": "not_attempted"})
+    res = _one(s)
+    leg = res["legs"][0]
+    assert (leg["execution_status"], leg["package_digest"], leg["unproven_identity_rungs"]) == (
+        "preview", "not_required", [])
+    assert leg["reason_code"] is None and res["execution_status"] == "preview"
+
+
+def _ident(l2a="proven", l2b="proven", l1="proven"):
+    return {"l2a": l2a, "l2b": l2b, "l1": l1}
+
+
+@pytest.mark.parametrize("ev,inv_over,unproven", [
+    (_ident(l2a="not_proven"), {}, ["l2a"]),                                   # version mismatch
+    (_ident(l1="not_attempted"), {}, ["l1"]),                                  # identity never queried
+    (_ident(l2a="not_proven", l1="not_attempted"), {}, ["l2a", "l1"]),         # failed precondition
+    (_ident(l2b="not_attempted"), {"expected_binary": "2.0.0"}, ["l2b"]),      # binary planned
+    (_ident(l2b="not_proven"), {"expected_binary": "2.0.0"}, ["l2b"]),
+])
+def test_unproven_planned_identity_blocks(ev, inv_over, unproven):
+    res = _one(_summary("rag-a-pg17-aaaa", identity_evidence=ev), **inv_over)
+    leg = res["legs"][0]
+    assert (leg["execution_status"], leg["reason_code"]) == ("incomplete", "identity_unproven")
+    assert leg["unproven_identity_rungs"] == unproven and leg["package_digest"] == "match"
+    assert res["reason_code"] == "identity_unproven"
+
+
+@pytest.mark.parametrize("ev", [
+    _ident(l2b="not_attempted"),                                 # the RAG replay's evidence
+    _ident(l2b="not_proven"),                                    # l2b not planned -> not required
+])
+def test_l2b_is_required_only_when_an_expected_binary_is_planned(ev):
+    res = _one(_summary("rag-a-pg17-aaaa", identity_evidence=ev))
+    leg = res["legs"][0]
+    assert (leg["execution_status"], leg["reason_code"], leg["unproven_identity_rungs"]) == (
+        "completed", None, [])
+    assert res["reason_code"] is None and res["coverage_status"] == "complete"
+
+
+def test_leg_reason_precedence_is_mismatch_then_missing_then_identity():
+    bad_id = _ident(l2a="not_proven")
+    mism = _one(_summary("rag-a-pg17-aaaa", installed_package_sha256=_OTHER, identity_evidence=bad_id))
+    miss = _one(_summary("rag-a-pg17-aaaa", installed_package_sha256=None, identity_evidence=bad_id))
+    assert mism["legs"][0]["reason_code"] == "package_digest_mismatch"
+    assert miss["legs"][0]["reason_code"] == "package_digest_missing"
+    # the identity problem is still recorded beside the digest reason
+    assert mism["legs"][0]["unproven_identity_rungs"] == miss["legs"][0]["unproven_identity_rungs"] == ["l2a"]
+
+
+def test_product_failure_on_unproven_bytes_keeps_failures_but_does_not_count_as_product_fail():
+    res = _one(_summary("rag-a-pg17-aaaa", test_verdict="fail", installed_package_sha256=_OTHER))
+    leg = res["legs"][0]
+    assert (leg["execution_status"], leg["test_verdict"], leg["reason_code"]) == (
+        "incomplete", "fail", "package_digest_mismatch")
+    assert leg["counts"]["failures"] == 1
+    assert (res["execution_status"], res["test_verdict"], res["reason_code"]) == (
+        "incomplete", "fail", "package_digest_mismatch")
+
+
+def test_mismatch_is_recorded_on_an_already_incomplete_leg():
+    s = _summary("rag-a-pg17-aaaa", execution_status="incomplete", test_verdict="pass",
+                 installed_package_sha256=_OTHER, reason="some reports unreadable")
+    leg = _one(s)["legs"][0]
+    assert (leg["execution_status"], leg["reason_code"], leg["reason"]) == (
+        "incomplete", "package_digest_mismatch", "some reports unreadable")
+
+
+def test_mismatch_on_an_infra_leg_is_named_but_status_stays_infra():
+    s = _summary("rag-a-pg17-aaaa", execution_status="infra_failure", test_verdict="not_run",
+                 installed_package_sha256=_OTHER)
+    res = _one(s)
+    assert (res["legs"][0]["execution_status"], res["legs"][0]["reason_code"]) == (
+        "infra_failure", "package_digest_mismatch")
+    assert (res["execution_status"], res["reason_code"]) == ("infra_failure", "package_digest_mismatch")
+
+
+def test_missing_digest_on_an_infra_or_incomplete_leg_keeps_its_own_reason():
+    infra = _one(_summary("rag-a-pg17-aaaa", execution_status="infra_failure", test_verdict="not_run",
+                          installed_package_sha256=None))
+    inc = _one(_summary("rag-a-pg17-aaaa", execution_status="incomplete", test_verdict="pass",
+                        installed_package_sha256=None))
+    assert infra["legs"][0]["reason_code"] is None and infra["reason_code"] == "infra_leg"
+    assert inc["legs"][0]["reason_code"] is None and inc["reason_code"] == "leg_incomplete"
+    assert infra["legs"][0]["package_digest"] == inc["legs"][0]["package_digest"] == "missing"
+
+
+def test_missing_leg_does_not_evaluate_package_proof():
+    res = _build(_plan([_inv("rag-a-pg17-aaaa")]), [])
+    leg = res["legs"][0]
+    assert (leg["package_digest"], leg["installed_package_sha256"], leg["unproven_identity_rungs"]) == (
+        None, None, None)
+    assert res["reason_code"] == "missing_result"
+
+
+def _aggregate(*summaries):
+    ids = ["rag-a-pg17-aaaa", "rag-b-pg17-bbbb", "rag-c-pg17-cccc"][:len(summaries)]
+    plan = _plan([_inv(i) for i in ids])
+    return _build(plan, [s(i) for s, i in zip(summaries, ids) if s is not None])
+
+
+_S_OK = lambda i: _summary(i)
+_S_MISMATCH = lambda i: _summary(i, installed_package_sha256=_OTHER)
+_S_NO_DIGEST = lambda i: _summary(i, installed_package_sha256=None)
+_S_NO_IDENTITY = lambda i: _summary(i, identity_evidence=_ident(l2a="not_proven"))
+_S_INFRA = lambda i: _summary(i, execution_status="infra_failure", test_verdict="not_run",
+                              installed_package_sha256=None)
+_S_PREVIEW = lambda i: _summary(i, execution_status="preview", test_verdict="not_run")
+_S_INCOMPLETE = lambda i: _summary(i, execution_status="incomplete", test_verdict="pass")
+
+
+@pytest.mark.parametrize("legs,status,reason", [
+    ((_S_MISMATCH, None), "infra_failure", "package_digest_mismatch"),        # beats missing_result
+    ((_S_MISMATCH, _S_INFRA), "infra_failure", "package_digest_mismatch"),    # beats infra_leg
+    ((_S_MISMATCH, _S_PREVIEW), "incomplete", "package_digest_mismatch"),     # beats mixed_mode
+    ((_S_NO_DIGEST, None), "infra_failure", "missing_result"),
+    ((_S_NO_IDENTITY, _S_INFRA), "infra_failure", "infra_leg"),
+    ((_S_NO_DIGEST, _S_PREVIEW), "incomplete", "mixed_mode"),
+    ((_S_NO_IDENTITY, _S_NO_DIGEST), "incomplete", "package_digest_missing"),
+    ((_S_INCOMPLETE, _S_NO_IDENTITY), "incomplete", "identity_unproven"),     # beats leg_incomplete
+    ((_S_INCOMPLETE, _S_OK), "incomplete", "leg_incomplete"),
+    ((_S_OK, _S_OK), "completed", None),
+])
+def test_aggregate_reason_precedence(legs, status, reason):
+    res = _aggregate(*legs)
+    assert (res["execution_status"], res["reason_code"]) == (status, reason)
+
+
+def test_package_proof_is_deterministic_under_reordering():
+    ids = ["rag-a-pg17-aaaa", "rag-b-pg17-bbbb", "rag-c-pg17-cccc"]
+    plan = _plan([_inv(i) for i in ids])
+    ss = [_S_MISMATCH(ids[0]), _S_NO_DIGEST(ids[1]), _S_NO_IDENTITY(ids[2])]
+    assert pcr.to_json(_build(plan, ss)) == pcr.to_json(_build(plan, list(reversed(ss))))
+
+
+def test_prior_attempt_summary_without_the_field_is_kept_as_history():
+    plan = _plan([_inv("rag-a-pg17-aaaa")], prov=_plan_prov(run_attempt="1"))
+    prior = _no_digest(provenance=_caller_prov(caller_run_attempt="1"))
+    cur = _summary("rag-a-pg17-aaaa", provenance=_caller_prov(caller_run_attempt="2"))
+    res = _build(plan, [cur, prior], current_run_attempt="2")
+    assert res["result_resolved"] is True and res["reason_code"] is None
+    assert [(h["producing_attempt"], h["installed_package_sha256"]) for h in res["historical_results"]] == [
+        ("1", None)]
+    # history never fills or blocks a leg
+    assert res["legs"][0]["package_digest"] == "match" and res["execution_status"] == "completed"
+
+
+def test_prior_attempt_digest_is_audited_verbatim_and_never_promoted():
+    plan = _plan([_inv("rag-a-pg17-aaaa")], prov=_plan_prov(run_attempt="1"))
+    prior = _summary("rag-a-pg17-aaaa", installed_package_sha256=_OTHER,
+                     provenance=_caller_prov(caller_run_attempt="1"))
+    res = _build(plan, [prior], current_run_attempt="2")
+    assert res["historical_results"][0]["installed_package_sha256"] == _OTHER
+    assert res["legs"][0]["reconciliation"] == "missing" and res["reason_code"] == "missing_result"

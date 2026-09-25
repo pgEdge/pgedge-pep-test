@@ -65,6 +65,10 @@ def _int_req(**over):
     return rag.pep_request_env.build_request_from_env(env)
 
 
+# The package digest a verified pinned install returns (install_pinned's third value).
+_DIGEST = "f" * 64
+
+
 class _Spy:
     def __init__(self, ret):
         self.calls = []
@@ -82,7 +86,7 @@ def test_standalone_install_uses_install_package_not_pinned(monkeypatch):
     monkeypatch.setattr(rag, "INTEGRATION_REQUEST", None)
     monkeypatch.setattr(rag, "client", _Client())
     ip = _Spy((True, "rhel", "installed"))
-    pinned = _Spy((True, "out"))
+    pinned = _Spy((True, "out", _DIGEST))
     monkeypatch.setattr(rag.package_management, "install_package", ip)
     monkeypatch.setattr(rag.package_management, "install_pinned", pinned)
 
@@ -97,7 +101,7 @@ def test_integration_pinned_uses_install_pinned(monkeypatch):
     assert rag.pep_verify.choose_install(req)[0] == "pinned"  # (real decision)
     monkeypatch.setattr(rag, "INTEGRATION_REQUEST", req)
     monkeypatch.setattr(rag, "client", _Client())
-    pinned = _Spy((True, "ok"))
+    pinned = _Spy((True, "ok", _DIGEST))
     ip = _Spy((True, "deb", "installed"))
     monkeypatch.setattr(rag.package_management, "install_pinned", pinned)
     monkeypatch.setattr(rag.package_management, "install_package", ip)
@@ -114,7 +118,7 @@ def test_integration_pinned_surfaces_install_failure(monkeypatch):
     req = _int_req(PEP_EXPECTED_DEB="1.0.0~beta1-1.trixie")
     monkeypatch.setattr(rag, "INTEGRATION_REQUEST", req)
     monkeypatch.setattr(rag, "client", _Client())
-    monkeypatch.setattr(rag.package_management, "install_pinned", _Spy((False, "no candidate")))
+    monkeypatch.setattr(rag.package_management, "install_pinned", _Spy((False, "no candidate", None)))
 
     with pytest.raises(pytest.fail.Exception) as ei:   # pytest.fail wraps the AssertionError
         rag.test_rag_component_install("c1", "deb", "pgedge-rag-server")
@@ -127,7 +131,7 @@ def test_integration_latest_uses_install_package(monkeypatch):
     monkeypatch.setattr(rag, "INTEGRATION_REQUEST", req)
     monkeypatch.setattr(rag, "client", _Client())
     ip = _Spy((True, "deb", "installed"))
-    pinned = _Spy((True, "out"))
+    pinned = _Spy((True, "out", _DIGEST))
     monkeypatch.setattr(rag.package_management, "install_package", ip)
     monkeypatch.setattr(rag.package_management, "install_pinned", pinned)
 
@@ -245,19 +249,33 @@ def _wire_integration(monkeypatch, tmp_path, req, run_token="run-A"):
     return inst, ident
 
 
+def test_latest_install_records_no_package_digest(monkeypatch, tmp_path):
+    # The L1/latest path installs through install_package, which verifies no file, so
+    # its scope marker carries a null digest (certification then refuses to pass it).
+    req = _int_req()                                   # no expected_deb -> latest
+    inst, _ident = _wire_integration(monkeypatch, tmp_path, req)
+    monkeypatch.setattr(rag.package_management, "install_package", _Spy((True, "deb", "installed")))
+
+    rag.test_rag_component_install("c1", "deb", "pgedge-rag-server")
+
+    marker = json.loads(open(inst).read())
+    assert marker["install_kind"] == "latest" and marker["installed_sha256"] is None
+
+
 def test_install_writes_scope_marker_then_identity_passes(monkeypatch, tmp_path):
     # Full happy path through the REAL functions + REAL pep_evidence/pep_verify:
     # a successful pinned install records the scope marker, and identity then
     # passes the precondition, gathers observations, and proves identity.
     req = _int_req(PEP_EXPECTED_DEB="1.0.0~beta1-1.trixie")
     inst, ident = _wire_integration(monkeypatch, tmp_path, req)
-    monkeypatch.setattr(rag.package_management, "install_pinned", _Spy((True, "ok")))
+    monkeypatch.setattr(rag.package_management, "install_pinned", _Spy((True, "ok", _DIGEST)))
 
     rag.test_rag_component_install("c1", "deb", "pgedge-rag-server")
 
     marker = json.loads(open(inst).read())
     assert marker["run_token"] == "run-A" and marker["install_kind"] == "pinned"
     assert marker["install_token"] == "1.0.0~beta1-1.trixie"
+    assert marker["installed_sha256"] == _DIGEST        # the verified file's digest is recorded
 
     monkeypatch.setattr(rag.package_management, "query_installed_version",
                         lambda c, pkg: "1.0.0~beta1-1.trixie")
@@ -386,7 +404,7 @@ def test_integration_rag2_install_pins_request_package_not_config(monkeypatch):
     assert rag.pep_verify.choose_install(req)[0] == "pinned"
     monkeypatch.setattr(rag, "INTEGRATION_REQUEST", req)
     monkeypatch.setattr(rag, "client", _Client())
-    pinned = _Spy((True, "ok"))
+    pinned = _Spy((True, "ok", _DIGEST))
     ip = _Spy((True, "rhel", "installed"))
     monkeypatch.setattr(rag.package_management, "install_pinned", pinned)
     monkeypatch.setattr(rag.package_management, "install_package", ip)
@@ -446,7 +464,7 @@ def test_standalone_selection_stays_config_driven(monkeypatch):
     monkeypatch.setattr(rag, "INTEGRATION_REQUEST", None)
     monkeypatch.setattr(rag, "client", _Client())
     ip = _Spy((True, "rhel", "installed"))
-    pinned = _Spy((True, "out"))
+    pinned = _Spy((True, "out", _DIGEST))
     monkeypatch.setattr(rag.package_management, "install_package", ip)
     monkeypatch.setattr(rag.package_management, "install_pinned", pinned)
 
@@ -494,7 +512,7 @@ def test_integration_l1_latest_installs_request_package(monkeypatch, tmp_path):
     monkeypatch.setattr(rag, "client", _Client())
     monkeypatch.setenv("PEP_INSTALL_OUT", str(tmp_path / "install-evidence.json"))
     ip = _Spy((True, "rhel", "installed"))
-    pinned = _Spy((True, "out"))
+    pinned = _Spy((True, "out", _DIGEST))
     monkeypatch.setattr(rag.package_management, "install_package", ip)
     monkeypatch.setattr(rag.package_management, "install_pinned", pinned)
 

@@ -28,6 +28,27 @@ truthful ``missing_result`` leg). ``provenance.run_attempt`` stays the SOURCE
 plan/capture attempt; ``attempt_context`` reports both the plan and aggregation
 attempts without relabelling either. No timestamps and no newest-wins selection.
 
+Package proof (every current, non-preview leg; preview legs are exempt): a PASS needs the
+installed bytes AND the installed identity proven, so the reducer checks each such leg
+against its planned invocation:
+  * digest — the summary's ``installed_package_sha256`` (the SHA-256 of the file a
+    verified pinned install used) must equal the plan's ``package.sha256``. Every plan
+    entry must carry a valid 64-hex digest (structural). The leg records
+    ``package_digest`` = match | mismatch | missing (null digest, or a summary that
+    predates the field) | not_required (preview);
+  * identity — the plan's rungs must be proven: l1 and l2a (exact package-manager
+    version-release; every plan entry must carry its family's exact pin, equal to the
+    planned package's version-release) always; l2b only when the component policy
+    planned an expected binary version. ``unproven_identity_rungs`` lists the gaps.
+    Proven identity also binds the digest: the identity test proves identity only
+    after checking that the install evidence carrying the digest belongs to the current
+    run and target (it otherwise records l1 not_attempted).
+A completed leg with a problem becomes ``incomplete`` with the specific reason_code —
+``package_digest_mismatch`` over ``package_digest_missing`` over ``identity_unproven`` —
+while its verdict, counts and failures are kept as reported. A mismatch is also recorded
+on an incomplete or infra leg. The aggregate reason_code carries these reasons (see
+``_aggregate_execution``), so the gate can name them.
+
 Structural boundary (``result_resolved`` + ``errors[]``):
   * A malformed, unknown (id not in the plan), or duplicate result record, or a
     matched result whose provenance does not bind to the plan, is a STRUCTURAL
@@ -71,6 +92,17 @@ ENFORCEMENT_MODES = ("observe", "gate")
 _INVOCATION_ID_RE = re.compile(r"[A-Za-z0-9._-]{1,64}")
 # A full git object name; only then can the pure reducer prove requested==resolved.
 _FULL_SHA_RE = re.compile(r"[0-9a-fA-F]{40}")
+# Package digests: the plan's (capture) digest is compared case-insensitively; the
+# summarizer always emits a lowercase observed digest.
+_PLANNED_SHA256_RE = re.compile(r"[0-9a-fA-F]{64}")
+_OBSERVED_SHA256_RE = re.compile(r"[0-9a-f]{64}")
+
+# Package-proof reason codes, most severe first (a leg carries the first that applies).
+RC_DIGEST_MISMATCH = "package_digest_mismatch"
+RC_DIGEST_MISSING = "package_digest_missing"
+RC_IDENTITY_UNPROVEN = "identity_unproven"
+# Family -> (its exact package-manager pin field, the opposite family's field).
+_PIN_FIELDS = {"rpm": ("expected_rpm", "expected_deb"), "deb": ("expected_deb", "expected_rpm")}
 
 # Atomic identity-evidence and counts contracts (must match pep_result_summary.py).
 # A matched summary must carry COMPLETE, well-formed evidence — never {} substituted
@@ -228,6 +260,11 @@ def _summary_malformed_reason(s):
         return "test_verdict is not a recognized value"
     if s.get("enforcement_mode") not in ENFORCEMENT_MODES:
         return "enforcement_mode is not a recognized value"
+    # Additive field: absent (an older summary) reads as no digest; present, it must be
+    # null or exactly what the summarizer emits.
+    digest = s.get("installed_package_sha256")
+    if not (digest is None or (isinstance(digest, str) and _OBSERVED_SHA256_RE.fullmatch(digest))):
+        return "installed_package_sha256 must be null or a lowercase 64-hex digest"
     reason = (_identity_evidence_reason(s.get("identity_evidence"))
               or _counts_reason(s.get("counts"))
               or _provenance_reason(s.get("provenance")))
@@ -325,11 +362,78 @@ def _matched_cross_consistency(matched):
 # --------------------------------------------------------------------------- #
 # leg construction (one row per EXPECTED invocation)
 # --------------------------------------------------------------------------- #
+def _package_digest(planned, s):
+    """match | mismatch | missing | not_required for one matched leg (module docstring)."""
+    if s.get("execution_status") == "preview":
+        return "not_required"
+    observed = s.get("installed_package_sha256")
+    if observed is None:
+        return "missing"
+    return "match" if observed == planned["package"]["sha256"].lower() else "mismatch"
+
+
+def _planned_pin_error(entry):
+    """Why a plan entry does not carry the planner's pin contract, else None. Every
+    certification invocation pins its exact package (L2a): the pin field of its own
+    family must equal the planned package's ``<version>-<release>``, and the opposite
+    family's field must be "". expected_binary is "" unless the component policy plans
+    one. A corrupt entry must never read as "L2a not planned"."""
+    # Type first: a JSON array/object family is unhashable and must not reach the lookup.
+    family = entry.get("family")
+    if not (isinstance(family, str) and family in _PIN_FIELDS):
+        return "family %r is not rpm or deb" % (family,)
+    pin_key, other_key = _PIN_FIELDS[family]
+    pkg = entry["package"]                                   # a dict (checked by the caller)
+    version, release = pkg.get("version"), pkg.get("release")
+    if not (_nonblank_str(version) and _nonblank_str(release)):
+        return "package version and release must be nonblank strings, got %r and %r" % (version, release)
+    exact = "%s-%s" % (version, release)
+    if entry.get(pin_key) != exact:                          # plain equality: safe for any JSON value
+        return "%s must be the planned package's exact pin %r, got %r" % (pin_key, exact, entry.get(pin_key))
+    if entry.get(other_key) != "":
+        return "%s must be empty for a %s package, got %r" % (other_key, family, entry.get(other_key))
+    # The planner emits "" for an unplanned binary version (it blanks whitespace too), so
+    # a whitespace-only value is corrupt and must not read as "L2b not planned".
+    binary = entry.get("expected_binary")
+    if not (isinstance(binary, str) and (binary == "" or binary.strip())):
+        return "expected_binary must be \"\" or a nonblank string, got %r" % (binary,)
+    return None
+
+
+def _unproven_identity_rungs(planned, s):
+    """The identity rungs this leg's plan requires but its summary did not prove, in rung
+    order: l1 and l2a always (every certification invocation carries its exact pin; see
+    _planned_pin_error); l2b only when an expected binary version is planned (component
+    policy). [] for a preview leg."""
+    if s.get("execution_status") == "preview":
+        return []
+    required = {"l1", "l2a"}
+    if _nonblank_str(planned["expected_binary"]):
+        required.add("l2b")
+    ev = s["identity_evidence"]
+    return [r for r in _EVIDENCE_RUNGS if r in required and ev[r] != "proven"]
+
+
 def _matched_leg(iid, planned, s):
+    execution_status = s.get("execution_status")
+    digest = _package_digest(planned, s)
+    unproven = _unproven_identity_rungs(planned, s)
+    reason_code = None
+    if digest == "mismatch":
+        reason_code = RC_DIGEST_MISMATCH
+    elif execution_status == "completed":
+        if digest == "missing":
+            reason_code = RC_DIGEST_MISSING
+        elif unproven:
+            reason_code = RC_IDENTITY_UNPROVEN
+    if reason_code is not None and execution_status == "completed":
+        # Unproven bytes or identity cannot certify, whatever the tests said: the leg is
+        # incomplete, and its verdict, counts and failures stay exactly as reported.
+        execution_status = "incomplete"
     return {
         "invocation_id": iid,
         "reconciliation": "matched",
-        "execution_status": s.get("execution_status"),
+        "execution_status": execution_status,
         "test_verdict": s.get("test_verdict"),
         "enforcement_mode": s.get("enforcement_mode"),
         # Complete evidence is guaranteed for a matched record (see malformed
@@ -337,7 +441,10 @@ def _matched_leg(iid, planned, s):
         "identity_evidence": copy.deepcopy(s.get("identity_evidence")),
         "counts": copy.deepcopy(s.get("counts")),
         "reason": s.get("reason"),
-        "reason_code": None,
+        "reason_code": reason_code,
+        "installed_package_sha256": s.get("installed_package_sha256"),
+        "package_digest": digest,
+        "unproven_identity_rungs": unproven,
         "provenance": copy.deepcopy(s.get("provenance")),
         "planned_invocation": planned,
     }
@@ -356,6 +463,10 @@ def _missing_leg(iid, planned):
         "counts": None,
         "reason": "no atomic result was collected for this expected invocation",
         "reason_code": "missing_result",
+        # Nothing was observed, so the package proof is not evaluated for this leg.
+        "installed_package_sha256": None,
+        "package_digest": None,
+        "unproven_identity_rungs": None,
         "provenance": None,
         "planned_invocation": planned,
     }
@@ -377,6 +488,8 @@ def _historical_entry(iid, s):
         "identity_evidence": copy.deepcopy(s.get("identity_evidence")),
         "counts": copy.deepcopy(s.get("counts")),
         "reason": s.get("reason"),
+        # Audit only (null when absent: a prior attempt may predate the field).
+        "installed_package_sha256": s.get("installed_package_sha256"),
         "provenance": copy.deepcopy(s.get("provenance")),
     }
 
@@ -395,25 +508,43 @@ def _sorted_historical(historical):
 # aggregate axes (kept independent)
 # --------------------------------------------------------------------------- #
 def _aggregate_execution(legs, n_expected):
-    """(execution_status, reason_code). Precedence: missing/infra -> mixed preview ->
-    leg incomplete -> all preview -> all completed; zero eligible is its own case."""
+    """(execution_status, reason_code). The status is unchanged by package proof:
+    missing/infra -> infra_failure; mixed preview or any incomplete leg -> incomplete;
+    all preview -> preview; all completed -> completed; zero eligible is its own case.
+
+    The reason is the first that applies, in a fixed order: package_digest_mismatch
+    (positive evidence of wrong bytes, so it outranks every absence of evidence) ->
+    missing_result -> infra_leg -> mixed_mode -> package_digest_missing ->
+    identity_unproven -> leg_incomplete. Leg reason codes are read, never recomputed."""
     if n_expected == 0:
         return "incomplete", "zero_eligible"
+    codes = {l["reason_code"] for l in legs}
     has_missing = any(l["reconciliation"] == "missing" for l in legs)
     has_infra_matched = any(
         l["reconciliation"] == "matched" and l["execution_status"] == "infra_failure" for l in legs)
-    if has_missing or has_infra_matched:
-        return "infra_failure", ("missing_result" if has_missing else "infra_leg")
-    statuses = [l["execution_status"] for l in legs]         # matched legs only now
+    statuses = [l["execution_status"] for l in legs if l["reconciliation"] == "matched"]
     has_preview = any(st == "preview" for st in statuses)
-    has_non_preview = any(st != "preview" for st in statuses)
-    if has_preview and has_non_preview:
-        return "incomplete", "mixed_mode"
-    if any(st == "incomplete" for st in statuses):
-        return "incomplete", "leg_incomplete"
-    if has_preview:                                          # all preview
+    mixed = has_preview and any(st != "preview" for st in statuses)
+    if has_missing or has_infra_matched:
+        status = "infra_failure"
+    elif mixed or any(st == "incomplete" for st in statuses):
+        status = "incomplete"
+    elif has_preview:                                        # all preview
         return "preview", None
-    return "completed", None                                 # >=1 leg, all completed
+    else:
+        return "completed", None                             # >=1 leg, all completed
+    if RC_DIGEST_MISMATCH in codes:
+        return status, RC_DIGEST_MISMATCH
+    if has_missing:
+        return status, "missing_result"
+    if has_infra_matched:
+        return status, "infra_leg"
+    if mixed:
+        return status, "mixed_mode"
+    for rc in (RC_DIGEST_MISSING, RC_IDENTITY_UNPROVEN):
+        if rc in codes:
+            return status, rc
+    return status, "leg_incomplete"
 
 
 def _aggregate_verdict(legs, n_expected):
@@ -630,6 +761,17 @@ def build_cert_result(plan, summaries, current_run_attempt):
             continue
         if iid in expected:
             dup_expected.add(iid)
+            continue
+        # The planned digest every non-preview leg is proven against (the planner always
+        # emits one; a plan without it cannot certify any leg).
+        pkg = entry.get("package")
+        sha = pkg.get("sha256") if isinstance(pkg, dict) else None
+        if not (isinstance(sha, str) and _PLANNED_SHA256_RE.fullmatch(sha)):
+            plan_errors.append("plan invocation %s package.sha256 is not a 64-hex digest" % iid)
+            continue
+        pin_error = _planned_pin_error(entry)
+        if pin_error:
+            plan_errors.append("plan invocation %s %s" % (iid, pin_error))
             continue
         expected[iid] = entry
     if dup_expected:

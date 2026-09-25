@@ -455,6 +455,16 @@ _GAP_SCOPE_NOUN = {"cell": ("build cell", "build cells"),
                    "target": ("package target", "package targets"),
                    "member": ("rejected package file", "rejected package files")}
 _GAP_REASON_TEXT = {"no_enabled_platform": "No enabled PEP test container for this OS/arch"}
+# Package proof, in words that hold whether the captured package came from a build
+# receipt or from a published-package replay.
+_LEG_REASON_TEXT = {
+    "package_digest_mismatch": "The installed package's SHA-256 differs from the captured package",
+    "package_digest_missing": "No verified SHA-256 was recorded for the installed package",
+    "identity_unproven": "The installed package's identity was not proven",
+}
+_DIGEST_WORDS = {"match": "installed package SHA-256 matches the captured package",
+                 "mismatch": "installed package SHA-256 differs from the captured package",
+                 "missing": "no verified SHA-256 for the installed package"}
 
 
 def leg_category(leg: dict) -> str:
@@ -916,6 +926,8 @@ def _leg_tip(v: dict, where: str) -> str:
         bits.append("%d failed of %d test cases" % (ac["failed"], ac["tests"]))
     if _txt(leg.get("reason_code")):
         bits.append(leg["reason_code"])
+    if _txt(leg.get("package_digest")) in _DIGEST_WORDS:
+        bits.append(_DIGEST_WORDS[leg["package_digest"]])
     bits.append(v["inv"])
     if v["issues"]:
         bits.append("report issue: " + "; ".join(v["issues"]))
@@ -1058,6 +1070,11 @@ def _leg_row(v: dict, multi: bool) -> str:
     status = _pill(label, cls)
     if cls != "pass" and rc:
         status += '<div class="rc">%s</div>' % _esc(rc)
+        if _txt(rc) in _LEG_REASON_TEXT:
+            rungs = leg.get("unproven_identity_rungs")
+            extra = (" (%s)" % ", ".join(_txt(r) for r in rungs)
+                     if rc == "identity_unproven" and isinstance(rungs, list) and rungs else "")
+            status += '<div class="rc">%s%s</div>' % (_esc(_LEG_REASON_TEXT[rc]), _esc(extra))
     # Concise failing-case clues from this leg's own report (detail, not verdict).
     for name, msg in v.get("clues") or []:
         text = name + ((" — " + msg) if msg else "")

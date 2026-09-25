@@ -317,6 +317,9 @@ jobs:
           fi   # full-mode missing manifest -> handled as infra below (no glob)
           [ -f test-logs/identity-evidence.json ] && args+=( --identity-json test-logs/identity-evidence.json )
           [ -f test-logs/provenance.json ]        && args+=( --provenance-json test-logs/provenance.json )
+          # The verified pinned install's package digest. An absent file (the install
+          # failed or never ran) leaves the digest null, which certification rejects.
+          [ -f test-logs/install-evidence.json ]  && args+=( --install-json test-logs/install-evidence.json )
           # ---- Single, precedence-ordered classification (exactly one flag) ----
           # issue #5 + carry-forward #1/#2/#4: PREVIEW MUST NOT MASK A FAILURE. A
           # preview result is valid only when the dry-run invocation itself succeeded,

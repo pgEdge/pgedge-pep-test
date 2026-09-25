@@ -89,6 +89,8 @@ def _summary(iid, *, execution_status="completed", verdict="pass", mode="observe
         "identity_evidence": {"l2a": "proven", "l2b": "proven", "l1": "proven"},
         "counts": _consistent_counts(execution_status, verdict) if counts is None else counts,
         "provenance": _caller_prov() if provenance is None else provenance,
+        # a verified full-mode install records the planned digest (_inv's "d"*64)
+        "installed_package_sha256": None if execution_status == "preview" else "d" * 64,
     }
 
 

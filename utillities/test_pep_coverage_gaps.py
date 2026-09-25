@@ -103,7 +103,9 @@ def _summary(inv, outcome, enforcement, *, preview):
                    else {"tests": 12, "failures": 1 if fail else 0, "errors": 0, "skipped": 0}),
         "provenance": {"caller_repo": PROVENANCE["repository"], "caller_sha": SHA,
                        "caller_ref": PROVENANCE["ref"], "caller_run_id": PROVENANCE["run_id"],
-                       "caller_run_attempt": "1", "pep_requested_ref": PEP_SHA, "pep_resolved_sha": PEP_SHA}}
+                       "caller_run_attempt": "1", "pep_requested_ref": PEP_SHA, "pep_resolved_sha": PEP_SHA},
+        # a verified full-mode install records the planned digest; preview installs nothing
+        "installed_package_sha256": None if preview else inv["package"]["sha256"]}
 
 
 def outcomes(decided):

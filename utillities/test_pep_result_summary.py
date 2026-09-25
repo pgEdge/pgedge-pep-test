@@ -4,6 +4,8 @@ import json
 import sys
 from pathlib import Path
 
+import pytest
+
 _spec = importlib.util.spec_from_file_location(
     "pep_result_summary", str(Path(__file__).parent / "pep_result_summary.py")
 )
@@ -506,3 +508,61 @@ def test_main_stamps_invocation_id_even_on_sidefile_infra(tmp_path):
     assert data["execution_status"] == "infra_failure"
     assert data["invocation_id"] == _VALID_ID
     assert code == 0
+
+
+# --- installed_package_sha256: the verified install's digest, via --install-json ---
+
+_DIGEST = "ab" * 32
+
+
+def _install_main(tmp_path, body, *, extra=(), mode="observe"):
+    _dir_with(tmp_path, "report-rpm-rag-17.xml", _PASS_XML)
+    inst = tmp_path / "install-evidence.json"
+    if body is not None:
+        inst.write_text(body if isinstance(body, str) else json.dumps(body))
+    out = tmp_path / "summary.json"
+    code = prs.main(["--xml-dir", str(tmp_path), "--out", str(out), "--mode", mode,
+                     "--install-json", str(inst), *extra])
+    return json.loads(out.read_text()), code
+
+
+def test_install_json_digest_is_carried_without_changing_the_result(tmp_path):
+    data, code = _install_main(tmp_path, {"installed": True, "install_kind": "pinned",
+                                          "installed_sha256": _DIGEST})
+    assert data["installed_package_sha256"] == _DIGEST
+    assert (data["execution_status"], data["test_verdict"], code) == ("completed", "pass", 0)
+
+
+@pytest.mark.parametrize("body", [
+    {"installed": True, "install_kind": "latest", "installed_sha256": None},
+    {"installed": True, "install_kind": "pinned"},                  # no digest recorded
+])
+def test_install_json_without_a_digest_yields_null(tmp_path, body):
+    data, _ = _install_main(tmp_path, body)
+    assert data["installed_package_sha256"] is None and data["execution_status"] == "completed"
+
+
+def test_no_install_json_yields_null_digest(tmp_path):
+    _dir_with(tmp_path, "report-rpm-rag-17.xml", _PASS_XML)
+    summary, _ = prs.build_summary(tmp_path, mode="observe")
+    assert summary["installed_package_sha256"] is None
+
+
+@pytest.mark.parametrize("bad", ["AB" * 32, "ab" * 31, 5, ["ab" * 32], ""])
+def test_malformed_install_digest_is_infra_failure(tmp_path, bad):
+    data, code = _install_main(tmp_path, {"installed_sha256": bad}, mode="gate")
+    assert data["execution_status"] == "infra_failure" and code == 1
+    assert "installed_sha256" in data["reason"] and data["installed_package_sha256"] is None
+
+
+@pytest.mark.parametrize("body", [None, "{not json", "[1, 2]"])
+def test_missing_or_unreadable_install_json_is_infra_failure(tmp_path, body):
+    data, _ = _install_main(tmp_path, body)
+    assert data["execution_status"] == "infra_failure"
+    assert "install-evidence" in data["reason"]
+
+
+@pytest.mark.parametrize("kw", [{"preview": True}, {"validation_error": "bad"}, {"infra_error": "boom"}])
+def test_digest_is_stamped_on_every_branch(tmp_path, kw):
+    summary, _ = prs.build_summary(tmp_path, mode="observe", installed_package_sha256=_DIGEST, **kw)
+    assert summary["installed_package_sha256"] == _DIGEST

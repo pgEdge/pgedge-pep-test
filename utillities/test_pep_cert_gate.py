@@ -23,7 +23,9 @@ _spec.loader.exec_module(gate)
 # builders
 # --------------------------------------------------------------------------- #
 def _leg(mode="observe", reconciliation="matched", iid="rag-a"):
-    return {"invocation_id": iid, "reconciliation": reconciliation, "enforcement_mode": mode}
+    # the reducer's package proof, as it records it on a leg it calls completed
+    return {"invocation_id": iid, "reconciliation": reconciliation, "enforcement_mode": mode,
+            "package_digest": "match", "unproven_identity_rungs": []}
 
 
 def _missing_leg(iid="rag-b"):
@@ -158,6 +160,54 @@ def test_zero_eligible_blocks_both(mode):
     dec = _d(cr, mode)
     assert dec["reason_code"] == "zero_eligible"
     assert _tuple(dec) == ("incomplete", "block", "failure")
+
+
+@pytest.mark.parametrize("mode", ["observe", "gate"])
+@pytest.mark.parametrize("es,verdict,rc", [
+    ("incomplete", "pass", "package_digest_mismatch"),
+    ("incomplete", "fail", "package_digest_mismatch"),      # failures kept, still not a product_fail
+    ("infra_failure", "not_run", "package_digest_mismatch"),
+    ("incomplete", "pass", "package_digest_missing"),
+    ("incomplete", "pass", "identity_unproven"),
+    ("incomplete", "fail", "identity_unproven"),
+])
+def test_package_proof_reasons_block_both_modes_and_are_named(mode, es, verdict, rc):
+    cr = _cr(execution_status=es, test_verdict=verdict, coverage_status="partial",
+             reason_code=rc, legs=[_leg(mode)])
+    dec = _d(cr, mode)
+    assert _tuple(dec) == ("incomplete", "block", "failure")
+    assert dec["reason_code"] == rc                      # read from the reducer, never re-derived
+    assert dec["axes"]["reason_code"] == rc
+
+
+@pytest.mark.parametrize("mode", ["observe", "gate"])
+@pytest.mark.parametrize("verdict", ["pass", "fail"])
+@pytest.mark.parametrize("proof", [
+    {"package_digest": "mismatch"}, {"package_digest": "missing"}, {"package_digest": None},
+    {"unproven_identity_rungs": ["l2a"]}, {"unproven_identity_rungs": None},
+    "absent",                                         # a result produced before package proof existed
+])
+def test_completed_result_without_package_proof_is_contradictory(mode, verdict, proof):
+    leg = _leg(mode)
+    if proof == "absent":
+        del leg["package_digest"], leg["unproven_identity_rungs"]
+    else:
+        leg.update(proof)
+    cr = _cr(test_verdict=verdict, legs=[_leg(mode, iid="rag-ok"), leg])
+    dec = _d(cr, mode)
+    assert _tuple(dec) == ("incomplete", "block", "failure")
+    assert dec["reason_code"] == "contradictory_axes"
+
+
+@pytest.mark.parametrize("es,rc,named", [
+    ("infra_failure", "infra_leg", "infra_failure"),
+    ("incomplete", "mixed_mode", "execution_incomplete"),
+    ("incomplete", "some_future_reason", "execution_incomplete"),
+])
+def test_other_reasons_still_collapse_as_before(es, rc, named):
+    cr = _cr(execution_status=es, test_verdict="not_run", coverage_status="partial",
+             reason_code=rc, legs=[_leg()])
+    assert _d(cr, "observe")["reason_code"] == named
 
 
 # --------------------------------------------------------------------------- #

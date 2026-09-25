@@ -291,12 +291,16 @@ def test_rag_component_install(container_name, container_type, component):
             # Integration mode: install per the request's decision.
             req = INTEGRATION_REQUEST
             kind, exact = pep_verify.choose_install(req)
+            installed_sha256 = None
             if kind == "pinned":
                 # EXACT / L2a -- assert the result so a failed exact-version install
                 # fails loudly here instead of being papered over by identity later.
-                ok, out = package_management.install_pinned(container, req["package_name"], exact)
+                # The verified install also returns the SHA-256 of the package file it
+                # installed, recorded below for the certification digest check.
+                ok, out, installed_sha256 = package_management.install_pinned(
+                    container, req["package_name"], exact)
                 assert ok, f"pinned install of {req['package_name']}={exact} failed: {out}"
-                print(f"✅ pinned install: {req['package_name']}={exact}")
+                print(f"✅ pinned install: {req['package_name']}={exact} sha256={installed_sha256}")
             else:
                 # L1 degraded path -- latest, not pinned. Install the REQUEST
                 # package (caller-authoritative), never the parametrized config
@@ -309,7 +313,8 @@ def test_rag_component_install(container_name, container_type, component):
             # (a failed install raises above, so no marker is written -> identity fails).
             install_out = os.getenv("PEP_INSTALL_OUT", "test-logs/install-evidence.json")
             pep_evidence.write_install_evidence(
-                req, os.environ.get("PEP_RUN_TOKEN", ""), kind, exact, install_out)
+                req, os.environ.get("PEP_RUN_TOKEN", ""), kind, exact, install_out,
+                installed_sha256=installed_sha256)
         else:
             # Standalone mode: unchanged legacy behavior.
             success, platform, message = package_management.install_package(container, component)

@@ -187,6 +187,19 @@ def test_build_install_evidence_shape():
     assert obj["install_kind"] == "pinned" and obj["install_token"] == "1.0.0~beta1-1.trixie"
     assert obj["target"]["package_name"] == "pgedge-rag-server" and obj["target"]["family"] == "deb"
     assert obj["expected_version"] == "1.0.0"
+    assert obj["installed_sha256"] is None              # no verified file unless one is given
+
+
+def test_install_evidence_records_the_verified_package_digest(tmp_path):
+    r, digest = _full_req(), "ab" * 32
+    obj = ev_mod.build_install_evidence(r, "tok-1", "pinned", "1.0.0~beta1-1.trixie", digest)
+    assert obj["installed_sha256"] == digest
+    # the digest does not change the install-before-identity binding
+    assert ev_mod.install_precondition_problems(obj, r, "tok-1") == []
+    out = tmp_path / "install.json"
+    ev_mod.write_install_evidence(r, "tok-1", "pinned", "1.0.0~beta1-1.trixie", str(out),
+                                  installed_sha256=digest)
+    assert ev_mod.load_json_object(str(out))["installed_sha256"] == digest
 
 
 def test_precondition_ok_when_matching():
@@ -304,6 +317,7 @@ def test_write_install_evidence_roundtrip(tmp_path):
     ev_mod.write_install_evidence(_full_req(), "tok", "latest", None, str(out))
     got = ev_mod.load_json_object(str(out))
     assert got["run_token"] == "tok" and got["install_kind"] == "latest" and got["install_token"] is None
+    assert got["installed_sha256"] is None
 
 
 def test_load_json_object_absent_returns_none(tmp_path):

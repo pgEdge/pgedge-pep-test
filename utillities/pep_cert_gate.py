@@ -24,7 +24,8 @@ Policy precedence (first match wins):
      a matched leg whose enforcement_mode differs from the requested mode
      -> incomplete / block / failure.
   2. execution_status ``infra_failure`` or ``incomplete`` (missing results, infra legs,
-     zero eligible) -> incomplete / block / failure in BOTH modes.
+     zero eligible, an unproven package digest or identity) -> incomplete / block /
+     failure in BOTH modes.
   3. execution_status ``preview`` -> observe: preview/report/success; gate:
      preview/block/failure. (Never a pass.)
   4. ``completed`` + ``not_run`` -> incomplete / block / failure in both modes.
@@ -32,7 +33,9 @@ Policy precedence (first match wins):
   6. ``completed`` pass + partial coverage -> observe: incomplete/report/success; gate:
      incomplete/block/failure.
   7. ``completed`` pass + complete coverage -> pass / allow / success in both modes.
-Any unrecognised or contradictory top-level axis combination blocks fail-closed.
+Any unrecognised or contradictory top-level axis combination blocks fail-closed, including
+a ``completed`` result whose legs do not all carry the reducer's package proof (matched
+digest, no unproven planned identity rung).
 
 Exit code (CLI): 0 when the policy allows the workflow to stay green (success), 1 when
 it blocks (failure), 2 ONLY for CLI/configuration misuse where no trustworthy decision
@@ -154,14 +157,27 @@ def _all_matched_nonempty(legs):
     return bool(legs) and all(leg.get("reconciliation") == "matched" for leg in legs)
 
 
+# Reducer aggregate reasons a blocking decision names as they are; every other reason
+# collapses to infra_failure / execution_incomplete.
+_NAMED_INCOMPLETE_REASONS = ("zero_eligible", "missing_result", "package_digest_mismatch",
+                             "package_digest_missing", "identity_unproven")
+
+
+def _legs_proven(legs):
+    """True when every leg carries the reducer's package proof: an installed digest that
+    matched the plan and no unproven planned identity rung. The reducer never emits a
+    completed aggregate otherwise, so a completed result without it (e.g. one produced
+    before package proof existed) is contradictory. Read, never re-derived."""
+    return all(leg.get("package_digest") == "match" and leg.get("unproven_identity_rungs") == []
+               for leg in legs)
+
+
 def _incomplete_reason(cert_result):
     """Stable reason for a blocking infra_failure/incomplete result, distinguishing the
-    common causes from the reducer's aggregate reason_code."""
+    common causes from the reducer's aggregate reason_code (read, never re-derived)."""
     rc = cert_result.get("reason_code")
-    if rc == "zero_eligible":
-        return "zero_eligible"
-    if rc == "missing_result":
-        return "missing_result"
+    if rc in _NAMED_INCOMPLETE_REASONS:
+        return rc
     if cert_result.get("execution_status") == "infra_failure":
         return "infra_failure"
     return "execution_incomplete"
@@ -213,6 +229,8 @@ def decide(cert_result, mode):
     # ---- 4-7: completed: requires >=1 leg, all matched, coverage complete|partial ----
     if es == "completed":
         if not _all_matched_nonempty(legs):                   # a missing/absent leg -> reducer would not call it completed
+            return _contradictory()
+        if not _legs_proven(legs):                            # unproven bytes/identity -> reducer would not call it completed
             return _contradictory()
         if tv == "not_run":                                   # 4. nothing executed (explicit red-both)
             return _decision(ST_INCOMPLETE, PD_BLOCK, WC_FAILURE, "not_run", mode, axes)

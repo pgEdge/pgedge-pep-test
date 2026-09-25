@@ -18,7 +18,7 @@ from pep_cert_plan import _expected_native
 _REPO = Path(__file__).resolve().parent.parent
 _WF = _REPO / ".github" / "workflows" / "pep-published-replay.yml"
 _TEXT = _WF.read_text()
-_CERT_PIN = "a448072edfbcf0acccfb86cc6da9e6995b50d0fc"
+_CERT_PIN = "c61ece50f60448880fdd75ce5e83180ee16a52c8"
 
 
 def _job_block(job):
@@ -67,8 +67,9 @@ def test_report_job_has_no_permissions():
 
 # --- separate per-family matrices + stable markers --------------------------
 def test_separate_rpm_deb_matrices():
-    assert "fromJSON(inputs.rpm_matrix)" in _job_block("retrieve-rpm")
-    assert "fromJSON(inputs.deb_matrix)" in _job_block("retrieve-deb")
+    # retrieval fans out over the plan job's (possibly selected) matrices, never the raw inputs
+    assert "fromJSON(needs.plan.outputs.rpm_matrix)" in _job_block("retrieve-rpm")
+    assert "fromJSON(needs.plan.outputs.deb_matrix)" in _job_block("retrieve-deb")
 
 
 def test_stable_pep_cell_markers_in_job_names():
@@ -137,6 +138,45 @@ def test_job_gating_expressions():
 
 def test_replay_is_labelled_not_a_release():
     assert "NOT A RELEASE" in _TEXT
+
+
+# --- subset probe: select_cells narrows the real detector output ------------
+def test_select_cells_is_an_optional_input_defaulting_to_the_full_matrix():
+    on = _on_block()
+    assert re.search(r'select_cells:\s*\{required: false, type: string, default: ""\}', on)
+
+
+def test_plan_job_selects_and_exposes_the_selected_matrices_and_scope():
+    pj = _job_block("plan")
+    assert "SELECT_CELLS: ${{ inputs.select_cells }}" in pj
+    assert "RPM_MATRIX: ${{ inputs.rpm_matrix }}" in pj and "DEB_MATRIX: ${{ inputs.deb_matrix }}" in pj
+    for out in ("rpm_matrix", "deb_matrix", "scope_kind", "detector_cell_count",
+                "selected_cell_count", "selected_cells", "omitted_cells"):
+        assert "%s: ${{ steps.validate.outputs.%s }}" % (out, out) in pj, out
+
+
+def test_every_later_job_uses_the_selected_matrices():
+    rj = _job_block("reconcile")
+    assert "RPM_MATRIX: ${{ needs.plan.outputs.rpm_matrix }}" in rj
+    assert "DEB_MATRIX: ${{ needs.plan.outputs.deb_matrix }}" in rj
+    # reconcile re-derives the selection from the detector output to record the scope
+    assert "DETECTOR_RPM_MATRIX: ${{ inputs.rpm_matrix }}" in rj
+    assert "DETECTOR_DEB_MATRIX: ${{ inputs.deb_matrix }}" in rj
+    assert "SELECT_CELLS: ${{ inputs.select_cells }}" in rj
+    cj = _job_block("certify")
+    assert "needs: [plan, reconcile]" in cj
+    assert "rpm_matrix: ${{ needs.plan.outputs.rpm_matrix }}" in cj
+    assert "deb_matrix: ${{ needs.plan.outputs.deb_matrix }}" in cj
+    # the raw detector matrices reach only the plan job and reconcile's scope check
+    assert _TEXT.count("${{ inputs.rpm_matrix }}") == 2 and _TEXT.count("${{ inputs.deb_matrix }}") == 2
+
+
+def test_summary_labels_a_subset_probe():
+    rep = _job_block("report")
+    assert 'if [ "${SCOPE_KIND}" = "subset_probe" ]' in rep
+    assert "NOT certification of the full detector matrix" in rep
+    assert "relative to the ${SELECTED_COUNT} selected cells" in rep
+    assert "does not remove" in rep and "declare it unsupported" in rep
 
 
 # --- planning fixture: 14 RAG cells -> 30 invocations + 4 coverage gaps ------

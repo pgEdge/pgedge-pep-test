@@ -20,7 +20,14 @@
 # checked-out helpers. Two independent pins: THIS workflow + its helpers are
 # pinned by the consumer to the reviewed PEP spike SHA (self-resolved via
 # job.workflow_sha for checkouts); the certification implementation is pinned
-# ABSOLUTELY to a448072edfbcf0acccfb86cc6da9e6995b50d0fc.
+# ABSOLUTELY to c61ece50f60448880fdd75ce5e83180ee16a52c8 (installed-package byte proof).
+#
+# SUBSET PROBE (optional select_cells): the plan job narrows the REAL detector output
+# to the named cells before any retrieval, failing closed if a named cell is absent or
+# duplicated; cells are never synthesized. Everything after it -- retrieval, receipts,
+# reconcile, pep-certify, acceptance -- sees only the selected cells, and the replay
+# metadata and this workflow's summary record the run as a subset probe, which is not
+# certification of the full detector matrix.
 name: PEP Published-Package Replay (NOT A RELEASE)
 
 on:
@@ -33,6 +40,9 @@ on:
       intended_buildnum: {required: true, type: string}   # e.g. 1
       effective_tag:     {required: true, type: string}   # e.g. v2.0.0
       channel:           {required: true, type: string}   # release | staging | daily
+      # Optional JSON list of detector cell_ids to retrieve and certify (a SUBSET PROBE).
+      # "" (default) replays every detector cell, exactly as before.
+      select_cells:      {required: false, type: string, default: ""}
     secrets:
       DOCKERHUB_USERNAME: {required: false}   # optional; only reduces full-mode image pull rate limits
       DOCKERHUB_TOKEN:    {required: false}
@@ -83,6 +93,14 @@ jobs:
       has_deb: ${{ steps.validate.outputs.has_deb }}
       rpm_count: ${{ steps.validate.outputs.rpm_count }}
       deb_count: ${{ steps.validate.outputs.deb_count }}
+      # every later job reads these matrices (the detector's own entries, selected)
+      rpm_matrix: ${{ steps.validate.outputs.rpm_matrix }}
+      deb_matrix: ${{ steps.validate.outputs.deb_matrix }}
+      scope_kind: ${{ steps.validate.outputs.scope_kind }}
+      detector_cell_count: ${{ steps.validate.outputs.detector_cell_count }}
+      selected_cell_count: ${{ steps.validate.outputs.selected_cell_count }}
+      selected_cells: ${{ steps.validate.outputs.selected_cells }}
+      omitted_cells: ${{ steps.validate.outputs.omitted_cells }}
     steps:
       - name: Checkout PEP implementation (self, pinned)
         uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803  # v6.1.0
@@ -92,11 +110,12 @@ jobs:
       - name: Set up Python (pinned)
         uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1  # v6.3.0
         with: {python-version: "3.11"}
-      - name: Validate matrices + release identity; derive family presence
+      - name: Validate matrices + release identity; select cells; derive family presence
         id: validate
         env:
           RPM_MATRIX: ${{ inputs.rpm_matrix }}
           DEB_MATRIX: ${{ inputs.deb_matrix }}
+          SELECT_CELLS: ${{ inputs.select_cells }}
           LOGICAL_COMPONENT: ${{ inputs.logical_component }}
           VERSION: ${{ inputs.intended_version }}
           BUILDNUM: ${{ inputs.intended_buildnum }}
@@ -115,7 +134,7 @@ jobs:
       contents: read
     strategy:
       fail-fast: false
-      matrix: ${{ fromJSON(inputs.rpm_matrix) }}
+      matrix: ${{ fromJSON(needs.plan.outputs.rpm_matrix) }}
     steps:
       - name: Checkout PEP implementation (self, pinned)
         uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803  # v6.1.0
@@ -146,7 +165,7 @@ jobs:
           retention-days: 7
       - name: Generate genuine pep-receipt/2 (existing shipping action)
         id: receipt
-        uses: pgEdge/pgedge-pep-test/.github/actions/pep-package-receipt@a448072edfbcf0acccfb86cc6da9e6995b50d0fc
+        uses: pgEdge/pgedge-pep-test/.github/actions/pep-package-receipt@c61ece50f60448880fdd75ce5e83180ee16a52c8
         with:
           cell_id: ${{ matrix.cell_id }}
           family: rpm
@@ -178,7 +197,7 @@ jobs:
       contents: read
     strategy:
       fail-fast: false
-      matrix: ${{ fromJSON(inputs.deb_matrix) }}
+      matrix: ${{ fromJSON(needs.plan.outputs.deb_matrix) }}
     steps:
       - name: Checkout PEP implementation (self, pinned)
         uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803  # v6.1.0
@@ -209,7 +228,7 @@ jobs:
           retention-days: 7
       - name: Generate genuine pep-receipt/2 (existing shipping action)
         id: receipt
-        uses: pgEdge/pgedge-pep-test/.github/actions/pep-package-receipt@a448072edfbcf0acccfb86cc6da9e6995b50d0fc
+        uses: pgEdge/pgedge-pep-test/.github/actions/pep-package-receipt@c61ece50f60448880fdd75ce5e83180ee16a52c8
         with:
           cell_id: ${{ matrix.cell_id }}
           family: deb
@@ -262,8 +281,11 @@ jobs:
       - name: Reconcile + compose certification inputs
         id: compose
         env:
-          RPM_MATRIX: ${{ inputs.rpm_matrix }}
-          DEB_MATRIX: ${{ inputs.deb_matrix }}
+          RPM_MATRIX: ${{ needs.plan.outputs.rpm_matrix }}
+          DEB_MATRIX: ${{ needs.plan.outputs.deb_matrix }}
+          DETECTOR_RPM_MATRIX: ${{ inputs.rpm_matrix }}
+          DETECTOR_DEB_MATRIX: ${{ inputs.deb_matrix }}
+          SELECT_CELLS: ${{ inputs.select_cells }}
           LOGICAL_COMPONENT: ${{ inputs.logical_component }}
           VERSION: ${{ inputs.intended_version }}
           BUILDNUM: ${{ inputs.intended_buildnum }}
@@ -284,15 +306,15 @@ jobs:
 
   # --- 4. certify: the REAL coordinator, full mode, observe policy -------------
   certify:
-    needs: [reconcile]
+    needs: [plan, reconcile]
     if: ${{ always() && needs.reconcile.result == 'success' }}
     permissions:
       contents: read
       actions: read
-    uses: pgEdge/pgedge-pep-test/.github/workflows/pep-certify.yml@a448072edfbcf0acccfb86cc6da9e6995b50d0fc
+    uses: pgEdge/pgedge-pep-test/.github/workflows/pep-certify.yml@c61ece50f60448880fdd75ce5e83180ee16a52c8
     with:
-      rpm_matrix: ${{ inputs.rpm_matrix }}
-      deb_matrix: ${{ inputs.deb_matrix }}
+      rpm_matrix: ${{ needs.plan.outputs.rpm_matrix }}
+      deb_matrix: ${{ needs.plan.outputs.deb_matrix }}
       release_intent: ${{ needs.reconcile.outputs.release_intent }}
       publication_results: ${{ needs.reconcile.outputs.publication_results }}
       enforcement: observe
@@ -337,6 +359,11 @@ jobs:
         env:
           HAS_RPM: ${{ needs.plan.outputs.has_rpm }}
           HAS_DEB: ${{ needs.plan.outputs.has_deb }}
+          SCOPE_KIND: ${{ needs.plan.outputs.scope_kind }}
+          DETECTOR_COUNT: ${{ needs.plan.outputs.detector_cell_count }}
+          SELECTED_COUNT: ${{ needs.plan.outputs.selected_cell_count }}
+          SELECTED_CELLS: ${{ needs.plan.outputs.selected_cells }}
+          OMITTED_CELLS: ${{ needs.plan.outputs.omitted_cells }}
           RECON_RESULT: ${{ needs.reconcile.result }}
           CERTIFY_RESULT: ${{ needs.certify.result }}
           ACCEPT_RESULT: ${{ needs.accept.result }}
@@ -349,6 +376,18 @@ jobs:
           REASON_CODE: ${{ needs.certify.outputs.reason_code }}
         run: |
           {
+            if [ "${SCOPE_KIND}" = "subset_probe" ]; then
+              echo "## SUBSET PROBE: ${SELECTED_COUNT} of ${DETECTOR_COUNT} detector cells (NOT certification of the full detector matrix)"
+              echo ""
+              echo "Only the selected cells were retrieved and certified. Any complete coverage below"
+              echo "is relative to these ${SELECTED_COUNT} cells only. Omitting a cell here does not remove"
+              echo "it from full certification or declare it unsupported."
+              echo ""
+              echo "selected cells: \`${SELECTED_CELLS}\`"
+              echo ""
+              echo "omitted cells: \`${OMITTED_CELLS}\`"
+              echo ""
+            fi
             echo "## PEP Published-Package Replay (NOT A RELEASE)"
             echo ""
             echo "Controlled replay of already-published packages through the real pinned coordinator."
@@ -371,7 +410,7 @@ jobs:
             echo "| certification_state | ${CERT_STATE} |"
             echo "| execution_status | ${EXEC_STATUS} |"
             echo "| test_verdict | ${TEST_VERDICT} |"
-            echo "| coverage_status | ${COVERAGE_STATUS} |"
+            echo "| coverage_status | ${COVERAGE_STATUS}$([ "${SCOPE_KIND}" = "subset_probe" ] && echo " (relative to the ${SELECTED_COUNT} selected cells)") |"
             echo "| reason_code | ${REASON_CODE} |"
             echo ""
             echo "_coverage_status vocabulary is complete | partial | none._"

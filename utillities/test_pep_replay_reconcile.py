@@ -281,3 +281,133 @@ def test_run_from_env_fault_exits_nonzero_but_writes_evidence():
 def test_run_from_env_hostile_inputs_fail_closed(over):
     with pytest.raises(R.ReconcileError):
         R.run_from_env(_env(**over))
+
+
+# --- subset probe: select named cells from the real detector output ---------
+_IMAGES = {"el-9": "almalinux:9", "el-10": "almalinux:10", "jammy": "ubuntu:jammy",
+           "noble": "ubuntu:noble", "resolute": "ubuntu:resolute", "bookworm": "debian:bookworm",
+           "trixie": "debian:trixie"}
+# the RAG detector's 14 cells, in the detector's own order
+DET_RPM = {"include": [_cell("rpm", o, a, _IMAGES[o]) for o in ("el-9", "el-10") for a in ("amd64", "arm64")]}
+DET_DEB = {"include": [_cell("deb", o, a, _IMAGES[o])
+                       for o in ("jammy", "noble", "resolute", "bookworm", "trixie") for a in ("amd64", "arm64")]}
+PROBE = ["pepcell.v1.rpm.el-9.arm64.pkg", "pepcell.v1.rpm.el-10.amd64.pkg",
+         "pepcell.v1.deb.bookworm.arm64.pkg", "pepcell.v1.deb.noble.amd64.pkg"]
+
+
+def _ids(m):
+    return [c["cell_id"] for c in m["include"]]
+
+
+def test_selection_keeps_the_detectors_own_entries_for_the_named_cells():
+    rpm, deb, scope = R.select_matrices(DET_RPM, DET_DEB, json.dumps(PROBE))
+    assert _ids(rpm) == ["pepcell.v1.rpm.el-9.arm64.pkg", "pepcell.v1.rpm.el-10.amd64.pkg"]
+    assert _ids(deb) == ["pepcell.v1.deb.noble.amd64.pkg", "pepcell.v1.deb.bookworm.arm64.pkg"]  # detector order
+    by_id = {c["cell_id"]: c for c in DET_RPM["include"] + DET_DEB["include"]}
+    assert all(c == by_id[c["cell_id"]] for c in rpm["include"] + deb["include"])   # verbatim, never synthesized
+    assert scope["kind"] == R.SCOPE_SUBSET
+    assert (len(scope["detector_cells"]), scope["selected_cells"]) == (14, sorted(PROBE))
+    assert len(scope["omitted_cells"]) == 10 and "pepcell.v1.rpm.el-9.amd64.pkg" in scope["omitted_cells"]
+    assert R.validate_matrices(rpm, deb) == {"has_rpm": True, "has_deb": True, "rpm_count": 2, "deb_count": 2}
+
+
+@pytest.mark.parametrize("raw", ["", "   ", None])
+def test_no_selection_replays_every_detector_cell_unchanged(raw):
+    rpm, deb, scope = R.select_matrices(json.dumps(DET_RPM), json.dumps(DET_DEB), raw)
+    assert (rpm, deb) == (DET_RPM, DET_DEB)
+    assert scope["kind"] == R.SCOPE_FULL and scope["omitted_cells"] == []
+
+
+def test_a_selected_cell_absent_from_the_detector_output_fails_closed():
+    with pytest.raises(R.ReconcileError, match="absent from the detector output"):
+        R.select_matrices(DET_RPM, DET_DEB, json.dumps(PROBE[:3] + ["pepcell.v1.deb.buster.arm64.pkg"]))
+
+
+def test_a_cell_duplicated_in_the_detector_output_fails_closed():
+    dup = {"include": DET_RPM["include"] + [dict(DET_RPM["include"][1])]}
+    with pytest.raises(R.ReconcileError, match="duplicate"):
+        R.select_matrices(dup, DET_DEB, json.dumps(PROBE))
+
+
+@pytest.mark.parametrize("raw,needle", [
+    (json.dumps(PROBE + [PROBE[0]]), "duplicate"),
+    ("[not json", "not valid JSON"), (json.dumps([]), "non-empty"), (json.dumps({"cells": PROBE}), "non-empty"),
+    (json.dumps(PROBE[:3] + [7]), "nonblank"), (json.dumps(PROBE[:3] + [" " + PROBE[3]]), "nonblank"),
+    (json.dumps(PROBE[:3] + ["pepcell.v1.deb.noble"]), "cell_id"),
+])
+def test_a_malformed_selection_fails_closed(raw, needle):
+    with pytest.raises(R.ReconcileError, match=needle):
+        R.select_matrices(DET_RPM, DET_DEB, raw)
+
+
+def _gho():
+    return tempfile.mkstemp()[1]
+
+
+def _outputs(path):
+    return dict(line.rstrip("\n").split("=", 1) for line in open(path) if "=" in line)
+
+
+def test_plan_stage_emits_the_selected_matrices_and_scope():
+    gho = _gho()
+    env = {"RPM_MATRIX": json.dumps(DET_RPM), "DEB_MATRIX": json.dumps(DET_DEB),
+           "SELECT_CELLS": json.dumps(PROBE), "LOGICAL_COMPONENT": "rag", "VERSION": "2.0.0",
+           "BUILDNUM": "1", "TAG": "v2.0.0", "CHANNEL": "staging", "GITHUB_OUTPUT": gho}
+    R.validate_from_env(env)
+    out = _outputs(gho)
+    assert (out["has_rpm"], out["has_deb"], out["rpm_count"], out["deb_count"]) == ("true", "true", "2", "2")
+    assert _ids(json.loads(out["rpm_matrix"])) == ["pepcell.v1.rpm.el-9.arm64.pkg", "pepcell.v1.rpm.el-10.amd64.pkg"]
+    assert _ids(json.loads(out["deb_matrix"])) == ["pepcell.v1.deb.noble.amd64.pkg", "pepcell.v1.deb.bookworm.arm64.pkg"]
+    assert out["scope_kind"] == "subset_probe"
+    assert (out["detector_cell_count"], out["selected_cell_count"]) == ("14", "4")
+    assert json.loads(out["selected_cells"]) == sorted(PROBE) and len(json.loads(out["omitted_cells"])) == 10
+
+
+def test_plan_stage_without_a_selection_emits_the_detector_matrices():
+    gho = _gho()
+    R.validate_from_env({"RPM_MATRIX": json.dumps(DET_RPM), "DEB_MATRIX": json.dumps(DET_DEB),
+                         "LOGICAL_COMPONENT": "rag", "VERSION": "2.0.0", "BUILDNUM": "1",
+                         "TAG": "v2.0.0", "CHANNEL": "staging", "GITHUB_OUTPUT": gho})
+    out = _outputs(gho)
+    assert (json.loads(out["rpm_matrix"]), json.loads(out["deb_matrix"])) == (DET_RPM, DET_DEB)
+    assert (out["scope_kind"], out["selected_cell_count"], out["omitted_cells"]) == ("full_detector_matrix", "14", "[]")
+
+
+def _subset_env(**over):
+    rpm, deb, _ = R.select_matrices(DET_RPM, DET_DEB, json.dumps(PROBE))
+    return _env(RPM_MATRIX=json.dumps(rpm), DEB_MATRIX=json.dumps(deb),
+                DETECTOR_RPM_MATRIX=json.dumps(DET_RPM), DETECTOR_DEB_MATRIX=json.dumps(DET_DEB),
+                SELECT_CELLS=json.dumps(PROBE), RPM_JOB_RESULT="success", DEB_JOB_RESULT="success", **over)
+
+
+def test_replay_metadata_records_a_subset_probe_unmistakably():
+    env = _subset_env()
+    R.run_from_env(env)
+    md = json.load(open(env["OUT_DIR"] + "/replay-metadata.json"))
+    assert md["scope"] == {"kind": "subset_probe", "detector_cell_count": 14, "selected_cell_count": 4,
+                           "selected_cells": sorted(PROBE),
+                           "omitted_cells": sorted(set(_ids(DET_RPM) + _ids(DET_DEB)) - set(PROBE))}
+    assert md["note"].startswith("SUBSET PROBE: only 4 of the 14 detector cells")
+    assert "not certification of the full detector matrix" in md["note"]
+    assert "relative to the selected cells only" in md["note"] and "declare it unsupported" in md["note"]
+    assert md["detector_cell_counts"] == {"rpm": 4, "deb": 10, "total": 14}
+    assert md["selected_cell_counts"] == {"rpm": 2, "deb": 2, "total": 4}
+
+
+def test_reconcile_refuses_matrices_that_are_not_the_selection():
+    # e.g. a plumbing slip passing the full detector matrix to reconcile
+    env = _subset_env()
+    env["RPM_MATRIX"] = json.dumps(DET_RPM)
+    with pytest.raises(R.ReconcileError, match="not the selection of the detector output"):
+        R.run_from_env(env)
+
+
+def test_replay_metadata_without_a_selection_is_the_full_matrix():
+    env = _env(RPM_MATRIX=json.dumps(DET_RPM), DEB_MATRIX=json.dumps(DET_DEB),
+               DETECTOR_RPM_MATRIX=json.dumps(DET_RPM), DETECTOR_DEB_MATRIX=json.dumps(DET_DEB),
+               RPM_JOB_RESULT="success", DEB_JOB_RESULT="success")
+    R.run_from_env(env)
+    md = json.load(open(env["OUT_DIR"] + "/replay-metadata.json"))
+    assert md["scope"]["kind"] == "full_detector_matrix" and md["scope"]["omitted_cells"] == []
+    assert not md["note"].startswith("SUBSET PROBE")
+    assert md["detector_cell_counts"] == md["selected_cell_counts"] == {"rpm": 4, "deb": 10, "total": 14}

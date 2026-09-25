@@ -19,6 +19,13 @@ Also composes the certification inputs AFTER reconciliation:
   * publication_results (per-family, from reconciliation);
   * a SEPARATE, allowlisted, scalar pep-replay-metadata/1 audit artifact.
 
+Subset probe: an optional selection (SELECT_CELLS, a JSON list of cell_ids) narrows the
+real detector output to named cells before any retrieval. Each selected cell must occur
+exactly once in the validated detector matrices or the plan fails closed; cells are never
+synthesized. Reconciliation re-derives the selection and records it as the metadata's
+``scope`` (subset_probe, selected and omitted cells), and every subset note says the run is
+not certification of the full detector matrix.
+
 Replay truthfulness: simulated=false is required by strict full-mode eligibility
 because the packages are real, already-published artifacts. This run does NOT
 build or publish anything; publication_results are SYNTHESIZED from verified
@@ -182,6 +189,65 @@ def validate_matrices(rpm_matrix, deb_matrix):
             "rpm_count": counts["rpm"], "deb_count": counts["deb"]}
 
 
+# --- optional cell selection (a SUBSET PROBE of the real detector output) -----
+SCOPE_FULL = "full_detector_matrix"
+SCOPE_SUBSET = "subset_probe"
+
+
+def parse_selection(raw):
+    """None when no selection was requested (blank), else the validated list of cell_ids:
+    a non-empty JSON list of distinct, grammar-valid cell_ids. Never guesses."""
+    if raw is None or (isinstance(raw, str) and raw.strip() == ""):
+        return None
+    try:
+        sel = json.loads(raw) if isinstance(raw, str) else raw
+    except ValueError:
+        raise ReconcileError("select_cells is not valid JSON")
+    if not isinstance(sel, list) or not sel:
+        raise ReconcileError("select_cells must be a non-empty JSON list of cell_ids")
+    for i, cid in enumerate(sel):
+        if not _nonblank_unpadded(cid):
+            raise ReconcileError("select_cells[%d] must be a nonblank, unpadded string" % i)
+        _cell_identity(cid)
+    dups = sorted(c for c, n in Counter(sel).items() if n > 1)
+    if dups:
+        raise ReconcileError("select_cells has duplicate cell_id(s): %s" % dups)
+    return sel
+
+
+def select_matrices(rpm_matrix, deb_matrix, select_raw):
+    """Return (rpm_matrix, deb_matrix, scope) to retrieve and certify.
+
+    The detector matrices are fully validated first (validate_matrices rejects any
+    duplicate cell_id within or across families). With no selection they are returned
+    unchanged and scope.kind is full_detector_matrix. With a selection, every selected
+    cell must occur EXACTLY ONCE in the detector output, or this fails closed; cells are
+    never synthesized: each selected entry is the detector's own, verbatim, kept in its
+    own family and in detector order."""
+    validate_matrices(rpm_matrix, deb_matrix)
+    rpm_inc = parse_include(rpm_matrix, "rpm_matrix")
+    deb_inc = parse_include(deb_matrix, "deb_matrix")
+    detector_ids = [c["cell_id"] for c in rpm_inc + deb_inc]
+    sel = parse_selection(select_raw)
+    if sel is None:
+        return ({"include": rpm_inc}, {"include": deb_inc},
+                {"kind": SCOPE_FULL, "detector_cells": sorted(detector_ids),
+                 "selected_cells": sorted(detector_ids), "omitted_cells": []})
+    seen = Counter(detector_ids)
+    absent = [c for c in sel if seen.get(c, 0) == 0]
+    if absent:
+        raise ReconcileError("selected cell(s) absent from the detector output: %s" % absent)
+    repeated = [c for c in sel if seen[c] > 1]
+    if repeated:                                  # validate_matrices already forbids this
+        raise ReconcileError("selected cell(s) duplicated in the detector output: %s" % repeated)
+    chosen = set(sel)
+    return ({"include": [c for c in rpm_inc if c["cell_id"] in chosen]},
+            {"include": [c for c in deb_inc if c["cell_id"] in chosen]},
+            {"kind": SCOPE_SUBSET, "detector_cells": sorted(detector_ids),
+             "selected_cells": sorted(chosen),
+             "omitted_cells": sorted(set(detector_ids) - chosen)})
+
+
 def _classify_ledger(entry):
     """Classify ONE ledger entry WITHOUT discarding it first. `entry` is either a
     structural fault ({"source", "structural_fault"}) or {"source","parse_ok",
@@ -299,9 +365,11 @@ def family_presence(rpm_matrix, deb_matrix):
 
 
 def validate_from_env(env):
-    """Plan-job entrypoint: validate BOTH matrices AND the release identity from env
-    (reusing the one identity validator), so malformed release identity fails before
-    fan-out rather than after package retrieval. Emits presence/counts."""
+    """Plan-job entrypoint: validate BOTH detector matrices AND the release identity from
+    env (reusing the one identity validator), so malformed release identity fails before
+    fan-out rather than after package retrieval; then apply the optional SELECT_CELLS
+    selection. Emits presence/counts for the cells that will run, the matrices to run,
+    and the scope."""
     validate_identity({
         "logical_component": env.get("LOGICAL_COMPONENT", ""),
         "intended_version": env.get("VERSION", ""),
@@ -309,14 +377,25 @@ def validate_from_env(env):
         "effective_tag": env.get("TAG", ""),
         "channel": env.get("CHANNEL", ""),
     })
-    presence = validate_matrices(env.get("RPM_MATRIX", ""), env.get("DEB_MATRIX", ""))
+    rpm_sel, deb_sel, scope = select_matrices(
+        env.get("RPM_MATRIX", ""), env.get("DEB_MATRIX", ""), env.get("SELECT_CELLS", ""))
+    presence = validate_matrices(rpm_sel, deb_sel)
+    presence["scope"] = scope
     gho = env.get("GITHUB_OUTPUT")
     if gho:
+        compact = lambda o: json.dumps(o, separators=(",", ":"), sort_keys=True)
         with open(gho, "a") as fh:
             fh.write("has_rpm=%s\n" % ("true" if presence["has_rpm"] else "false"))
             fh.write("has_deb=%s\n" % ("true" if presence["has_deb"] else "false"))
             fh.write("rpm_count=%d\n" % presence["rpm_count"])
             fh.write("deb_count=%d\n" % presence["deb_count"])
+            fh.write("rpm_matrix=%s\n" % compact(rpm_sel))
+            fh.write("deb_matrix=%s\n" % compact(deb_sel))
+            fh.write("scope_kind=%s\n" % scope["kind"])
+            fh.write("detector_cell_count=%d\n" % len(scope["detector_cells"]))
+            fh.write("selected_cell_count=%d\n" % len(scope["selected_cells"]))
+            fh.write("selected_cells=%s\n" % compact(scope["selected_cells"]))
+            fh.write("omitted_cells=%s\n" % compact(scope["omitted_cells"]))
     return presence
 
 
@@ -351,24 +430,53 @@ def _scalar(v):
     return v if isinstance(v, (str, int, float, bool)) or v is None else str(v)
 
 
-def compose_replay_metadata(identity, reconciled, provenance):
-    """Separate audit artifact. Allowlisted + scalar; no URLs/creds/paths."""
+def _family_counts(cell_ids):
+    counts = Counter(_cell_identity(c)["family"] for c in cell_ids)
+    return {"rpm": counts.get("rpm", 0), "deb": counts.get("deb", 0), "total": len(cell_ids)}
+
+
+def subset_note(scope):
+    """The plain statement every subset-probe summary and metadata carries."""
+    return ("SUBSET PROBE: only %d of the %d detector cells were retrieved and certified. This is "
+            "not certification of the full detector matrix; any complete coverage is relative to "
+            "the selected cells only. Omitting a cell here does not remove it from full "
+            "certification or declare it unsupported."
+            % (len(scope["selected_cells"]), len(scope["detector_cells"])))
+
+
+def compose_replay_metadata(identity, reconciled, provenance, scope=None):
+    """Separate audit artifact. Allowlisted + scalar (plus the validated cell_id lists of
+    the scope); no URLs/creds/paths. ``scope`` defaults to the reconciled cells as the full
+    detector matrix."""
     pf = reconciled["per_family"]
     prov = {k: _scalar(provenance.get(k)) for k in
             ("workflow", "workflow_ref", "run_id", "run_number", "run_attempt", "repository")}
     prov["replay"] = True
+    if scope is None:
+        scope = {"kind": SCOPE_FULL, "detector_cells": list(reconciled["expected_cells"]),
+                 "selected_cells": list(reconciled["expected_cells"]), "omitted_cells": []}
+    note = ("Controlled published-package replay: packages were retrieved from an existing "
+            "repository channel and tested; this run did not build or publish anything. "
+            "publication_results are synthesized from verified repository availability.")
+    if scope["kind"] == SCOPE_SUBSET:
+        note = subset_note(scope) + " " + note
     return {
         "schema": REPLAY_METADATA_SCHEMA,
         "replay": True,
-        "note": ("Controlled published-package replay: packages were retrieved from an existing "
-                 "repository channel and tested; this run did not build or publish anything. "
-                 "publication_results are synthesized from verified repository availability."),
+        "note": note,
+        "scope": {"kind": scope["kind"],
+                  "detector_cell_count": len(scope["detector_cells"]),
+                  "selected_cell_count": len(scope["selected_cells"]),
+                  "selected_cells": list(scope["selected_cells"]),
+                  "omitted_cells": list(scope["omitted_cells"])},
         "logical_component": identity["logical_component"],
         "intended_version": identity["intended_version"],
         "intended_buildnum": identity["intended_buildnum"],
         "effective_tag": identity["effective_tag"],
         "channel": identity["channel"],
-        "detector_cell_counts": reconciled["cell_counts"],
+        # the full detector output vs the cells this run retrieved and certified
+        "detector_cell_counts": _family_counts(scope["detector_cells"]),
+        "selected_cell_counts": reconciled["cell_counts"],
         "per_family_retrieval": {
             fam: {"status": pf[fam]["status"], "intended": pf[fam]["intended_count"],
                   "verified": pf[fam]["verified_count"], "matrix_result": pf[fam]["matrix_result"]}
@@ -430,7 +538,19 @@ def run_from_env(env):
     provenance = {k.lower().replace("github_", ""): env.get(k, "") for k in
                   ("GITHUB_WORKFLOW", "GITHUB_WORKFLOW_REF", "GITHUB_RUN_ID",
                    "GITHUB_RUN_NUMBER", "GITHUB_RUN_ATTEMPT", "GITHUB_REPOSITORY")}
-    replay_metadata = compose_replay_metadata(identity, reconciled, provenance)
+    scope = None
+    if env.get("DETECTOR_RPM_MATRIX") or env.get("DETECTOR_DEB_MATRIX"):
+        # Re-derive the selection from the detector output and require the matrices just
+        # reconciled to be exactly it, so the recorded scope can never drift from the
+        # cells that actually ran.
+        rpm_sel, deb_sel, scope = select_matrices(
+            env.get("DETECTOR_RPM_MATRIX", ""), env.get("DETECTOR_DEB_MATRIX", ""),
+            env.get("SELECT_CELLS", ""))
+        ran = (parse_include(env.get("RPM_MATRIX", ""), "rpm_matrix"),
+               parse_include(env.get("DEB_MATRIX", ""), "deb_matrix"))
+        if ran != (rpm_sel["include"], deb_sel["include"]):
+            raise ReconcileError("reconciled matrices are not the selection of the detector output")
+    replay_metadata = compose_replay_metadata(identity, reconciled, provenance, scope)
 
     os.makedirs(out_dir, exist_ok=True)
     _w = lambda n, o, **k: json.dump(o, open(os.path.join(out_dir, n), "w"), **k)

@@ -27,7 +27,7 @@ jobs:
         # job uses it as GitHub's purpose-built reusable-workflow SHA). The regex is anchored to that
         # exact diagnostic + the job-context object type, so every other expression diagnostic still fails
         # the lint. It is NOT a broad `-ignore` of expression errors.
-        run: docker run --rm -v "$PWD:/repo" -w /repo rhysd/actionlint@sha256:887a259a5a534f3c4f36cb02dca341673c6089431057242cdc931e9f133147e9 -color -ignore 'property "workflow_sha" is not defined in object type \{container' .github/workflows/pep-integration.yml .github/workflows/pep-capture.yml .github/workflows/pep-capture-smoke.yml .github/workflows/pep-selftest.yml .github/workflows/pep-certify.yml
+        run: docker run --rm -v "$PWD:/repo" -w /repo rhysd/actionlint@sha256:887a259a5a534f3c4f36cb02dca341673c6089431057242cdc931e9f133147e9 -color -ignore 'property "workflow_sha" is not defined in object type \{container' .github/workflows/pep-integration.yml .github/workflows/pep-capture.yml .github/workflows/pep-capture-smoke.yml .github/workflows/pep-selftest.yml .github/workflows/pep-certify.yml .github/workflows/pep-release-certify.yml
       - name: Unit layer (globs so later modules are picked up automatically)
         # Finding 5: also run the pre-existing container-resolver and
         # consolidated-report regression suites. The bridge (run_pep_tf.sh) shells

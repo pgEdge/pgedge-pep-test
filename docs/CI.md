@@ -459,3 +459,43 @@ The gate also refuses a completed result whose test runs do not all carry a matc
 - The live full-mode path has been validated for a **DEB** target; the RPM full-mode path is covered by unit tests but not yet run live.
 
 The next step is a real cross-repo caller in a component's release pipeline (report-only), which exercises this workflow end-to-end from the publishing side.
+
+## Release certification adapter (`pep-release-certify.yml`)
+
+A release pipeline that builds and publishes packages calls `.github/workflows/pep-release-certify.yml` once, after its publication jobs. It passes only facts it owns. The adapter turns them into `pep-certify.yml`'s existing inputs, certifies with it, and always writes one summary. `pep-certify.yml` itself is unchanged: its generic inputs, outputs and decisions are the same for every caller.
+
+```yaml
+  certify:
+    name: Certify packages (PEP)
+    # After publication; certification never changes what was published.
+    needs: [detect-matrix, determine-repo-type, build, package-rpm, package-deb, push-dnf, push-apt]
+    if: always() && needs.determine-repo-type.result == 'success'
+    permissions: {contents: read, actions: read}
+    uses: pgEdge/pgedge-pep-test/.github/workflows/pep-release-certify.yml@<PEP_COMMIT_SHA>
+    with:
+      rpm_matrix:      ${{ needs.detect-matrix.outputs.rpm_matrix }}
+      deb_matrix:      ${{ needs.detect-matrix.outputs.deb_matrix }}
+      component:       rag
+      version:         ${{ needs.determine-repo-type.outputs.component-version }}
+      buildnum:        ${{ needs.determine-repo-type.outputs.component-buildnum }}
+      effective_tag:   ${{ needs.determine-repo-type.outputs.effective-tag }}
+      channel:         ${{ needs.determine-repo-type.outputs.repo-type }}
+      simulated:       ${{ needs.determine-repo-type.outputs.simulated }}
+      rpm_publication: ${{ needs.push-dnf.result }}
+      deb_publication: ${{ needs.push-apt.result }}
+    secrets:            # optional; withheld on simulated runs, and PEP forwards them only for full certification
+      DOCKERHUB_USERNAME: ${{ needs.determine-repo-type.outputs.simulated == 'false' && secrets.DOCKERHUB_USERNAME || '' }}
+      DOCKERHUB_TOKEN:    ${{ needs.determine-repo-type.outputs.simulated == 'false' && secrets.DOCKERHUB_TOKEN || '' }}
+```
+
+Each package job also keeps its `[pep-cell:<cell_id>]` name marker and its `pep-package-receipt` step, pinned to the same commit, so evidence is recorded where each package is built.
+
+The adapter validates the facts before anything runs (`utillities/pep_release_inputs.py`) and rejects, rather than guesses:
+- Each detector matrix must be a JSON object whose `include` lists cell objects with a `cell_id` and the matrix's own `family`. Only a valid matrix can count as having zero cells.
+- `<family>_publication` is that family's publication job result: `success`, `failure`, `cancelled` or `skipped`. It is required when the matrix has cells for the family. It may be omitted only for a family with zero cells, which is then left out of `publication_results` rather than reported as skipped or successful. An explicit `skipped` is kept.
+- `simulated` must be exactly `true` or `false`. Only `true` selects preview (a dry run); `false` selects full certification.
+- The identity values must be nonblank, without surrounding whitespace or control characters. `enforcement` is `observe` (default) or `gate`.
+
+The adapter calls `pep-certify.yml` through a relative path, so it runs at the adapter's own commit: the caller's one pin selects the adapter, the certifier and everything they run. Only the Docker Hub secrets are accepted. They are forwarded explicitly, and only for full certification. The adapter passes through all of `pep-certify.yml`'s outputs.
+
+**Failure behavior.** Certification runs after publication and never changes it. A rejected input fails the adapter's input job, so the certify job is skipped. An infrastructure or incomplete result, or a package-digest problem, fails the certify job. Either way the caller's run fails, even under `observe`. Product test failures under `observe` are reported without failing it. In every case, including rejected inputs, the summary job writes the actual per-family publication results as passed in, and the certification outcome.

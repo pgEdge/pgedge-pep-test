@@ -10,7 +10,7 @@
     {"category": "server",    "name": "postgresql-plperl",   "description": "PL/Perl procedural language",           "enabled": false,  "rhel": "pgedge-postgresql{PG}-plperl",   "deb": null},
     {"category": "server",    "name": "postgresql-plpython3","description": "PL/Python3 procedural language",        "enabled": false,  "rhel": "pgedge-postgresql{PG}-plpython3","deb": null},
     {"category": "server",    "name": "postgresql-pltcl",    "description": "PL/Tcl procedural language",            "enabled": false,  "rhel": "pgedge-postgresql{PG}-pltcl",    "deb": null},
-    {"category": "extension", "name": "pldebugger",          "description": "PL/pgSQL debugger",                    "enabled": false,  "rhel": "pgedge-pldebugger_{PG}",         "deb": "pgedge-postgresql-{PG}-pldebugger"},
+    {"category": "extension", "name": "pldebugger",          "description": "PL/pgSQL debugger (Must Have)",        "enabled": true,  "rhel": "pgedge-pldebugger_{PG}",         "deb": "pgedge-postgresql-{PG}-pldebugger"},
     {"category": "extension", "name": "postgis",             "description": "PostGIS spatial extension",            "enabled": false,  "rhel": "pgedge-postgis35_{PG}",          "deb": "pgedge-postgresql-{PG}-postgis-3"},
     {"category": "extension", "name": "pgaudit",             "description": "PostgreSQL audit logging",             "enabled": false,  "rhel": "pgedge-pgaudit_{PG}",            "deb": "pgedge-postgresql-{PG}-pgaudit"},
     {"category": "extension", "name": "pgvector",            "description": "Vector similarity search",             "enabled": false,  "rhel": "pgedge-pgvector_{PG}",           "deb": "pgedge-postgresql-{PG}-pgvector"},

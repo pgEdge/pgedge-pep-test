@@ -771,6 +771,72 @@ def test_capture_rejected_receipt_no_job_reduces_to_never_ran(tmp_path, monkeypa
     assert cell["build_state"] == "never_ran"
 
 
+# A package matrix skipped by its job-level `if:`, or cancelled before it expanded, is
+# listed once with its name template verbatim, no steps and no runner (real records:
+# pgEdge/pgedge-pep-test job 92303969222 skipped; pgEdge/pgedge-rag-server job
+# 81663185377 cancelled -- both completed, steps [], runner_id null).
+_TEMPLATE_JOB_NAME = "Package RPM (${{ matrix.image }} ${{ matrix.arch }}) [pep-cell:${{ matrix.cell_id }}]"
+
+
+def _template_job(job_id, attempt=1, name=_TEMPLATE_JOB_NAME, conclusion="skipped"):
+    return {"id": job_id, "name": name, "run_attempt": attempt, "status": "completed",
+            "conclusion": conclusion, "steps": [], "runner_id": None}
+
+
+def test_capture_skipped_matrix_template_job_is_not_systemic(tmp_path, monkeypatch):
+    # e.g. a single-family run: the other family's matrix was skipped before expansion
+    c = build_rpm_cell(tmp_path, monkeypatch, cell_id="rag-rpm-el9-amd64")
+    env, ev = _capture(c, [_template_job(900010), _job(c.cell_id, 900011)], monkeypatch)
+    cell = {x["cell_id"]: x for x in R.reduce(env)["cells"]}[c.cell_id]
+    assert cell["build_state"] == "available"
+    assert ev["counts"]["accepted_receipt_cells"] == 1
+
+
+def test_capture_rerun_after_an_earlier_template_skip_reduces_to_available(tmp_path, monkeypatch):
+    # attempt 1 skipped the matrix (build failed); the attempt-2 rerun built and uploaded it.
+    # filter=all keeps the attempt-1 record in the listing for good.
+    c = build_rpm_cell(tmp_path, monkeypatch, cell_id="rag-rpm-el9-amd64")
+    env, _ev = _capture(c, [_template_job(900012, attempt=1), _job(c.cell_id, 900013, attempt=2)],
+                        monkeypatch)
+    cell = {x["cell_id"]: x for x in R.reduce(env)["cells"]}[c.cell_id]
+    assert (cell["build_state"], cell["build_evidence"]["latest_run_attempt"]) == ("available", 2)
+
+
+def test_capture_template_skip_of_the_only_cell_reduces_to_never_ran(tmp_path, monkeypatch):
+    c = build_rpm_cell(tmp_path, monkeypatch, cell_id="rag-rpm-el9-amd64")
+    env, _ev = _capture(c, [_template_job(900014)], monkeypatch)
+    plan = R.reduce(env)
+    assert plan["plan_resolved"] is True
+    assert {x["cell_id"]: x for x in plan["cells"]}[c.cell_id]["build_state"] == "never_ran"
+
+
+def test_capture_cancelled_template_with_no_later_run_reduces_to_never_ran(tmp_path, monkeypatch):
+    # the run was cancelled before the package matrix expanded, and nothing reran it
+    c = build_rpm_cell(tmp_path, monkeypatch, cell_id="rag-rpm-el9-amd64")
+    env, _ev = _capture(c, [_template_job(900017, conclusion="cancelled")], monkeypatch)
+    plan = R.reduce(env)
+    assert plan["plan_resolved"] is True
+    assert {x["cell_id"]: x for x in plan["cells"]}[c.cell_id]["build_state"] == "never_ran"
+
+
+def test_capture_rerun_after_a_cancelled_template_reduces_to_available(tmp_path, monkeypatch):
+    # attempt 1 was cancelled before the matrix expanded; the attempt-2 rerun built and
+    # uploaded the cell. filter=all keeps the attempt-1 record in the listing for good.
+    c = build_rpm_cell(tmp_path, monkeypatch, cell_id="rag-rpm-el9-amd64")
+    env, ev = _capture(c, [_template_job(900018, attempt=1, conclusion="cancelled"),
+                           _job(c.cell_id, 900019, attempt=2)], monkeypatch)
+    cell = {x["cell_id"]: x for x in R.reduce(env)["cells"]}[c.cell_id]
+    assert (cell["build_state"], cell["build_evidence"]["latest_run_attempt"]) == ("available", 2)
+    assert ev["counts"]["accepted_receipt_cells"] == 1
+
+
+def test_capture_expression_lookalike_on_a_skipped_job_is_systemic(tmp_path, monkeypatch):
+    c = build_rpm_cell(tmp_path, monkeypatch, cell_id="rag-rpm-el9-amd64")
+    lookalike = _template_job(900015, name="Package RPM [pep-cell:${{matrix.cell_id}}]")
+    with pytest.raises(C.CaptureSystemError):
+        _capture(c, [lookalike, _job(c.cell_id, 900016)], monkeypatch)
+
+
 def test_capture_ambiguous_associations_reduce_to_incomplete_not_ambiguous(tmp_path, monkeypatch):
     # Honest mapping: capture suppresses conflicting receipts (no artifact record), so the
     # UNCHANGED reducer reports 'incomplete' (with a successful job), NOT 'ambiguous'.

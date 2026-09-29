@@ -20,8 +20,10 @@ Responsibilities:
      cell). Every planned cell is preserved.
   2. ``job_records_from_jobs`` — captured Jobs-API records -> job_records via one
      exact producer-neutral marker ``[pep-cell:<cell_id>]`` (no project display
-     templates). Unrelated jobs are ignored; malformed/duplicate/conflicting
-     markers fail closed.
+     templates). Unrelated jobs, and a matrix job that never expanded (skipped or
+     cancelled, no steps, no runner, exact ``${{ matrix.cell_id }}`` placeholder), are
+     ignored; malformed/duplicate/conflicting or otherwise unexpanded markers fail
+     closed.
   3. ``artifact_records`` — captured artifact inventory (+ optional per-cell
      receipts) -> cell-associated artifact records, via one artifact-safe marker
      ``[pep-cell.<cell_id>]`` or a receipt keyed by immutable artifact id.
@@ -67,6 +69,17 @@ _JOB_MARKER_RE = re.compile(r"\[pep-cell:([^\[\]]*)\]")
 _ART_MARKER_RE = re.compile(r"\[pep-cell\.([^\[\]]*)\]")
 _JOB_MARKER_HINT = "[pep-cell:"
 _ART_MARKER_HINT = "[pep-cell."
+
+# A matrix job that never expanded -- skipped by its job-level `if:` (evaluated before
+# the matrix) or cancelled before expansion -- is listed as ONE job whose display name is
+# the template verbatim, with no steps and no runner. Real records: pgEdge/pgedge-pep-test
+# job 92303969222 (skipped) and pgEdge/pgedge-rag-server job 81663185377 (cancelled), both
+# completed, steps [], runner_id null, named exactly as the YAML spells them. Such a job
+# ran no cell. Only this exact placeholder is recognised; any other unexpanded expression
+# in a job marker is malformed.
+_JOB_MARKER_TEMPLATE_ID = "${{ matrix.cell_id }}"
+_NEVER_EXPANDED_CONCLUSIONS = ("skipped", "cancelled")
+_UNEXPANDED_EXPRESSION = "${{"
 
 
 class AdapterError(Exception):
@@ -185,16 +198,34 @@ def _sole_marker(text, regex, hint, what):
     return cid
 
 
+def _is_unexpanded_matrix_template(job):
+    """True only for a completed job concluded skipped or cancelled, with ``steps``
+    explicitly ``[]`` and ``runner_id`` explicitly null, whose name carries exactly one
+    job marker and that marker is the exact unexpanded ``${{ matrix.cell_id }}``
+    placeholder. A missing field never matches."""
+    name = job.get("name")
+    return (job.get("status") == "completed"
+            and job.get("conclusion") in _NEVER_EXPANDED_CONCLUSIONS
+            and isinstance(job.get("steps"), list) and job["steps"] == []
+            and "runner_id" in job and job["runner_id"] is None
+            and isinstance(name, str) and name.count(_JOB_MARKER_HINT) == 1
+            and _JOB_MARKER_RE.findall(name) == [_JOB_MARKER_TEMPLATE_ID])
+
+
 def job_records_from_jobs(jobs, planned_cell_ids):
     """Map captured GitHub Jobs-API records to reducer ``job_records``.
 
     Each job is associated to a cell by the exact ``[pep-cell:<cell_id>]`` marker
     in its display name. Jobs with no marker are ignored (unrelated); a marker
-    for a cell that is not planned is ignored. A malformed, blank or
-    multiple/conflicting marker fails closed, and a job bound to a planned cell
-    must carry a valid immutable id (positive integer, bool excluded). The job's
-    ``id``, ``run_attempt``, ``status`` and ``conclusion`` are preserved verbatim;
-    the reducer owns deduplication, conflict and latest-attempt semantics.
+    for a cell that is not planned is ignored. A matrix job that never expanded
+    (completed, skipped or cancelled, steps ``[]``, runner_id null, marker exactly
+    ``${{ matrix.cell_id }}``) names no cell and is ignored, so its planned cells stay
+    ``never_ran`` unless a later attempt ran them. A malformed, blank,
+    multiple/conflicting or otherwise unexpanded marker fails closed, and a job bound
+    to a planned cell must carry a valid immutable id (positive integer, bool
+    excluded). The job's ``id``, ``run_attempt``, ``status`` and ``conclusion`` are
+    preserved verbatim; the reducer owns deduplication, conflict and latest-attempt
+    semantics.
     """
     if not isinstance(jobs, list):
         raise AdapterError("jobs must be a list")
@@ -203,7 +234,11 @@ def job_records_from_jobs(jobs, planned_cell_ids):
     for j in jobs:
         if not isinstance(j, dict):
             raise AdapterError("job record is not an object: %r" % (j,))
+        if _is_unexpanded_matrix_template(j):
+            continue                                  # never expanded, never ran: no cell
         cid = _sole_marker(j.get("name"), _JOB_MARKER_RE, _JOB_MARKER_HINT, "job name")
+        if cid is not None and _UNEXPANDED_EXPRESSION in cid:
+            raise AdapterError("unexpanded expression in job name marker: %r" % (j.get("name"),))
         if cid is None or cid not in planned:
             continue
         if not _valid_id(j.get("id")):

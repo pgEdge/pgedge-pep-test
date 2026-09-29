@@ -199,6 +199,141 @@ def test_non_dict_job_fails_closed():
         A.job_records_from_jobs(["nope"], ["cA"])
 
 
+# ---- a matrix job that never expanded keeps its name template ----------------
+# GitHub evaluates a job-level `if:` before the matrix, and cancels a pending matrix
+# before expanding it, so such a job is ONE record whose display name is the template
+# verbatim, with no steps and no runner. Real records (only these fields kept; neither
+# workflow carried a cell marker, so the tests append RAG's marker as GitHub would
+# record it verbatim):
+REAL_NEVER_EXPANDED_JOBS = [
+    # pgEdge/pgedge-pep-test run 31005393191 (pep-regression.yml), skipped by its `if:`
+    {"id": 92303969222, "name": "PG${{ matrix.pg }} ${{ matrix.family }} ${{ matrix.arch }}",
+     "status": "completed", "conclusion": "skipped", "steps": [], "runner_id": None, "run_attempt": 1},
+    # pgEdge/pgedge-rag-server run 27619120327 (release.yml), cancelled before expansion
+    {"id": 81663185377, "name": "Package RPM (${{ matrix.image }} ${{ matrix.arch }})",
+     "status": "completed", "conclusion": "cancelled", "steps": [], "runner_id": None, "run_attempt": 1},
+]
+TEMPLATE_MARKER = "[pep-cell:${{ matrix.cell_id }}]"
+TEMPLATE_NAME = "Package RPM (${{ matrix.image }} ${{ matrix.arch }}) " + TEMPLATE_MARKER
+_OMIT = object()
+
+
+def mk_template_job(job_id, *, name=TEMPLATE_NAME, attempt=1, status="completed", conclusion="skipped",
+                    steps=(), runner_id=None):
+    """A never-expanded matrix job in the real Jobs-API shape (steps [] and runner_id null
+    by default); pass _OMIT to drop a field entirely."""
+    job = {"id": job_id, "name": name, "run_attempt": attempt, "status": status, "conclusion": conclusion,
+           "steps": [] if steps == () else steps, "runner_id": runner_id}
+    return {k: v for k, v in job.items() if v is not _OMIT}
+
+
+@pytest.mark.parametrize("real", REAL_NEVER_EXPANDED_JOBS, ids=lambda r: r["conclusion"])
+def test_real_never_expanded_records_are_ignored_once_marked(real):
+    assert A.job_records_from_jobs([dict(real)], ["cA"]) == []       # as recorded: no marker at all
+    marked = dict(real, name=real["name"] + " " + TEMPLATE_MARKER)   # as RAG's marked template records it
+    assert A.job_records_from_jobs([marked], ["cA"]) == []
+    plan = R.reduce(_one_cell_env([marked], []))
+    assert cells_by_id(plan)["cA"]["build_state"] == "never_ran"
+
+
+def test_skipped_matrix_template_job_is_ignored():
+    recs = A.job_records_from_jobs([mk_template_job(1), mk_job("cA", 2)], ["cA"])
+    assert recs == [{"cell_id": "cA", "job_id": 2, "run_attempt": 1,
+                     "status": "completed", "conclusion": "success"}]
+    assert A.job_records_from_jobs([mk_template_job(1)], ["cA"]) == []
+
+
+def test_cancelled_matrix_template_job_is_ignored():
+    recs = A.job_records_from_jobs([mk_template_job(1, conclusion="cancelled"), mk_job("cA", 2)], ["cA"])
+    assert [r["job_id"] for r in recs] == [2]
+    assert A.job_records_from_jobs([mk_template_job(1, conclusion="cancelled")], ["cA"]) == []
+
+
+@pytest.mark.parametrize("status,conclusion", [
+    ("completed", "success"), ("completed", "failure"), ("completed", "neutral"),
+    ("completed", None), ("in_progress", None), ("queued", None), (None, "skipped"), (None, "cancelled"),
+])
+def test_template_marker_on_a_job_that_was_not_skipped_or_cancelled_fails_closed(status, conclusion):
+    with pytest.raises(A.AdapterError):
+        A.job_records_from_jobs([mk_template_job(1, status=status, conclusion=conclusion)], ["cA"])
+
+
+@pytest.mark.parametrize("field,value", [
+    ("steps", _OMIT), ("steps", None), ("steps", [{"name": "Set up job"}]), ("steps", {}),
+    ("runner_id", _OMIT), ("runner_id", 0), ("runner_id", 7), ("runner_id", ""),
+])
+@pytest.mark.parametrize("conclusion", ["skipped", "cancelled"])
+def test_template_needs_explicit_empty_steps_and_null_runner(field, value, conclusion):
+    job = mk_template_job(1, conclusion=conclusion, **{field: value})
+    with pytest.raises(A.AdapterError):
+        A.job_records_from_jobs([job], ["cA"])
+
+
+@pytest.mark.parametrize("marker", [
+    "${{matrix.cell_id}}", "${{ matrix.cell_id}}", "${{matrix.cell_id }}", "${{  matrix.cell_id  }}",
+    "${{\tmatrix.cell_id\t}}", " ${{ matrix.cell_id }}", "${{ matrix.cell_id }} ",
+    "${{ matrix.cellid }}", "${{matrix.cellid}}", "${{ matrix.CELL_ID }}", "${{ inputs.cell_id }}",
+    "${{inputs.cell_id}}", "${{ matrix.cell_id || 'cA' }}", "${{ matrix.cell_id }}x",
+    "cA${{matrix.cell_id}}", "${{ matrix.cell_id }", "bad${{x}",
+])
+@pytest.mark.parametrize("conclusion", ["skipped", "cancelled", "success"])
+def test_expression_lookalike_markers_fail_closed(marker, conclusion):
+    job = mk_template_job(1, name="Package RPM (x) [pep-cell:%s]" % marker, conclusion=conclusion)
+    with pytest.raises(A.AdapterError):
+        A.job_records_from_jobs([job], ["cA", "${{matrix.cell_id}}"])
+
+
+@pytest.mark.parametrize("name", [
+    "x [pep-cell:${{ matrix.cell_id }}] [pep-cell:cA]",                    # template + valid
+    "x [pep-cell:cA] [pep-cell:${{ matrix.cell_id }}]",                    # valid + template
+    "x [pep-cell:${{ matrix.cell_id }}] [pep-cell:${{ matrix.cell_id }}]",  # template twice
+    "x [pep-cell:${{ matrix.cell_id }}] [pep-cell:",                       # template + unmatched
+    "x [pep-cell:${{ matrix.cell_id }}][pep-cell:]",                       # template + blank
+    "x [pep-cell:]",                                                      # blank on a never-expanded job
+    "x [pep-cell: cA ]",                                                  # padded on a never-expanded job
+])
+@pytest.mark.parametrize("conclusion", ["skipped", "cancelled"])
+def test_mixed_duplicate_blank_or_padded_markers_on_a_never_expanded_job_fail_closed(name, conclusion):
+    with pytest.raises(A.AdapterError):
+        A.job_records_from_jobs([mk_template_job(1, name=name, conclusion=conclusion)], ["cA"])
+
+
+@pytest.mark.parametrize("conclusion", ["skipped", "cancelled"])
+def test_expanded_skipped_or_cancelled_job_remains_a_real_record(conclusion):
+    # a job whose name was expanded still names its cell: it is kept and the reducer
+    # reports it, never silently dropping the evidence
+    recs = A.job_records_from_jobs([mk_job("cA", 5, conclusion=conclusion)], ["cA"])
+    assert recs == [{"cell_id": "cA", "job_id": 5, "run_attempt": 1,
+                     "status": "completed", "conclusion": conclusion}]
+    plan = R.reduce(_one_cell_env([mk_job("cA", 5, conclusion=conclusion)], [mk_art("cA", 10, members=[])]))
+    assert cells_by_id(plan)["cA"]["build_state"] == "failed"
+
+
+@pytest.mark.parametrize("conclusion", ["skipped", "cancelled"])
+def test_rerun_success_after_an_earlier_never_expanded_template_is_available(conclusion):
+    # attempt 1: the package matrix never expanded (build failed / run cancelled);
+    # attempt 2 ("re-run failed jobs"): the expanded cell job succeeded and uploaded
+    jobs = [mk_template_job(1, attempt=1, conclusion=conclusion), mk_job("cA", 2, attempt=2, conclusion="success")]
+    recs = A.job_records_from_jobs(jobs, ["cA"])
+    assert [(r["job_id"], r["run_attempt"]) for r in recs] == [(2, 2)]
+    plan = R.reduce(_one_cell_env(jobs, [mk_art("cA", 10, members=[])]))
+    assert cells_by_id(plan)["cA"]["build_state"] == "available"
+
+
+@pytest.mark.parametrize("conclusion", ["skipped", "cancelled"])
+def test_never_expanded_templates_leave_every_planned_cell_never_ran(conclusion):
+    # both package matrices never expanded (build failed, or the run was cancelled)
+    planned = A.planned_cells_from_detector(det([dcell("cA", family="rpm"), dcell("cB", family="deb", os="trixie")]))
+    deb_template = TEMPLATE_NAME.replace("Package RPM", "Package DEB")
+    jobs = [mk_template_job(1, conclusion=conclusion), mk_template_job(2, name=deb_template, conclusion=conclusion)]
+    plan = R.reduce(assemble(planned, A.job_records_from_jobs(jobs, ["cA", "cB"]), []))
+    assert plan["plan_resolved"] is True
+    by = cells_by_id(plan)
+    assert (by["cA"]["build_state"], by["cB"]["build_state"]) == ("never_ran", "never_ran")
+    assert plan["coverage_denominators"]["planned_build_cells"] == 2
+    assert plan["coverage_denominators"]["available_build_cells"] == 0
+
+
 # =====================================================================
 # 3. artifact_records — marker/receipt association, expiry, ambiguity
 # =====================================================================

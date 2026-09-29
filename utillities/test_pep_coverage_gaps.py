@@ -12,6 +12,7 @@ from pathlib import Path
 
 import pytest
 
+import pep_cert_adapter as A
 import pep_cert_gate as G
 import pep_cert_plan as CP
 import pep_cert_report as R
@@ -58,9 +59,12 @@ def planned(family, os_token, arch, *, job="success", members="default"):
             "job": job, "members": members}
 
 
-def certify(cells, *, publication=None, simulated=False, mode="full", outcome=lambda inv: "pass"):
-    """Run the real pipeline once per enforcement mode. Returns (cert_plan, plan, {mode: (result, decision)})."""
-    jobs, arts = [], []
+def certify(cells, *, publication=None, simulated=False, mode="full", outcome=lambda inv: "pass",
+            jobs_api=()):
+    """Run the real pipeline once per enforcement mode. Returns (cert_plan, plan, {mode: (result, decision)}).
+    jobs_api: extra raw Jobs-API records, mapped through the real adapter."""
+    jobs = A.job_records_from_jobs(list(jobs_api), [c["cell"]["cell_id"] for c in cells])
+    arts = []
     for i, c in enumerate(cells):
         cid = c["cell"]["cell_id"]
         if c["job"] is not None:
@@ -171,6 +175,52 @@ def test_failed_and_missing_receipt_cells_are_cell_gaps_not_a_clean_pass():
     result, _ = decided["gate"]
     assert (result["execution_status"], result["test_verdict"], result["coverage_status"]) == (
         "completed", "pass", "partial")
+
+
+TEMPLATE = "Package RPM (${{ matrix.image }} ${{ matrix.arch }}) [pep-cell:${{ matrix.cell_id }}]"
+
+
+def never_expanded(job_id, conclusion, attempt=1):
+    """A matrix job that never expanded, in the real Jobs-API shape (steps [], runner_id null)."""
+    return {"id": job_id, "run_attempt": attempt, "status": "completed", "conclusion": conclusion,
+            "steps": [], "runner_id": None, "name": TEMPLATE}
+
+
+@pytest.mark.parametrize("conclusion", ["skipped", "cancelled"])
+def test_never_expanded_matrix_template_leaves_its_cells_as_never_ran_gaps(conclusion):
+    # The RPM package matrix never expanded (skipped by its job-level `if:`, or the run was
+    # cancelled first), so the Jobs API lists ONE job whose name is the template verbatim.
+    # Its planned cells are per-cell coverage gaps; the DEB cell that did build is certified.
+    template = never_expanded(900, conclusion)
+    cp, plan, decided = certify([
+        planned("rpm", "el-9", "amd64", job=None, members=None),
+        planned("rpm", "el-9", "arm64", job=None, members=None),
+        planned("deb", "trixie", "amd64"),
+    ], jobs_api=[template])
+    assert gaps(plan) == [
+        ("cell", "rpm.el-9.amd64.pkg", None, "build_never_ran", None),
+        ("cell", "rpm.el-9.arm64.pkg", None, "build_never_ran", None),
+    ]
+    assert [i["source_cell_id"] for i in plan["matrix"]["include"]] == ["pepcell.v1.deb.trixie.amd64.pkg"]
+    assert_reconciles(cp, plan)
+    assert outcomes(decided) == PARTIAL
+
+
+def test_rerun_after_a_cancelled_template_certifies_the_cell():
+    # attempt 1 was cancelled before the RPM matrix expanded; the attempt-2 rerun built the
+    # cell and uploaded its package, so it is covered and certifies cleanly
+    cid = "pepcell.v1.rpm.el-9.amd64.pkg"
+    rerun = {"id": 901, "run_attempt": 2, "status": "completed", "conclusion": "success",
+             "steps": [{"name": "Build RPM"}], "runner_id": 7,
+             "name": "Package RPM (almalinux:9 amd64) [pep-cell:%s]" % cid}
+    cp, plan, decided = certify([planned("rpm", "el-9", "amd64", job=None)],
+                                jobs_api=[never_expanded(900, "cancelled"), rerun])
+    assert {c["cell_id"]: c["build_state"] for c in cp["cells"]} == {cid: "available"}
+    assert plan["coverage_gaps"] == []
+    assert [i["source_cell_id"] for i in plan["matrix"]["include"]] == [cid]
+    assert_reconciles(cp, plan)
+    clean = ("pass", "allow", "success", "clean_pass")
+    assert outcomes(decided) == {"observe": clean, "gate": clean}
 
 
 # --------------------------------------------------------------------------- #

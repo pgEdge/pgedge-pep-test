@@ -5,12 +5,17 @@ from pathlib import Path
 
 import pytest
 
-_spec = importlib.util.spec_from_file_location(
-    "pep_request", str(Path(__file__).parent / "pep_request.py")
-)
-pr = importlib.util.module_from_spec(_spec)
-sys.modules["pep_request"] = pr
-_spec.loader.exec_module(pr)
+# Reuse an already-loaded pep_request module when present (never replace the authoritative
+# sys.modules entry other consumers/tests share); otherwise load it by path and register it.
+if "pep_request" in sys.modules:
+    pr = sys.modules["pep_request"]
+else:
+    _spec = importlib.util.spec_from_file_location(
+        "pep_request", str(Path(__file__).parent / "pep_request.py")
+    )
+    pr = importlib.util.module_from_spec(_spec)
+    sys.modules["pep_request"] = pr
+    _spec.loader.exec_module(pr)
 
 
 def _base(**over):

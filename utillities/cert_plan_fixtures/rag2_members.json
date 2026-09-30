@@ -1,0 +1,102 @@
+{
+  "artifacts": [
+    {
+      "id": 9894859799,
+      "members": [
+        {
+          "epoch": null,
+          "native_arch": "src",
+          "package_class": "source",
+          "package_name": "pgedge-rag-server2",
+          "release": "1.el9",
+          "sha256": "b31d9ce250ad473022e7e01c85ee4b421eac2bb7ff0b6635715dcd51e5e30630",
+          "source_filename": "pgedge-rag-server2-2.0.0-1.el9.src.rpm",
+          "version": "2.0.0"
+        },
+        {
+          "epoch": null,
+          "native_arch": "x86_64",
+          "package_class": "runtime",
+          "package_name": "pgedge-rag-server2",
+          "release": "1.el9",
+          "sha256": "01717af9c7ba89cebba85ec9399d9de6b144cf0a8183ba2d38cbb0e7d21bc617",
+          "source_filename": "pgedge-rag-server2-2.0.0-1.el9.x86_64.rpm",
+          "version": "2.0.0"
+        }
+      ],
+      "name": "rpm__el-9__amd64"
+    },
+    {
+      "id": 9894899767,
+      "members": [
+        {
+          "epoch": null,
+          "native_arch": "amd64",
+          "package_class": "runtime",
+          "package_name": "pgedge-rag-server2",
+          "release": "1.bookworm",
+          "sha256": "eba1a2c463ad2ad8ed392e953387a80353103fff144bb72b377d22dc51fe0754",
+          "source_filename": "pgedge-rag-server2_2.0.0-1.bookworm_amd64.deb",
+          "version": "2.0.0"
+        }
+      ],
+      "name": "deb__bookworm__amd64"
+    }
+  ],
+  "component_policy": {
+    "allowed_runtime_package_names": [
+      "pgedge-rag-server2"
+    ],
+    "expected_binary_version": "2.0.0"
+  },
+  "job_records": [
+    {
+      "cell_id": "rpm:el-9:amd64",
+      "conclusion": "success",
+      "job_id": 1,
+      "run_attempt": 1,
+      "status": "completed"
+    },
+    {
+      "cell_id": "deb:bookworm:amd64",
+      "conclusion": "success",
+      "job_id": 2,
+      "run_attempt": 1,
+      "status": "completed"
+    }
+  ],
+  "planned_cells": [
+    {
+      "artifact_name": "rpm__el-9__amd64",
+      "cell_id": "rpm:el-9:amd64",
+      "family": "rpm",
+      "normalized_arch": "amd64",
+      "os": "el-9"
+    },
+    {
+      "artifact_name": "deb__bookworm__amd64",
+      "cell_id": "deb:bookworm:amd64",
+      "family": "deb",
+      "normalized_arch": "amd64",
+      "os": "bookworm"
+    }
+  ],
+  "provenance": {
+    "ref": "refs/tags/v2.0.0",
+    "repository": "pgEdge/pgedge-rag-server",
+    "run_attempt": "1",
+    "run_id": "33759277144"
+  },
+  "publication_results": {
+    "deb": "success",
+    "rpm": "success"
+  },
+  "release_intent": {
+    "channel": "staging",
+    "effective_tag": "v2.0.0",
+    "intended_buildnum": "1",
+    "intended_version": "2.0.0",
+    "logical_component": "rag",
+    "simulated": false
+  }
+}

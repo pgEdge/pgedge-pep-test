@@ -1,0 +1,66 @@
+{
+  "_note": "Golden pep-members/1 cases for utillities/pep_pkg_inspect.py. Each case carries the RAW tool output (rpm -qp --queryformat / dpkg-deb --field) and the expected member. Tests inject sha256 = 64x'a' and the given artifact_member_path, then compare member_from_rpm/member_from_deb output. Field/value shapes mirror real rpm 4.18 / dpkg-deb 1.22 output captured from the preserved RAG2 packages; see README.md.",
+  "sha256_sentinel": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "cases": {
+    "rpm_runtime": {
+      "kind": "rpm",
+      "tool_output": "pgedge-rag-server2\t0\t2.0.0\t1.el9\tx86_64\t(none)\tpgedge-rag-server2-2.0.0-1.el9.src.rpm\n",
+      "artifact_member_path": "pgedge-rag-server2-2.0.0-1.el9.x86_64.rpm",
+      "expected": {"package_name": "pgedge-rag-server2", "epoch": null, "version": "2.0.0", "release": "1.el9", "native_arch": "x86_64", "package_class": "runtime", "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "artifact_member_path": "pgedge-rag-server2-2.0.0-1.el9.x86_64.rpm"}
+    },
+    "rpm_source_x86": {
+      "kind": "rpm",
+      "tool_output": "pgedge-rag-server2\t0\t2.0.0\t1.el9\tx86_64\t1\t(none)\n",
+      "artifact_member_path": "pgedge-rag-server2-2.0.0-1.el9.src.rpm",
+      "expected": {"package_name": "pgedge-rag-server2", "epoch": null, "version": "2.0.0", "release": "1.el9", "native_arch": "x86_64", "package_class": "source", "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "artifact_member_path": "pgedge-rag-server2-2.0.0-1.el9.src.rpm"}
+    },
+    "rpm_source_arm": {
+      "kind": "rpm",
+      "tool_output": "pgedge-rag-server2\t0\t2.0.0\t1.el10\taarch64\t1\t(none)\n",
+      "artifact_member_path": "pgedge-rag-server2-2.0.0-1.el10.src.rpm",
+      "expected": {"package_name": "pgedge-rag-server2", "epoch": null, "version": "2.0.0", "release": "1.el10", "native_arch": "aarch64", "package_class": "source", "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "artifact_member_path": "pgedge-rag-server2-2.0.0-1.el10.src.rpm"}
+    },
+    "rpm_debuginfo": {
+      "kind": "rpm",
+      "tool_output": "pgedge-rag-server2-debuginfo\t0\t2.0.0\t1.el9\tx86_64\t(none)\tpgedge-rag-server2-2.0.0-1.el9.src.rpm\n",
+      "artifact_member_path": "pgedge-rag-server2-debuginfo-2.0.0-1.el9.x86_64.rpm",
+      "expected": {"package_name": "pgedge-rag-server2-debuginfo", "epoch": null, "version": "2.0.0", "release": "1.el9", "native_arch": "x86_64", "package_class": "debug", "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "artifact_member_path": "pgedge-rag-server2-debuginfo-2.0.0-1.el9.x86_64.rpm"}
+    },
+    "rpm_epoch": {
+      "kind": "rpm",
+      "tool_output": "toolpkg\t2\t1.0.0\t3.el9\taarch64\t(none)\ttoolpkg-1.0.0-3.el9.src.rpm\n",
+      "artifact_member_path": "toolpkg-1.0.0-3.el9.aarch64.rpm",
+      "expected": {"package_name": "toolpkg", "epoch": 2, "version": "1.0.0", "release": "3.el9", "native_arch": "aarch64", "package_class": "runtime", "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "artifact_member_path": "toolpkg-1.0.0-3.el9.aarch64.rpm"}
+    },
+    "deb_runtime": {
+      "kind": "deb",
+      "tool_output": "Package: pgedge-rag-server2\nVersion: 2.0.0-1.noble\nArchitecture: arm64\n",
+      "artifact_member_path": "pgedge-rag-server2_2.0.0-1.noble_arm64.deb",
+      "expected": {"package_name": "pgedge-rag-server2", "epoch": null, "version": "2.0.0", "release": "1.noble", "native_arch": "arm64", "package_class": "runtime", "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "artifact_member_path": "pgedge-rag-server2_2.0.0-1.noble_arm64.deb"}
+    },
+    "deb_dbgsym": {
+      "kind": "deb",
+      "tool_output": "Package: pgedge-rag-server2-dbgsym\nVersion: 2.0.0-1.noble\nArchitecture: arm64\n",
+      "artifact_member_path": "pgedge-rag-server2-dbgsym_2.0.0-1.noble_arm64.deb",
+      "expected": {"package_name": "pgedge-rag-server2-dbgsym", "epoch": null, "version": "2.0.0", "release": "1.noble", "native_arch": "arm64", "package_class": "debug", "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "artifact_member_path": "pgedge-rag-server2-dbgsym_2.0.0-1.noble_arm64.deb"}
+    },
+    "deb_epoch": {
+      "kind": "deb",
+      "tool_output": "Package: foo\nVersion: 2:1.4-5.bookworm\nArchitecture: amd64\n",
+      "artifact_member_path": "foo_2%3a1.4-5.bookworm_amd64.deb",
+      "expected": {"package_name": "foo", "epoch": 2, "version": "1.4", "release": "5.bookworm", "native_arch": "amd64", "package_class": "runtime", "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "artifact_member_path": "foo_2%3a1.4-5.bookworm_amd64.deb"}
+    },
+    "deb_native_no_revision": {
+      "kind": "deb",
+      "tool_output": "Package: bar\nVersion: 1.2.3\nArchitecture: all\n",
+      "artifact_member_path": "bar_1.2.3_all.deb",
+      "expected": {"package_name": "bar", "epoch": null, "version": "1.2.3", "release": "", "native_arch": "all", "package_class": "runtime", "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "artifact_member_path": "bar_1.2.3_all.deb"}
+    },
+    "deb_hyphenated_upstream": {
+      "kind": "deb",
+      "tool_output": "Package: baz\nVersion: 2.0.0-beta-1.trixie\nArchitecture: amd64\n",
+      "artifact_member_path": "baz_2.0.0-beta-1.trixie_amd64.deb",
+      "expected": {"package_name": "baz", "epoch": null, "version": "2.0.0-beta", "release": "1.trixie", "native_arch": "amd64", "package_class": "runtime", "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "artifact_member_path": "baz_2.0.0-beta-1.trixie_amd64.deb"}
+    }
+  }
+}

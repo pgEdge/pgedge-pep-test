@@ -191,6 +191,70 @@ class SelfTestArtifactUniqueness(unittest.TestCase):
             self.assertRegex(n, _SAFE_NAME_RE, f"unsafe artifact name: {n!r}")
 
     @_needs_bash
+    def test_preflight_emits_bare_validated_invocation_id(self):
+        # The preflight now emits the BARE validated invocation_id (no '-' name
+        # fragment) so the summarizer can stamp it top-level on the atomic result.
+        for job in self.jobs:
+            _, parsed = self._run_preflight(_job_env(job))
+            self.assertIn("invocation_id", parsed,
+                          f"preflight emitted no invocation_id output for {job}")
+            self.assertEqual(parsed["invocation_id"], job["invocation_id"],
+                             f"bare invocation_id output mismatch for {job}")
+            self.assertFalse(parsed["invocation_id"].startswith("-"),
+                             "bare id output must not carry the name-fragment prefix")
+
+    @_needs_bash
+    def test_rejected_invocation_id_yields_empty_bare_output(self):
+        # An unsafe id is rejected (rc=3) AND the bare output is "" -> the summarizer
+        # stamps "" (never the raw/rejected input).
+        env = _job_env({"component": "rag", "package_name": "pgedge-rag-server",
+                        "channel": "daily", "container_alias": "rocky9-amd64",
+                        "pg_major": "17", "family": "rpm", "arch": "amd64",
+                        "execution_mode": "preview", "invocation_id": "bad/id"})
+        rc, parsed = self._run_preflight(env)
+        self.assertEqual(rc, 3)
+        self.assertEqual(parsed.get("invocation_id"), "",
+                         "a rejected invocation_id must produce an empty bare output")
+
+    @_needs_bash
+    def test_absent_invocation_id_yields_empty_bare_output(self):
+        env = _job_env({"component": "rag", "package_name": "pgedge-rag-server",
+                        "channel": "daily", "container_alias": "rocky9-amd64",
+                        "pg_major": "17", "family": "rpm", "arch": "amd64",
+                        "execution_mode": "preview"})   # no invocation_id -> default ""
+        rc, parsed = self._run_preflight(env)
+        self.assertEqual(rc, 0)
+        self.assertEqual(parsed.get("invocation_id"), "")
+
+    @_needs_bash
+    def test_preflight_rejects_multiline_and_unsafe_ids(self):
+        # The preflight must reject embedded/trailing newline, carriage return,
+        # whitespace, unsafe punctuation, and >64 chars (grep -E matches per line, so
+        # a multi-line value must be caught BEFORE the charset check), always emitting
+        # a safe name and an empty bare invocation_id output.
+        base = {"component": "rag", "package_name": "pgedge-rag-server", "channel": "daily",
+                "container_alias": "rocky9-amd64", "pg_major": "17", "family": "rpm",
+                "arch": "amd64", "execution_mode": "preview"}
+        for bad in ["trailing\n", "embed\ned", "cr\r", "crlf\r\n", "with space", "bad/id", "x" * 65]:
+            with self.subTest(bad=bad):
+                rc, parsed = self._run_preflight(_job_env({**base, "invocation_id": bad}))
+                self.assertEqual(rc, 3, f"expected rejection for {bad!r}")
+                self.assertEqual(parsed.get("rc"), "3")
+                self.assertEqual(parsed.get("invocation_id"), "",
+                                 f"rejected id must yield an empty bare output for {bad!r}")
+                name = parsed.get("artifact_name", "")
+                self.assertRegex(name, _SAFE_NAME_RE, f"unsafe name for {bad!r}")
+                self.assertNotIn("\n", name)
+                self.assertNotIn("\r", name)
+
+    def test_summarize_passes_validated_invocation_id_output(self):
+        # Structural: the Summarize step routes the preflight-validated bare id (NOT
+        # the raw input) into the summarizer's --invocation-id.
+        t = self.integration_text
+        self.assertIn("IN_INVOCATION_ID_VALID: ${{ steps.preflight.outputs.invocation_id }}", t)
+        self.assertIn('--invocation-id "$IN_INVOCATION_ID_VALID"', t)
+
+    @_needs_bash
     def test_unsafe_invocation_id_classified_without_unsafe_name(self):
         # An unsafe invocation_id (path-breaking '/') must be a validation
         # rejection (rc=3) AND must NOT reach the artifact name in unsafe form.

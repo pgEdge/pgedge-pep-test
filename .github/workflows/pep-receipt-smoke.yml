@@ -1,0 +1,187 @@
+name: PEP Receipt Smoke
+# PEP-only smoke for the pep-package-receipt composite action. Builds one tiny
+# real RPM and one tiny real DEB in CI (no committed binaries), uploads each as a
+# package artifact, invokes the LOCAL composite action, downloads the generated
+# receipt BY ITS IMMUTABLE ID and asserts the full pep-receipt/2 contract end-to-end.
+#
+# TRIGGERS: a path-scoped `push` (any branch, no branch filter) plus
+# workflow_dispatch. The push trigger makes an internal branch push produce ONE
+# smoke run (no pull_request duplicate) and needs no PR to exist, so the action can
+# be validated pre-PR. It names no specific/temporary branch, so it is durable in
+# production: it runs only when the action, its builder, the inspector or this
+# workflow actually change.
+on:
+  workflow_dispatch: {}
+  push:
+    paths:
+      - '.github/actions/pep-package-receipt/**'
+      - '.github/workflows/pep-receipt-smoke.yml'
+      - 'utillities/pep_pkg_inspect.py'
+
+permissions:
+  contents: read
+
+jobs:
+  smoke:
+    # fail-fast:false so an rpm-only or deb-only regression is both reported.
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - family: rpm
+          - family: deb
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout PEP (provides the local action + inspector)
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803  # v6.1.0
+
+      - name: Build one tiny ${{ matrix.family }} package (no committed binaries)
+        id: build
+        env:
+          FAMILY: ${{ matrix.family }}
+        run: |
+          set -euo pipefail
+          mkdir -p pkgout
+          if [ "$FAMILY" = "deb" ]; then
+            mkdir -p root/DEBIAN
+            cat > root/DEBIAN/control <<'EOF'
+          Package: pep-smoke-deb
+          Version: 1.0.0-1
+          Architecture: amd64
+          Maintainer: PEP Smoke <pep@example.invalid>
+          Description: tiny smoke package for the PEP receipt action
+          EOF
+            pkg="pep-smoke-deb_1.0.0-1_amd64.deb"
+            dpkg-deb --build root "pkgout/$pkg"
+            {
+              echo "pkg_file=$pkg"
+              echo "exp_name=pep-smoke-deb"
+              echo "exp_version=1.0.0"
+              echo "exp_release=1"
+              echo "exp_arch=amd64"
+              echo "exp_class=runtime"
+            } >> "$GITHUB_OUTPUT"
+          else
+            # rpmbuild ships with the rpm package on ubuntu; install only if missing.
+            if ! command -v rpmbuild >/dev/null 2>&1; then
+              sudo apt-get update -qq
+              sudo apt-get install -y -qq rpm
+            fi
+            cat > tiny.spec <<'EOF'
+          Name: pep-smoke-rpm
+          Version: 1.0.0
+          Release: 1
+          Summary: tiny smoke rpm for the PEP receipt action
+          License: MIT
+          BuildArch: noarch
+          %description
+          tiny smoke package
+          %files
+          %changelog
+          EOF
+            rpmbuild -bb --define "_topdir $PWD/rpmbuild" tiny.spec
+            pkg="pep-smoke-rpm-1.0.0-1.noarch.rpm"
+            cp "rpmbuild/RPMS/noarch/$pkg" "pkgout/$pkg"
+            {
+              echo "pkg_file=$pkg"
+              echo "exp_name=pep-smoke-rpm"
+              echo "exp_version=1.0.0"
+              echo "exp_release=1"
+              echo "exp_arch=noarch"
+              echo "exp_class=runtime"
+            } >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Upload package artifact FIRST (producer-natural, unique name)
+        id: up
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
+        with:
+          name: smoke-pkg-${{ matrix.family }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: pkgout/
+          if-no-files-found: error
+
+      - name: Generate pep-receipt/2 (LOCAL composite action under test)
+        id: receipt
+        uses: ./.github/actions/pep-package-receipt
+        with:
+          cell_id: smoke-${{ matrix.family }}-${{ github.run_id }}-${{ github.run_attempt }}
+          family: ${{ matrix.family }}
+          package_dir: pkgout
+          package_artifact_id: ${{ steps.up.outputs.artifact-id }}
+          package_artifact_name: smoke-pkg-${{ matrix.family }}-${{ github.run_id }}-${{ github.run_attempt }}
+          package_artifact_digest: ${{ steps.up.outputs.artifact-digest }}
+
+      - name: Download the generated receipt BY IMMUTABLE ID (not by name)
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131  # v7.0.0
+        with:
+          # A single artifact-id extracts FLAT into `path` (download-artifact v7.0.0
+          # takes the artifacts.length===1 branch), so the receipt lands at dl/receipt.json.
+          artifact-ids: ${{ steps.receipt.outputs.receipt_artifact_id }}
+          path: dl
+
+      - name: Assert the receipt end-to-end
+        env:
+          CELL_ID: smoke-${{ matrix.family }}-${{ github.run_id }}-${{ github.run_attempt }}
+          PKG_ART_ID: ${{ steps.up.outputs.artifact-id }}
+          PKG_ART_NAME: smoke-pkg-${{ matrix.family }}-${{ github.run_id }}-${{ github.run_attempt }}
+          PKG_ART_DIGEST: ${{ steps.up.outputs.artifact-digest }}
+          PKG_FILE: ${{ steps.build.outputs.pkg_file }}
+          EXP_NAME: ${{ steps.build.outputs.exp_name }}
+          EXP_VERSION: ${{ steps.build.outputs.exp_version }}
+          EXP_RELEASE: ${{ steps.build.outputs.exp_release }}
+          EXP_ARCH: ${{ steps.build.outputs.exp_arch }}
+          EXP_CLASS: ${{ steps.build.outputs.exp_class }}
+          RCP_ID: ${{ steps.receipt.outputs.receipt_artifact_id }}
+          RCP_NAME: ${{ steps.receipt.outputs.receipt_artifact_name }}
+          RCP_DIGEST: ${{ steps.receipt.outputs.receipt_artifact_digest }}
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import json, os, re, hashlib
+          def norm(d):
+              d = (d or "").strip()
+              if d.lower().startswith("sha256:"):
+                  d = d[len("sha256:"):].strip()
+              return d.lower()
+
+          # (a) downloaded artifact layout: EXACTLY one file at root, receipt.json, nothing nested
+          roots = sorted(os.listdir("dl"))
+          assert roots == ["receipt.json"], "download root must be exactly [receipt.json], got %r" % roots
+          assert os.path.isfile("dl/receipt.json"), "receipt.json must be a regular file"
+          allfiles = [os.path.join(dp, f) for dp, _, fs in os.walk("dl") for f in fs]
+          assert allfiles == [os.path.join("dl", "receipt.json")], "no extra/nested entries allowed: %r" % allfiles
+
+          rec = json.load(open("dl/receipt.json"))
+          # (b) schema + exact artifact binding
+          assert rec["schema"] == "pep-receipt/2", rec["schema"]
+          assert rec["cell_id"] == os.environ["CELL_ID"], rec["cell_id"]
+          assert str(rec["artifact_id"]) == os.environ["PKG_ART_ID"], rec["artifact_id"]
+          assert rec["artifact_name"] == os.environ["PKG_ART_NAME"], rec["artifact_name"]
+
+          # (c) archive digest: canonical bare hex, equals the package artifact's digest
+          assert re.fullmatch(r"[0-9a-f]{64}", rec["archive_digest"]), "archive_digest must be canonical bare hex"
+          assert norm(rec["archive_digest"]) == norm(os.environ["PKG_ART_DIGEST"]), rec["archive_digest"]
+
+          # (d) exactly one member in a one-package cell + expected metadata + exact member path
+          assert len(rec["members"]) == 1, "one-package cell must yield exactly one member: %r" % rec["members"]
+          m = rec["members"][0]
+          assert m["package_name"] == os.environ["EXP_NAME"], m["package_name"]
+          assert m["version"] == os.environ["EXP_VERSION"], m["version"]
+          assert m["release"] == os.environ["EXP_RELEASE"], m["release"]
+          assert m["native_arch"] == os.environ["EXP_ARCH"], m["native_arch"]
+          assert m["package_class"] == os.environ["EXP_CLASS"], m["package_class"]
+          assert m["artifact_member_path"] == os.environ["PKG_FILE"], m["artifact_member_path"]
+
+          # (e) independent package-byte SHA-256 from the LOCAL package == members[0].sha256
+          want = hashlib.sha256(open(os.path.join("pkgout", os.environ["PKG_FILE"]), "rb").read()).hexdigest()
+          assert m["sha256"] == want, "member sha256 %r != independent %r" % (m["sha256"], want)
+
+          # (f) archive digest and package-byte digest are DISTINCT concepts
+          assert norm(m["sha256"]) != norm(os.environ["PKG_ART_DIGEST"]), "member sha must differ from archive digest"
+
+          # (g) verify the receipt artifact NAME separately (download was by id), + outputs
+          assert os.environ["RCP_NAME"] == "pep-receipt-" + rec["cell_id"], os.environ["RCP_NAME"]
+          assert re.fullmatch(r"[0-9]+", os.environ["RCP_ID"]) and int(os.environ["RCP_ID"]) > 0, os.environ["RCP_ID"]
+          assert os.environ["RCP_DIGEST"].strip() != "", "receipt digest output must be set"
+          print("SMOKE OK:", os.environ["CELL_ID"], "members=%d" % len(rec["members"]))
+          PY

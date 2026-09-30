@@ -19,6 +19,7 @@ Stdlib only -> unit-testable via `pytest utillities/test_pep_request.py`.
 """
 from __future__ import annotations
 
+import json
 import re
 import sys as _sys
 import importlib.util as _ilu
@@ -40,13 +41,65 @@ VALID_FAMILIES = ("rpm", "deb")
 VALID_ARCHES = ("amd64", "arm64")
 VALID_MODES = ("observe", "gate")
 VALID_SCENARIOS = ("certification", "upgrade")
-# Known component -> accepted physical package name(s). The POC only wires 'rag';
-# extend this table (not the call sites) as components are added. Validating the
-# pair rejects an unknown component or a package_name that is not one of that
-# component's packages. For 'rag' the CANONICAL active package is
-# 'pgedge-rag-server2' (RAG 2.x); the predecessor 'pgedge-rag-server' is still
-# accepted (not formally EOL). The first entry is the canonical/active package.
-COMPONENT_PACKAGES = {"rag": ("pgedge-rag-server2", "pgedge-rag-server")}
+# Known component -> accepted physical package name(s). This mapping is NOT hardcoded here:
+# it is DERIVED from the single PEP-owned component/package policy file (pep_capture_policy.json,
+# schema pep-capture-policy/1) -- the SAME source release capture resolves per component -- so
+# capture, invocation planning and normalize_request share ONE authority instead of separate
+# registries. Add or retire a component/package mapping in that JSON, never in a code table.
+# Validating the (component, package_name) pair still rejects an unknown component or a package
+# not mapped to it. The first package listed for a component is the canonical/active one (e.g.
+# rag -> pgedge-rag-server2 (RAG 2.x), then the still-accepted predecessor pgedge-rag-server).
+_COMPONENT_POLICY_SCHEMA = "pep-capture-policy/1"
+_DEFAULT_COMPONENT_POLICY = _Path(__file__).resolve().parent / "pep_capture_policy.json"
+
+
+class ComponentPolicyError(ValueError):
+    """Raised when the PEP-owned component/package policy file is missing or malformed."""
+
+
+def load_component_packages(policy_path=None):
+    """Return ``{component: (package_name, ...)}`` from the single PEP-owned component/package
+    policy file. Package order is preserved (canonical/active first). A missing/malformed file
+    or entry raises ``ComponentPolicyError`` with a clear reason -- fail closed, never a partial
+    or silently-empty registry."""
+    path = _Path(policy_path) if policy_path is not None else _DEFAULT_COMPONENT_POLICY
+    try:
+        raw = path.read_text(encoding="utf-8")
+    except OSError:
+        raise ComponentPolicyError("component/package policy file %s is unreadable" % path)
+    try:
+        doc = json.loads(raw)
+    except ValueError:
+        raise ComponentPolicyError("component/package policy file %s is malformed JSON" % path)
+    if not isinstance(doc, dict) or doc.get("schema") != _COMPONENT_POLICY_SCHEMA:
+        raise ComponentPolicyError(
+            "component/package policy schema must be %r" % (_COMPONENT_POLICY_SCHEMA,))
+    comps = doc.get("components")
+    if not isinstance(comps, dict) or not comps:
+        raise ComponentPolicyError("component/package policy has no non-empty 'components' object")
+    out = {}
+    for comp, entry in comps.items():
+        if not (isinstance(comp, str) and comp.strip() != ""):
+            raise ComponentPolicyError("component/package policy has a blank component name")
+        if not isinstance(entry, dict):
+            raise ComponentPolicyError(
+                "component/package policy entry for %r is not an object" % (comp,))
+        names = entry.get("allowed_runtime_package_names")
+        if not (isinstance(names, list) and names
+                and all(isinstance(x, str) and x.strip() != "" for x in names)):
+            raise ComponentPolicyError(
+                "component/package policy entry for %r needs a nonempty "
+                "allowed_runtime_package_names list of nonblank strings" % (comp,))
+        if len(set(names)) != len(names):
+            raise ComponentPolicyError(
+                "component/package policy entry for %r has duplicate package names" % (comp,))
+        out[comp] = tuple(names)
+    return out
+
+
+# Built once at import from the shared policy; normalize_request validates against it and
+# pep_invocation_plan reuses THIS exact object (identity), so there is no second registry.
+COMPONENT_PACKAGES = load_component_packages()
 _BUILDNUM_RE = re.compile(r"^[A-Za-z0-9._]+$")   # e.g. 1, test1_1, beta3_1
 _PG_MAJOR_RE = re.compile(r"^\d+$")
 

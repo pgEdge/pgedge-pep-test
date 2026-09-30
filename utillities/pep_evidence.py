@@ -81,24 +81,31 @@ def _target_of(request):
     }
 
 
-def build_install_evidence(request, run_token, install_kind, install_token):
+def build_install_evidence(request, run_token, install_kind, install_token, installed_sha256=None):
     """Scope marker written after a SUCCESSFUL integration install. Bound to this
     run (run_token) and this target so a stale or unrelated file cannot satisfy the
     install-before-identity precondition. This is NOT the identity file — it carries
-    the run/target metadata that identity-evidence.json is forbidden to hold."""
+    the run/target metadata that identity-evidence.json is forbidden to hold.
+
+    installed_sha256 is the SHA-256 of the package file a verified pinned install
+    used (package_management.install_pinned), or None when no file was verified (the
+    latest/L1 path). The summarizer carries it into the atomic result, where the
+    certification reducer compares it with the planned package digest."""
     return {
         "run_token": run_token,
         "installed": True,
         "install_kind": install_kind,       # "pinned" | "latest"
         "install_token": install_token,     # the exact pinned token, or None for latest
+        "installed_sha256": installed_sha256,
         "target": _target_of(request),
         "expected_version": request["expected_version"],
     }
 
 
-def write_install_evidence(request, run_token, install_kind, install_token, out_path):
+def write_install_evidence(request, run_token, install_kind, install_token, out_path,
+                           installed_sha256=None):
     """Build + persist the install scope marker; returns the written object."""
-    obj = build_install_evidence(request, run_token, install_kind, install_token)
+    obj = build_install_evidence(request, run_token, install_kind, install_token, installed_sha256)
     p = _Path(out_path)
     p.parent.mkdir(parents=True, exist_ok=True)
     p.write_text(_json.dumps(obj))

@@ -2,7 +2,8 @@
 
 Dimensions (design spec section 4): execution_status (completed | incomplete |
 infra_failure | preview), test_verdict (pass | fail | not_run), enforcement_mode
-(observe | gate), achieved identity_evidence, and provenance. Report-only policy:
+(observe | gate), achieved identity_evidence, and provenance, plus the verified
+install's installed_package_sha256 (null when no file was verified). Report-only policy:
 in 'observe' mode every HANDLED outcome exits 0; in 'gate' mode a product failure
 or a non-completed run exits non-zero.
 
@@ -12,13 +13,23 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import sys
 import xml.etree.ElementTree as ET
 from pathlib import Path
 
 _NOT_ATTEMPTED = {"l2a": "not_attempted", "l2b": "not_attempted", "l1": "not_attempted"}
+# The reusable workflow's preflight validates a caller invocation_id against this
+# exact charset/length and emits the validated value (or "" when absent/rejected).
+# The summarizer stamps that already-validated value onto every atomic result; the
+# same pattern is re-applied here purely defensively so a value fed straight to the
+# CLI can never leak an unsafe id into a result (a rejected id degrades to "").
+# Matched with fullmatch() (never match()+`$`) so a trailing/embedded newline is
+# rejected: `$` matches before a final "\n", but fullmatch requires the whole string.
+_INVOCATION_ID_RE = re.compile(r"[A-Za-z0-9._-]{1,64}")
 _EVIDENCE_RUNGS = ("l2a", "l2b", "l1")
 _EVIDENCE_VALUES = {"proven", "not_proven", "not_attempted"}
+_SHA256_RE = re.compile(r"[0-9a-f]{64}")
 
 
 class ManifestSchemaError(ValueError):
@@ -72,6 +83,26 @@ def _validate_identity_evidence(data):
                 f"identity-evidence rung {rung!r} must be one of "
                 f"{sorted(_EVIDENCE_VALUES)}, got {val!r}")
     return data
+
+
+def _installed_package_sha256(install_evidence):
+    """The package digest a verified pinned install recorded in install-evidence.json,
+    or None when there is no install evidence or it verified no file (latest/L1).
+
+    The value is carried verbatim, never trusted here: the certification reducer
+    compares it with the planned package digest and accepts it only beside proven
+    identity (the identity test proves identity only after checking that this same
+    file is bound to the current run and target). A value that is present but is not
+    a lowercase 64-hex digest is a plumbing fault -> SideFileError (infra_failure)."""
+    if install_evidence is None:
+        return None
+    value = install_evidence.get("installed_sha256")
+    if value is None:
+        return None
+    if not (isinstance(value, str) and _SHA256_RE.fullmatch(value)):
+        raise SideFileError("install-evidence installed_sha256 must be null or a lowercase "
+                            "64-hex digest, got %r" % (value,))
+    return value
 
 
 def _resolve_report_paths(xml_dir=None, reports=None, report_manifest=None):
@@ -153,10 +184,27 @@ def _aggregate_junit(paths):
     return totals, parsed_any, malformed
 
 
+def _safe_invocation_id(invocation_id):
+    """Return the validated invocation id verbatim, or "" when absent/rejected.
+
+    The preflight is the authoritative validator and passes its already-validated
+    output here; this re-check is a defensive floor so a result NEVER carries an
+    unsafe id (an out-of-charset value fed directly to the CLI degrades to "",
+    mirroring the preflight's drop rather than restamping a raw input)."""
+    if isinstance(invocation_id, str) and _INVOCATION_ID_RE.fullmatch(invocation_id):
+        return invocation_id
+    return ""
+
+
 def build_summary(xml_dir=None, *, mode="observe", preview=False, identity_evidence=None,
                   provenance=None, validation_error=None, infra_error=None,
-                  reports=None, report_manifest=None):
+                  reports=None, report_manifest=None, invocation_id="",
+                  installed_package_sha256=None):
     """Return (summary_dict, exit_code). See module docstring for the policy.
+
+    installed_package_sha256 (the verified install's package digest, or None) is
+    stamped on every branch. It is evidence for the certification reducer only and
+    never changes this summary's status, verdict or exit code.
 
     Outcome classification:
       * preview=True      -> preview / not_run (no install; not a pass or a failure)
@@ -181,15 +229,21 @@ def build_summary(xml_dir=None, *, mode="observe", preview=False, identity_evide
         raise ValueError(f"mode must be 'observe' or 'gate', got {mode!r}")
     identity = identity_evidence or dict(_NOT_ATTEMPTED)
     zero = {"tests": 0, "failures": 0, "errors": 0, "skipped": 0}
+    # Self-identifying result: the (already-validated) invocation id is stamped
+    # TOP-LEVEL on every branch so the cert-result reducer joins each atomic
+    # summary to its planned invocation by id, never by parsing the artifact name.
+    safe_invocation_id = _safe_invocation_id(invocation_id)
 
     def _finish(execution_status, verdict, counts, reason=None, malformed=0):
         summary = {
+            "invocation_id": safe_invocation_id,
             "execution_status": execution_status,
             "test_verdict": verdict,
             "enforcement_mode": mode,
             "identity_evidence": identity,
             "counts": counts,
             "provenance": provenance or {},
+            "installed_package_sha256": installed_package_sha256,
         }
         if reason is not None:
             summary["reason"] = reason
@@ -262,6 +316,12 @@ def main(argv=None):
     ap.add_argument("--infra-error", default=None)
     ap.add_argument("--identity-json", default=None, help="path to identity-evidence JSON")
     ap.add_argument("--provenance-json", default=None, help="path to provenance JSON")
+    ap.add_argument("--install-json", default=None,
+                    help="path to install-evidence JSON (carries the verified package digest)")
+    # The preflight-validated invocation id (or "" when absent/rejected). Pass ONLY
+    # the preflight output here, never the raw workflow input; it is stamped
+    # top-level on the result so aggregation is name-independent.
+    ap.add_argument("--invocation-id", default="", help="preflight-validated invocation id")
     args = ap.parse_args(argv)
 
     # Guard the optional side files: a missing/unreadable/malformed/wrong-shape
@@ -272,14 +332,19 @@ def main(argv=None):
         if identity is not None:
             _validate_identity_evidence(identity)
         provenance = _load_optional_json_object(args.provenance_json, "provenance")
+        installed_sha256 = _installed_package_sha256(
+            _load_optional_json_object(args.install_json, "install-evidence"))
         summary, exit_code = build_summary(
             args.xml_dir, mode=args.mode, preview=args.preview,
             identity_evidence=identity, provenance=provenance,
             validation_error=args.validation_error, infra_error=args.infra_error,
             reports=args.reports, report_manifest=args.reports_manifest,
+            invocation_id=args.invocation_id, installed_package_sha256=installed_sha256,
         )
     except SideFileError as e:
-        summary, exit_code = build_summary(mode=args.mode, infra_error=str(e))
+        # Even a side-file plumbing fault yields a self-identifying result.
+        summary, exit_code = build_summary(mode=args.mode, infra_error=str(e),
+                                           invocation_id=args.invocation_id)
 
     Path(args.out).write_text(json.dumps(summary, indent=2))
     print(f"[pep-summary] execution={summary['execution_status']} "

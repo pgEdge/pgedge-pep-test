@@ -1,0 +1,210 @@
+# =============================================================================
+# PEP release certification -- adapter for release pipelines (reusable workflow)
+# =============================================================================
+# A release pipeline calls this workflow after it has built and published its
+# packages, passing only facts it owns: the detector matrices, its release
+# identity, whether the run was simulated, and each publication job's own result.
+# The adapter:
+#   1. validates those facts and turns them into pep-certify.yml's existing inputs
+#      (release_intent, publication_results, execution_mode, enforcement) with
+#      utillities/pep_release_inputs.py; preview is selected only by simulated=true;
+#   2. calls pep-certify.yml at this workflow's own commit (relative path), so the
+#      caller's single `uses: ...pep-release-certify.yml@<SHA>` pin selects the
+#      adapter, the certifier and everything the certifier runs;
+#   3. always writes one summary of the actual publication results and the
+#      certification result, including when the inputs are rejected or certify fails.
+# It adds no certification logic: pep-certify.yml's inputs, outputs and decisions
+# are unchanged, and direct callers of pep-certify.yml are unaffected.
+#
+# Caller contract (docs/CI.md, "Release certification adapter"):
+#   * call it after the publication jobs (needs them, with always()), granting
+#     contents: read and actions: read;
+#   * each package job keeps its [pep-cell:<cell_id>] name marker and its
+#     pep-package-receipt step, so evidence is recorded where the package is built;
+#   * <family>_publication is that family's publication job result
+#     (success|failure|cancelled|skipped); it may be omitted only when the detector
+#     matrix has no cells for that family;
+#   * only the optional Docker Hub secrets are accepted; they are forwarded to
+#     pep-certify only for full (non-simulated) certification.
+# A failed certification fails the caller's run, but never changes publication,
+# which has already happened.
+# =============================================================================
+name: PEP release certification (adapter)
+
+on:
+  workflow_call:
+    inputs:
+      rpm_matrix:      {required: true,  type: string}   # detector rpm_matrix JSON, passed to pep-certify verbatim
+      deb_matrix:      {required: true,  type: string}   # detector deb_matrix JSON, passed to pep-certify verbatim
+      component:       {required: true,  type: string}   # logical component, e.g. rag
+      version:         {required: true,  type: string}   # intended version, e.g. 2.0.0
+      buildnum:        {required: true,  type: string}   # intended build number, e.g. 1
+      effective_tag:   {required: true,  type: string}   # e.g. v2.0.0
+      channel:         {required: true,  type: string}   # repository channel, e.g. staging
+      simulated:       {required: true,  type: string}   # "true" (nothing published) | "false"
+      rpm_publication: {required: false, type: string, default: ""}   # RPM publication job result; omit only if no RPM cells
+      deb_publication: {required: false, type: string, default: ""}   # DEB publication job result; omit only if no DEB cells
+      enforcement:     {required: false, type: string, default: observe}   # observe|gate, passed to pep-certify
+    secrets:
+      DOCKERHUB_USERNAME: {required: false}   # optional; forwarded only for full certification
+      DOCKERHUB_TOKEN:    {required: false}
+    outputs:
+      certification_conclusion: {description: "success|failure (policy decision)", value: "${{ jobs.certify.outputs.certification_conclusion }}"}
+      certification_state:      {description: "pass|fail|incomplete|preview",        value: "${{ jobs.certify.outputs.certification_state }}"}
+      execution_status:         {description: "cert-result execution axis",          value: "${{ jobs.certify.outputs.execution_status }}"}
+      test_verdict:             {description: "cert-result product verdict",          value: "${{ jobs.certify.outputs.test_verdict }}"}
+      coverage_status:          {description: "cert-result coverage axis",           value: "${{ jobs.certify.outputs.coverage_status }}"}
+      reason_code:              {description: "policy reason code",                  value: "${{ jobs.certify.outputs.reason_code }}"}
+      evidence_artifact_id:     {description: "combined evidence artifact id",       value: "${{ jobs.certify.outputs.evidence_artifact_id }}"}
+      evidence_artifact_name:   {description: "combined evidence artifact name",     value: "${{ jobs.certify.outputs.evidence_artifact_name }}"}
+
+# Least privilege at the top; each job grants only what it needs (a reusable
+# workflow can never exceed the caller's granted token).
+permissions: {}
+
+jobs:
+  # --- 1. validate the release facts and build pep-certify's inputs -----------
+  normalize:
+    name: Release inputs
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read      # checkout of this workflow's own commit
+    outputs:
+      release_intent:      ${{ steps.compose.outputs.release_intent }}
+      publication_results: ${{ steps.compose.outputs.publication_results }}
+      execution_mode:      ${{ steps.compose.outputs.execution_mode }}
+      enforcement:         ${{ steps.compose.outputs.enforcement }}
+    steps:
+      - name: Resolve this workflow's own commit SHA
+        id: id
+        env:
+          WF_SHA: ${{ job.workflow_sha }}
+        run: |
+          set -euo pipefail
+          if ! printf '%s' "${WF_SHA:-}" | grep -Eq '^[0-9a-f]{40}$'; then
+            echo "::error::job.workflow_sha is not a full 40-hex commit SHA (${WF_SHA:-<empty>}); failing closed"
+            exit 1
+          fi
+          echo "pep_ref=${WF_SHA}" >> "$GITHUB_OUTPUT"
+      - name: Checkout PEP implementation (self, pinned)
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803  # v6.1.0
+        with:
+          repository: pgEdge/pgedge-pep-test
+          ref: ${{ steps.id.outputs.pep_ref }}
+          persist-credentials: false
+      - name: Set up Python (pinned)
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1  # v6.3.0
+        with: {python-version: "3.11"}
+      - name: Validate the release facts and build pep-certify's inputs
+        id: compose
+        env:
+          RPM_MATRIX:      ${{ inputs.rpm_matrix }}
+          DEB_MATRIX:      ${{ inputs.deb_matrix }}
+          COMPONENT:       ${{ inputs.component }}
+          VERSION:         ${{ inputs.version }}
+          BUILDNUM:        ${{ inputs.buildnum }}
+          EFFECTIVE_TAG:   ${{ inputs.effective_tag }}
+          CHANNEL:         ${{ inputs.channel }}
+          SIMULATED:       ${{ inputs.simulated }}
+          RPM_PUBLICATION: ${{ inputs.rpm_publication }}
+          DEB_PUBLICATION: ${{ inputs.deb_publication }}
+          ENFORCEMENT:     ${{ inputs.enforcement }}
+        run: python3 utillities/pep_release_inputs.py compose
+
+  # --- 2. certify with the existing certifier, at this workflow's own commit ---
+  certify:
+    name: certify
+    needs: normalize
+    permissions:
+      contents: read      # nested checkouts of the pinned PEP implementation
+      actions: read       # capture lists THIS run's jobs and downloads its artifacts by id
+    # Relative path: pep-certify.yml from this workflow's commit, the same pin the caller chose.
+    uses: ./.github/workflows/pep-certify.yml
+    with:
+      rpm_matrix:          ${{ inputs.rpm_matrix }}
+      deb_matrix:          ${{ inputs.deb_matrix }}
+      release_intent:      ${{ needs.normalize.outputs.release_intent }}
+      publication_results: ${{ needs.normalize.outputs.publication_results }}
+      enforcement:         ${{ needs.normalize.outputs.enforcement }}
+      execution_mode:      ${{ needs.normalize.outputs.execution_mode }}
+    # Explicit, and only for full certification: a preview never receives the credentials.
+    secrets:
+      DOCKERHUB_USERNAME: ${{ needs.normalize.outputs.execution_mode == 'full' && secrets.DOCKERHUB_USERNAME || '' }}
+      DOCKERHUB_TOKEN:    ${{ needs.normalize.outputs.execution_mode == 'full' && secrets.DOCKERHUB_TOKEN || '' }}
+
+  # --- 3. one summary, whatever happened above --------------------------------
+  summary:
+    name: Release certification summary
+    needs: [normalize, certify]
+    if: ${{ always() }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    continue-on-error: true   # reporting never changes the certification outcome
+    permissions:
+      contents: read      # checkout of this workflow's own commit
+    steps:
+      - name: Resolve this workflow's own commit SHA
+        id: id
+        env:
+          WF_SHA: ${{ job.workflow_sha }}
+        run: |
+          set -euo pipefail
+          if ! printf '%s' "${WF_SHA:-}" | grep -Eq '^[0-9a-f]{40}$'; then
+            echo "::error::job.workflow_sha is not a full 40-hex commit SHA (${WF_SHA:-<empty>}); failing closed"
+            exit 1
+          fi
+          echo "pep_ref=${WF_SHA}" >> "$GITHUB_OUTPUT"
+      - name: Checkout PEP implementation (self, pinned)
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803  # v6.1.0
+        with:
+          repository: pgEdge/pgedge-pep-test
+          ref: ${{ steps.id.outputs.pep_ref }}
+          persist-credentials: false
+      - name: Set up Python (pinned)
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1  # v6.3.0
+        with: {python-version: "3.11"}
+      - name: Write the release certification summary
+        env:
+          RPM_MATRIX:       ${{ inputs.rpm_matrix }}
+          DEB_MATRIX:       ${{ inputs.deb_matrix }}
+          COMPONENT:        ${{ inputs.component }}
+          VERSION:          ${{ inputs.version }}
+          BUILDNUM:         ${{ inputs.buildnum }}
+          EFFECTIVE_TAG:    ${{ inputs.effective_tag }}
+          CHANNEL:          ${{ inputs.channel }}
+          SIMULATED:        ${{ inputs.simulated }}
+          RPM_PUBLICATION:  ${{ inputs.rpm_publication }}
+          DEB_PUBLICATION:  ${{ inputs.deb_publication }}
+          ENFORCEMENT:      ${{ inputs.enforcement }}
+          NORMALIZE_RESULT: ${{ needs.normalize.result }}
+          CERTIFY_RESULT:   ${{ needs.certify.result }}
+          CERT_STATE:       ${{ needs.certify.outputs.certification_state }}
+          CERT_CONCLUSION:  ${{ needs.certify.outputs.certification_conclusion }}
+          CERT_EXECUTION:   ${{ needs.certify.outputs.execution_status }}
+          CERT_TESTS:       ${{ needs.certify.outputs.test_verdict }}
+          CERT_COVERAGE:    ${{ needs.certify.outputs.coverage_status }}
+          CERT_REASON:      ${{ needs.certify.outputs.reason_code }}
+          CERT_EVIDENCE:    ${{ needs.certify.outputs.evidence_artifact_name }}
+          PEP_SHA:          ${{ steps.id.outputs.pep_ref }}
+        run: python3 utillities/pep_release_inputs.py summary >> "$GITHUB_STEP_SUMMARY"
+      - name: Minimal summary (the full summary could not be written)
+        if: ${{ failure() }}
+        env:
+          RPM_PUBLICATION:  ${{ inputs.rpm_publication }}
+          DEB_PUBLICATION:  ${{ inputs.deb_publication }}
+          NORMALIZE_RESULT: ${{ needs.normalize.result }}
+          CERTIFY_RESULT:   ${{ needs.certify.result }}
+        run: |
+          {
+            echo "## PEP release certification"
+            echo ""
+            echo "The full summary could not be written. Results as passed to PEP:"
+            echo ""
+            echo "| item | value |"
+            echo "| --- | --- |"
+            printf '| RPM publication job result | %s |\n' "${RPM_PUBLICATION:-not provided}"
+            printf '| DEB publication job result | %s |\n' "${DEB_PUBLICATION:-not provided}"
+            printf '| release inputs job | %s |\n' "${NORMALIZE_RESULT:-unknown}"
+            printf '| certify job | %s |\n' "${CERTIFY_RESULT:-unknown}"
+          } >> "$GITHUB_STEP_SUMMARY"

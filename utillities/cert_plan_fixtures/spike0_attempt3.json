@@ -1,0 +1,155 @@
+{
+  "artifacts": [
+    {
+      "id": 10161269055,
+      "members": [],
+      "name": "pkg-fj-A"
+    },
+    {
+      "id": 10161269063,
+      "members": [],
+      "name": "pkg-fj-B"
+    },
+    {
+      "id": 10161270870,
+      "members": [],
+      "name": "pkg-full-B"
+    }
+  ],
+  "component_policy": {
+    "allowed_runtime_package_names": [],
+    "expected_binary_version": ""
+  },
+  "job_records": [
+    {
+      "cell_id": "full-B",
+      "conclusion": "success",
+      "job_id": 102931184796,
+      "run_attempt": 1,
+      "status": "completed"
+    },
+    {
+      "cell_id": "full-A",
+      "conclusion": "success",
+      "job_id": 102931184968,
+      "run_attempt": 1,
+      "status": "completed"
+    },
+    {
+      "cell_id": "fj-A",
+      "conclusion": "success",
+      "job_id": 102931185049,
+      "run_attempt": 1,
+      "status": "completed"
+    },
+    {
+      "cell_id": "fj-B",
+      "conclusion": "failure",
+      "job_id": 102931185181,
+      "run_attempt": 1,
+      "status": "completed"
+    },
+    {
+      "cell_id": "fj-B",
+      "conclusion": "success",
+      "job_id": 102931975642,
+      "run_attempt": 2,
+      "status": "completed"
+    },
+    {
+      "cell_id": "full-A",
+      "conclusion": "success",
+      "job_id": 102931976915,
+      "run_attempt": 2,
+      "status": "completed"
+    },
+    {
+      "cell_id": "fj-A",
+      "conclusion": "success",
+      "job_id": 102931977204,
+      "run_attempt": 2,
+      "status": "completed"
+    },
+    {
+      "cell_id": "full-B",
+      "conclusion": "success",
+      "job_id": 102932027849,
+      "run_attempt": 2,
+      "status": "completed"
+    },
+    {
+      "cell_id": "fj-B",
+      "conclusion": "success",
+      "job_id": 102946794196,
+      "run_attempt": 3,
+      "status": "completed"
+    },
+    {
+      "cell_id": "full-A",
+      "conclusion": "failure",
+      "job_id": 102946794355,
+      "run_attempt": 3,
+      "status": "completed"
+    },
+    {
+      "cell_id": "fj-A",
+      "conclusion": "success",
+      "job_id": 102946794358,
+      "run_attempt": 3,
+      "status": "completed"
+    },
+    {
+      "cell_id": "full-B",
+      "conclusion": "success",
+      "job_id": 102946794473,
+      "run_attempt": 3,
+      "status": "completed"
+    }
+  ],
+  "planned_cells": [
+    {
+      "artifact_name": "pkg-fj-A",
+      "cell_id": "fj-A",
+      "family": "rpm",
+      "normalized_arch": "amd64",
+      "os": "spike-linux"
+    },
+    {
+      "artifact_name": "pkg-fj-B",
+      "cell_id": "fj-B",
+      "family": "rpm",
+      "normalized_arch": "amd64",
+      "os": "spike-linux"
+    },
+    {
+      "artifact_name": "pkg-full-A",
+      "cell_id": "full-A",
+      "family": "rpm",
+      "normalized_arch": "amd64",
+      "os": "spike-linux"
+    },
+    {
+      "artifact_name": "pkg-full-B",
+      "cell_id": "full-B",
+      "family": "rpm",
+      "normalized_arch": "amd64",
+      "os": "spike-linux"
+    }
+  ],
+  "provenance": {
+    "repository": "pgEdge/pgedge-rag-server",
+    "run_attempt": "3",
+    "run_id": "34495033138"
+  },
+  "publication_results": {
+    "rpm": "success"
+  },
+  "release_intent": {
+    "channel": "staging",
+    "effective_tag": "spike",
+    "intended_buildnum": "0",
+    "intended_version": "0.0.0",
+    "logical_component": "spike",
+    "simulated": false
+  }
+}

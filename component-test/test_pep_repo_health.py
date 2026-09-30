@@ -232,6 +232,56 @@ def get_preload_libraries(container_type):
     return libs
 
 
+# Extensions in ALL_EXTENSIONS whose SQL is shipped by a component that can be
+# toggled off in packages_test_matrix.json. ALL_EXTENSIONS is a static list in the
+# config env files, so with the component disabled the package is never installed
+# and 'CREATE EXTENSION' fails with 'extension "<name>" is not available'. Each
+# entry maps the extension to the package(s) that must be part of this run's
+# install list for the extension to exist; when any is missing the case is
+# skipped instead of failed.
+EXTENSION_REQUIRED_PACKAGES = {
+    "pldbgapi": {
+        "rhel": [f"pgedge-pldebugger_{pg_major_version}"],
+        "deb":  [f"pgedge-postgresql-{pg_major_version}-pldebugger"],
+    },
+    # The coldfront extension is unusable without the server-side archiver and
+    # its bundled DuckDB extensions, so all three gate it.
+    "coldfront": {
+        "rhel": [
+            f"pgedge-coldfront_{pg_major_version}",
+            "pgedge-coldfront",
+            "pgedge-coldfront-duckdb-extensions",
+        ],
+        "deb": [
+            f"pgedge-postgresql-{pg_major_version}-coldfront",
+            "pgedge-coldfront",
+            "pgedge-coldfront-duckdb-extensions",
+        ],
+    },
+    "pg_duckdb": {
+        "rhel": [f"pgedge-pg-duckdb_{pg_major_version}"],
+        "deb":  [f"pgedge-postgresql-{pg_major_version}-pg-duckdb"],
+    },
+    "pgedge_safesession": {
+        "rhel": [f"pgedge-safesession_{pg_major_version}"],
+        "deb":  [f"pgedge-postgresql-{pg_major_version}-safesession"],
+    },
+}
+
+
+def missing_extension_packages(extension, container_type):
+    """Return the packages this extension needs that this run does not install.
+
+    Empty list means the extension is either unconditional (core/contrib) or its
+    component is enabled in packages_test_matrix.json.
+    """
+    required = EXTENSION_REQUIRED_PACKAGES.get(extension)
+    if not required:
+        return []
+    packages = set(rhel_all_packages if container_type == "rhel" else deb_all_packages)
+    return [pkg for pkg in required[container_type] if pkg not in packages]
+
+
 # Packaging-release comparison.
 #
 # package_management.normalize_version() deliberately drops the packaging
@@ -611,6 +661,13 @@ def test_create_extensions(container_name, container_type, extension):
         pytest.skip(f"Container {container_name} not found or not running.")
 
     assert container.status == "running"
+
+    missing = missing_extension_packages(extension, container_type)
+    if missing:
+        pytest.skip(
+            f"{extension} skipped: disabled in packages_test_matrix.json "
+            f"(not installed: {', '.join(missing)})"
+        )
 
     config = get_container_config(container_type)
     pgbin = config["pgbin"]

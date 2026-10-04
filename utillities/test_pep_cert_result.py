@@ -1388,3 +1388,133 @@ def test_prior_attempt_digest_is_audited_verbatim_and_never_promoted():
     res = _build(plan, [prior], current_run_attempt="2")
     assert res["historical_results"][0]["installed_package_sha256"] == _OTHER
     assert res["legs"][0]["reconciliation"] == "missing" and res["reason_code"] == "missing_result"
+
+
+# --------------------------------------------------------------------------- #
+# rejected capture evidence (the planner's package_evidence_rejected gap) blocks via
+# the execution axis, never masked by the valid legs' pass, failure or preview
+# --------------------------------------------------------------------------- #
+def _cell_gap(reason, detail):
+    return {"scope": "cell", "cell_id": "pepcell.v1.rpm.el-9.arm64.pkg", "target_id": None,
+            "family": "rpm", "os": "el-9", "arch": "arm64", "physical_package": None,
+            "reason": reason, "detail": detail}
+
+
+_REJECTED_GAP = _cell_gap("package_evidence_rejected",
+                          "PACKAGE_ARCHIVE_DIGEST_MISMATCH: package API digest != receipt archive_digest")
+_MISSING_GAP = _cell_gap("package_evidence_missing", "build job succeeded but no verified package artifact")
+
+
+def test_rejected_evidence_reason_is_the_planners_gap_reason():
+    import pep_invocation_plan as planner
+    assert pcr.RC_EVIDENCE_REJECTED == planner.GAP_PACKAGE_EVIDENCE_REJECTED
+
+
+@pytest.mark.parametrize("summary_kw, verdict", [
+    ({}, "pass"),
+    ({"test_verdict": "fail"}, "fail"),
+    ({"execution_status": "preview", "test_verdict": "not_run"}, "not_run"),
+])
+def test_rejected_evidence_blocks_execution_and_keeps_the_valid_legs(summary_kw, verdict):
+    res = _build(_plan([_inv("rag-a-pg17-aaaa")], gaps=[_REJECTED_GAP]),
+                 [_summary("rag-a-pg17-aaaa", **summary_kw)])
+    assert res["result_resolved"] is True, res["errors"]
+    assert (res["execution_status"], res["test_verdict"], res["coverage_status"], res["reason_code"]) == \
+        ("incomplete", verdict, "partial", "package_evidence_rejected")
+    [leg] = res["legs"]
+    assert leg["execution_status"] == summary_kw.get("execution_status", "completed")   # leg kept as reported
+    assert leg["test_verdict"] == verdict
+    assert res["coverage_gaps"] == [_REJECTED_GAP]                                       # code kept verbatim
+
+
+def test_rejected_evidence_outranks_zero_eligible():
+    res = _build(_plan([], gaps=[_REJECTED_GAP]), [])
+    assert (res["execution_status"], res["coverage_status"], res["reason_code"]) == \
+        ("incomplete", "none", "package_evidence_rejected")
+
+
+def test_rejected_evidence_with_a_missing_leg_is_infra_failure_named_for_the_evidence():
+    res = _build(_plan([_inv("rag-a-pg17-aaaa"), _inv("rag-b-pg18-bbbb", pg="18")], gaps=[_REJECTED_GAP]),
+                 [_summary("rag-a-pg17-aaaa")])
+    assert (res["execution_status"], res["reason_code"]) == ("infra_failure", "package_evidence_rejected")
+
+
+def test_an_installed_digest_mismatch_still_names_itself_beside_rejected_evidence():
+    res = _build(_plan([_inv("rag-a-pg17-aaaa")], gaps=[_REJECTED_GAP]),
+                 [_summary("rag-a-pg17-aaaa", installed_package_sha256="e" * 64)])
+    assert (res["execution_status"], res["reason_code"]) == ("incomplete", "package_digest_mismatch")
+
+
+def test_unavailable_evidence_alone_stays_an_ordinary_coverage_gap():
+    res = _build(_plan([_inv("rag-a-pg17-aaaa")], gaps=[_MISSING_GAP]), [_summary("rag-a-pg17-aaaa")])
+    assert (res["execution_status"], res["test_verdict"], res["coverage_status"], res["reason_code"]) == \
+        ("completed", "pass", "partial", None)
+
+
+# --------------------------------------------------------------------------- #
+# numeric fields accept only ASCII decimal digits: '²' and '①' pass str.isdigit() but
+# int() rejects them, and Arabic-Indic / fullwidth digits convert silently. Every one is
+# rejected through the normal structured path, never an exception.
+# --------------------------------------------------------------------------- #
+_NON_ASCII_DIGITS = ["²", "①", "١", "１"]
+
+
+@pytest.mark.parametrize("bad", _NON_ASCII_DIGITS)
+def test_non_ascii_current_run_attempt_fails_closed(bad):
+    res = pcr.build_cert_result(_plan([_inv("rag-a-pg17-aaaa")]), [_summary("rag-a-pg17-aaaa")], bad)
+    _assert_failed_safe(res)
+    assert any("current_run_attempt must be a positive decimal string" in e for e in res["errors"])
+
+
+@pytest.mark.parametrize("bad", _NON_ASCII_DIGITS)
+@pytest.mark.parametrize("field", ["run_attempt", "run_id"])
+def test_non_ascii_plan_provenance_fails_closed(field, bad):
+    res = _build(_plan([_inv("rag-a-pg17-aaaa")], prov=_plan_prov(**{field: bad})), [_summary("rag-a-pg17-aaaa")])
+    _assert_failed_safe(res)
+
+
+@pytest.mark.parametrize("bad", _NON_ASCII_DIGITS)
+def test_non_ascii_caller_run_attempt_is_a_malformed_record(bad):
+    res = _build(_plan([_inv("rag-a-pg17-aaaa")]),
+                 [_summary("rag-a-pg17-aaaa", provenance=_caller_prov(caller_run_attempt=bad))])
+    _assert_failed_safe(res)
+    assert [u["kind"] for u in res["unexpected_results"]] == ["malformed"]
+
+
+def test_leading_zero_ascii_attempts_are_still_accepted():
+    res = _build(_plan([_inv("rag-a-pg17-aaaa")], prov=_plan_prov(run_attempt="01")),
+                 [_summary("rag-a-pg17-aaaa", provenance=_caller_prov(caller_run_attempt="01"))], "01")
+    assert res["result_resolved"] is True, res["errors"]
+
+
+# --------------------------------------------------------------------------- #
+# oversized ASCII decimals: run ids and attempts are 64-bit (at most 20 digits). A longer value
+# is rejected like any other malformed one, never left to int()'s digit limit (Python 3.11+).
+# --------------------------------------------------------------------------- #
+_OVERSIZED = "1" * 5000
+
+
+def test_positive_decimal_bound_is_twenty_digits():
+    assert pcr._is_positive_decimal_str("9" * 20) is True
+    assert pcr._is_positive_decimal_str("1" * 21) is False
+    assert pcr._is_positive_decimal_str(_OVERSIZED) is False
+
+
+def test_oversized_current_run_attempt_fails_closed():
+    res = pcr.build_cert_result(_plan([_inv("rag-a-pg17-aaaa")]), [_summary("rag-a-pg17-aaaa")], _OVERSIZED)
+    _assert_failed_safe(res)
+    assert any("current_run_attempt must be a positive decimal string" in e for e in res["errors"])
+
+
+@pytest.mark.parametrize("field", ["run_attempt", "run_id"])
+def test_oversized_plan_provenance_fails_closed(field):
+    res = _build(_plan([_inv("rag-a-pg17-aaaa")], prov=_plan_prov(**{field: _OVERSIZED})),
+                 [_summary("rag-a-pg17-aaaa")])
+    _assert_failed_safe(res)
+
+
+def test_oversized_caller_run_attempt_is_a_malformed_record():
+    res = _build(_plan([_inv("rag-a-pg17-aaaa")]),
+                 [_summary("rag-a-pg17-aaaa", provenance=_caller_prov(caller_run_attempt=_OVERSIZED))])
+    _assert_failed_safe(res)
+    assert [u["kind"] for u in res["unexpected_results"]] == ["malformed"]

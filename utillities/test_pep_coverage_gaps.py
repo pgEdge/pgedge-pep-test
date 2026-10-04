@@ -389,3 +389,107 @@ def test_report_lists_every_gap_scope_with_dashes_for_absent_fields(tmp_path):
     table = html[html.index("planned but not certified"):]
     assert "BUILD FAILED" in table and "MEMBER REJECTED" in table and "missing_checksum" in table
     assert "<code>—</code>" in table and ">None<" not in table
+
+
+# --------------------------------------------------------------------------- #
+# capture rejections beside a valid cell: REAL capture -> cert-plan -> planner -> result -> gate
+# --------------------------------------------------------------------------- #
+import pep_capture as C               # noqa: E402  (kept beside the tests that use it)
+import test_pep_capture as TC         # noqa: E402  real receipt/package builders + the bad-cell cases
+
+BLOCKED = {m: ("incomplete", "block", "failure", "package_evidence_rejected") for m in ("observe", "gate")}
+
+
+def capture_certify(tmp_path, monkeypatch, case, *, outcome="pass", preview=False):
+    """One valid RPM cell plus one cell built per test_pep_capture's ``_BAD_CELL_CASES[case]``,
+    verified by the REAL capture code, then run through the real cert-plan, planner, result and
+    gate in both modes. Only the valid leg's test summary is synthesized."""
+    bad_kwargs, edit, _verdict, _code, _cls = TC._BAD_CELL_CASES[case]
+    good = TC.build_cell(tmp_path, monkeypatch, cell_id="good", pkg_id=111, receipt_id=222)
+    bad = TC.build_cell(tmp_path, monkeypatch, cell_id="bad", pkg_id=333, receipt_id=444, **bad_kwargs)
+    inv, blobs = good.inv + bad.inv, {**good.blobs, **bad.blobs}
+    if edit is not None:
+        inv, blobs = edit(bad, inv, blobs)
+    mode = "preview" if preview else "full"
+    env, _evidence = C.capture_to_reducer_input(
+        detector_matrices=[TC._det(["good", "bad"])],
+        job_pages=TC._pages([TC._job("good", 1), TC._job("bad", 2)], "jobs"),
+        artifact_pages=TC._pages(inv, "artifacts"), blobs=blobs,
+        release_intent={"logical_component": "rag", "intended_version": "2.0.0", "intended_buildnum": "1",
+                        "effective_tag": "v2.0.0", "channel": "staging", "simulated": preview},
+        component_policy=dict(POLICY), publication_results={"rpm": "skipped" if preview else "success"},
+        provenance=dict(PROVENANCE, captured_at="2026-10-04T00:00:00Z"))
+    cert_plan = CP.reduce({**env, "execution_mode": mode})
+    assert cert_plan["plan_resolved"] is True, cert_plan["errors"]
+    plan = P.build_invocation_plan(cert_plan, EXEC_CATALOG, ENABLED, execution_mode=mode)
+    assert plan["plan_resolved"] is True, plan["errors"]
+    assert {i["source_cell_id"] for i in plan["matrix"]["include"]} == {"good"}   # the valid package still runs
+    decided = {}
+    for enforcement in ("observe", "gate"):
+        summaries = [_summary(inv, outcome, enforcement, preview=preview) for inv in plan["matrix"]["include"]]
+        result = CR.build_cert_result(plan, summaries, "1")
+        assert result["result_resolved"] is True, result["errors"]
+        decided[enforcement] = (result, G.decide(result, enforcement))
+    return cert_plan, plan, decided
+
+
+_UNAVAILABLE_CASES = sorted(k for k, v in TC._BAD_CELL_CASES.items() if v[4] == "unavailable")
+_INVALID_CASES = sorted(k for k, v in TC._BAD_CELL_CASES.items() if v[4] == "invalid")
+
+
+def test_the_case_table_covers_both_classes():
+    assert _UNAVAILABLE_CASES == ["no_receipt", "package_absent", "package_expired", "receipt_expired"]
+    assert len(_INVALID_CASES) == 6
+
+
+@pytest.mark.parametrize("case", _UNAVAILABLE_CASES)
+@pytest.mark.parametrize("outcome, preview, expected", [
+    ("pass", False, PARTIAL),
+    ("fail", False, {"observe": ("fail", "report", "success", "product_fail"),
+                     "gate": ("fail", "block", "failure", "product_fail")}),
+    ("pass", True, {"observe": ("preview", "report", "success", "preview"),
+                    "gate": ("preview", "block", "failure", "preview")}),
+])
+def test_unavailable_evidence_beside_a_valid_cell_stays_an_ordinary_gap(tmp_path, monkeypatch, case,
+                                                                        outcome, preview, expected):
+    cp, plan, decided = capture_certify(tmp_path, monkeypatch, case, outcome=outcome, preview=preview)
+    [gap] = plan["coverage_gaps"]
+    assert (gap["cell_id"], gap["reason"]) == ("bad", P.GAP_PACKAGE_EVIDENCE_MISSING)
+    assert gap["detail"].startswith("build job succeeded but no verified package artifact (")
+    assert_reconciles(cp, plan)
+    assert outcomes(decided) == expected
+
+
+@pytest.mark.parametrize("case", _INVALID_CASES)
+@pytest.mark.parametrize("outcome, preview, verdict", [
+    ("pass", False, "pass"),
+    ("fail", False, "fail"),          # a simultaneous product failure does not mask the rejection
+    ("pass", True, "not_run"),        # nor does a preview (simulated release)
+])
+def test_invalid_evidence_beside_a_valid_cell_blocks_both_modes(tmp_path, monkeypatch, case,
+                                                               outcome, preview, verdict):
+    cp, plan, decided = capture_certify(tmp_path, monkeypatch, case, outcome=outcome, preview=preview)
+    code = TC._BAD_CELL_CASES[case][3]
+    [gap] = plan["coverage_gaps"]
+    assert (gap["scope"], gap["cell_id"], gap["reason"]) == ("cell", "bad", P.GAP_PACKAGE_EVIDENCE_REJECTED)
+    assert gap["detail"].split(":", 1)[0] == code                     # the specific capture code survives
+    assert_reconciles(cp, plan)
+    assert outcomes(decided) == BLOCKED
+    for result, _ in decided.values():
+        assert (result["execution_status"], result["test_verdict"], result["reason_code"]) == \
+            ("incomplete", verdict, "package_evidence_rejected")
+        assert [leg["invocation_id"] for leg in result["legs"]] == [i["invocation_id"] for i in plan["matrix"]["include"]]
+        assert result["coverage_gaps"] == plan["coverage_gaps"]
+
+
+def test_rejected_evidence_is_named_in_the_report(tmp_path, monkeypatch):
+    _cp, _plan, decided = capture_certify(tmp_path, monkeypatch, "archive_digest")
+    result, decision = decided["observe"]
+    out = tmp_path / "report"
+    R.render_report(result, decision, {}, out)
+    html = (out / "consolidated-report.html").read_text()
+    assert "PACKAGE EVIDENCE REJECTED" in html                         # the gap's reason pill
+    assert R._GAP_REASON_TEXT["package_evidence_rejected"] in html     # its plain-language explanation
+    assert "PACKAGE_ARCHIVE_DIGEST_MISMATCH" in html                   # the capture code, in the Detail column
+    assert "reason <code>package_evidence_rejected</code>" in html     # the banner names the blocking reason
+    assert 'data-state="incomplete"' in html and 'data-state="pass"' not in html

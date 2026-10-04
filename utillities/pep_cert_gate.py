@@ -24,8 +24,8 @@ Policy precedence (first match wins):
      a matched leg whose enforcement_mode differs from the requested mode
      -> incomplete / block / failure.
   2. execution_status ``infra_failure`` or ``incomplete`` (missing results, infra legs,
-     zero eligible, an unproven package digest or identity) -> incomplete / block /
-     failure in BOTH modes.
+     zero eligible, an unproven package digest or identity, or package evidence that
+     capture rejected as invalid) -> incomplete / block / failure in BOTH modes.
   3. execution_status ``preview`` -> observe: preview/report/success; gate:
      preview/block/failure. (Never a pass.)
   4. ``completed`` + ``not_run`` -> incomplete / block / failure in both modes.
@@ -160,7 +160,7 @@ def _all_matched_nonempty(legs):
 # Reducer aggregate reasons a blocking decision names as they are; every other reason
 # collapses to infra_failure / execution_incomplete.
 _NAMED_INCOMPLETE_REASONS = ("zero_eligible", "missing_result", "package_digest_mismatch",
-                             "package_digest_missing", "identity_unproven")
+                             "package_evidence_rejected", "package_digest_missing", "identity_unproven")
 
 
 def _legs_proven(legs):

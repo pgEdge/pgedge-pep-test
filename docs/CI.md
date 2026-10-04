@@ -437,12 +437,13 @@ A pin that is already installed is refused, because a no-op install could not be
 
 `pep-certify.yml`'s reducer compares that digest with the planned package's captured `sha256` for every non-preview test run. It also requires the planned identity rungs: L1 and L2a always, and L2b only when the component policy plans an expected binary version. Every plan entry must carry its family's exact pin, equal to the planned package's version-release, with the other family's pin empty. A plan entry that does not fails the whole result closed. A completed test run whose digest is **mismatched** (`package_digest_mismatch`) or **missing** (`package_digest_missing`), or whose planned identity is unproven (`identity_unproven`), becomes `incomplete`, with its test counts and failures kept. It blocks in **both** `observe` and `gate`. Preview is exempt. A test run that was already incomplete or an infra failure keeps its own status and reason, but a digest mismatch is still recorded on it. The decision names the first reason present, in this order:
 1. `package_digest_mismatch`;
-2. `missing_result`;
-3. an infra failure;
-4. mixed preview/full test runs;
-5. `package_digest_missing`;
-6. `identity_unproven`;
-7. any other incomplete test run.
+2. `package_evidence_rejected` (build evidence that capture rejected as invalid; see **Package evidence** below);
+3. `missing_result`;
+4. an infra failure;
+5. mixed preview/full test runs;
+6. `package_digest_missing`;
+7. `identity_unproven`;
+8. any other incomplete test run.
 
 The gate also refuses a completed result whose test runs do not all carry a matching digest and proven planned identity (`contradictory_axes`). The digest proves the installed bytes are the captured bytes. What that means depends on where the captured digest came from: a build receipt proves the repository served the built package, while a published-package replay proves the test used the bytes that were captured.
 
@@ -490,6 +491,13 @@ A release pipeline that builds and publishes packages calls `.github/workflows/p
 
 Each package job also keeps its `[pep-cell:<cell_id>]` name marker and its `pep-package-receipt` step, pinned to the same commit, so evidence is recorded where each package is built.
 
+**Package evidence.** Capture (`pep-capture.yml`) checks each cell's receipt against GitHub's record of the uploaded package and re-inspects the package itself. One shared table, `CLASS_BY_CODE` in `utillities/pep_evidence_class.py`, puts every outcome in one class:
+- **Accepted:** the package is planned for testing.
+- **Unavailable:** no receipt (for example, the receipt step failed), only expired receipts, or a receipt whose package artifact expired or vanished (`PACKAGE_ARTIFACT_EXPIRED`, `PACKAGE_ARTIFACT_ABSENT`). The cell becomes a `package_evidence_missing` coverage gap, reported under `observe` and blocking under `gate`, like any other gap.
+- **Invalid:** evidence that is present but malformed, unsafe, ambiguous or contradictory. This is every other capture code, including a malformed receipt, two live receipts for one cell, and checksum or identity mismatches. The cell becomes a `package_evidence_rejected` gap whose detail carries the capture code. The result is `incomplete` with that reason, which blocks in **both** modes. The other cells are still tested and their results kept, and neither a product failure nor a preview hides the rejection.
+
+An unknown code is treated as invalid. The certification plan and the invocation planner both re-check each cell's verdict, code and class against the same table, so a classification that disagrees with it (for example a checksum mismatch labelled unavailable) or is malformed fails the plan closed rather than becoming an ordinary gap. If capture fails as a whole, no plan is produced and certification blocks in both modes; the job then uploads its sanitized `capture-error.json` (redacted message only) as the artifact `pep-capture-error-r<run_number>-a<run_attempt>`.
+
 The adapter validates the facts before anything runs (`utillities/pep_release_inputs.py`) and rejects, rather than guesses:
 - Each detector matrix must be a JSON object whose `include` lists cell objects with a `cell_id` and the matrix's own `family`. Only a valid matrix can count as having zero cells.
 - `<family>_publication` is that family's publication job result: `success`, `failure`, `cancelled` or `skipped`. It is required when the matrix has cells for the family. It may be omitted only for a family with zero cells, which is then left out of `publication_results` rather than reported as skipped or successful. An explicit `skipped` is kept.
@@ -498,4 +506,6 @@ The adapter validates the facts before anything runs (`utillities/pep_release_in
 
 The adapter calls `pep-certify.yml` through a relative path, so it runs at the adapter's own commit: the caller's one pin selects the adapter, the certifier and everything they run. Only the Docker Hub secrets are accepted. They are forwarded explicitly, and only for full certification. The adapter passes through all of `pep-certify.yml`'s outputs.
 
-**Failure behavior.** Certification runs after publication and never changes it. A rejected input fails the adapter's input job, so the certify job is skipped. An infrastructure or incomplete result, or a package-digest problem, fails the certify job. Either way the caller's run fails, even under `observe`. Product test failures under `observe` are reported without failing it. In every case, including rejected inputs, the summary job writes the actual per-family publication results as passed in, and the certification outcome.
+**Failure behavior.** Certification runs after publication and never changes it. A rejected input fails the adapter's input job, so the certify job is skipped. An infrastructure or incomplete result, a package-digest problem, or package evidence that capture rejected as invalid fails the certify job. Either way the caller's run fails, even under `observe`. Product test failures and coverage gaps, including a missing receipt, are reported under `observe` without failing it. In every case, including rejected inputs, the summary job writes the actual per-family publication results as passed in, and the certification outcome.
+
+**Certification report.** `consolidated-report.html` re-derives the decision from `cert-result.json` with `pep_cert_gate.decide`, only to check that `cert-decision.json` belongs to it; the re-derived decision is never shown or substituted. If the two disagree, the page shows the recorded decision as "not verified" in grey, names the differing fields in a report issue (counted once in the report-issue total), and never shows a trusted PASS. Its axes table reads the result axes from `cert-result.json` and labels the policy values as recorded in `cert-decision.json`. The report never changes either JSON file or the workflow outcome.

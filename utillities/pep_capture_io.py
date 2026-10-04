@@ -82,7 +82,19 @@ _CHUNK = 1024 * 1024
 _JSON_CAP = 16 * 1024 * 1024     # a jobs/artifacts page is small; cap defensively
 _GITHUB_ONLY_HEADERS = ("authorization", "accept", "x-github-api-version")
 _RECEIPT_PREFIX = C.RECEIPT_ARTIFACT_PREFIX
-_TOKEN_RE = re.compile(r"(?i)(gh[a-z]_[A-Za-z0-9_]+|bearer\s+[A-Za-z0-9._-]+)")
+# Token shapes masked in any diagnostic: GitHub fine-grained PATs (github_pat_...) and the classic
+# gh?_ tokens (including the workflow's ghs_ token).
+_TOKEN_RE = re.compile(r"(?i)(github_pat_[A-Za-z0-9_]+|gh[a-z]_[A-Za-z0-9_]+)")
+# Explicitly labelled credentials, masked whole while the label and scheme word stay readable: an
+# Authorization value (Bearer/token/Basic or bare) and any Bearer value. A value runs to the next
+# whitespace or quote, so token68/base64 punctuation (+ / = ~) and any trailing ; or , are masked
+# with it rather than leaving part of it behind. An already-masked value or a bare scheme word is
+# never taken as the value, so redacting twice changes nothing. The word "token" on its own is
+# ordinary prose and is left alone.
+_AUTH_VALUE_RE = re.compile(
+    r"""(?i)\b(authorization["']?\s*[:=]\s*["']?(?:(?:bearer|token|basic)\s+)?)"""
+    r"""(?!<redacted>)(?!(?:bearer|token|basic)\s)[^\s"']+""")
+_BEARER_VALUE_RE = re.compile(r"""(?i)\b(bearer\s+)(?!<redacted>)[^\s"']+""")
 
 CAPTURE_EVIDENCE_FILE = "capture-evidence.json"
 CERT_PLAN_FILE = "cert-plan.json"
@@ -101,8 +113,9 @@ class _NotFound(Exception):
 # --- redaction --------------------------------------------------------------
 def redact(text):
     """Strip anything token- or signature-bearing from a diagnostic string: any
-    URL is reduced to scheme://host/path (query + userinfo dropped) and obvious
-    token shapes are masked. Bounded length."""
+    URL is reduced to scheme://host/path (query + userinfo dropped), explicitly labelled
+    Authorization/Bearer values are masked whole, and known GitHub token shapes are masked.
+    Bounded length (masking happens before the cut, so no partial value survives it)."""
     if not isinstance(text, str):
         text = str(text)
 
@@ -115,6 +128,8 @@ def redact(text):
             return "<url>"
 
     text = re.sub(r"https?://[^\s'\"]+", _strip_url, text)
+    text = _AUTH_VALUE_RE.sub(r"\1<redacted>", text)
+    text = _BEARER_VALUE_RE.sub(r"\1<redacted>", text)
     text = _TOKEN_RE.sub("<redacted>", text)
     return text[:300]
 

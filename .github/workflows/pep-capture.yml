@@ -164,3 +164,19 @@ jobs:
           name: ${{ steps.names.outputs.plan_name }}
           path: capture-out/cert-plan.json
           if-no-files-found: error
+
+      # Failure-only diagnostic. On a systemic capture failure pep_capture_io._fail writes
+      # capture-out/capture-error.json = {capture_status, error} with the message passed
+      # through redact() (no URL query/userinfo, token shapes masked, bounded) and exits
+      # nonzero; the steps above are then skipped, so this uploads ONLY that sanitized file
+      # (never the directory, inputs, download/tmp roots or raw API data). The name is built
+      # from the github context because steps.names is skipped on failure. A failure before
+      # capture ran (e.g. checkout) has no file -> ignore. No id/outputs: nothing is
+      # advertised, no plan exists, and the job stays failed.
+      - name: Upload capture error (sanitized; failure only)
+        if: ${{ failure() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
+        with:
+          name: pep-capture-error-r${{ github.run_number }}-a${{ github.run_attempt }}
+          path: capture-out/capture-error.json
+          if-no-files-found: ignore

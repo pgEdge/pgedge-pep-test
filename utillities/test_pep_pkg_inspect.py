@@ -467,3 +467,37 @@ def test_inspect_members_sorted_independent_of_order(tmp_path, monkeypatch):
 
 def test_inspect_members_empty_is_empty():
     assert I.inspect_members([]) == []
+
+
+# --------------------------------------------------------------------------- #
+# epochs accept only ASCII decimal digits: '²' passes str.isdigit() but int() rejects it,
+# and Arabic-Indic / fullwidth digits would convert silently. All are InspectError.
+# --------------------------------------------------------------------------- #
+@pytest.mark.parametrize("bad", ["²", "①", "١", "１"])
+def test_non_ascii_rpm_epoch_is_an_inspect_error(bad):
+    with pytest.raises(I.InspectError):
+        I._parse_epochnum(bad)
+
+
+@pytest.mark.parametrize("bad", ["²", "①", "١", "１"])
+def test_non_ascii_deb_epoch_is_an_inspect_error(bad):
+    with pytest.raises(I.InspectError):
+        I.split_deb_version(bad + ":1.0-1")
+
+
+def test_ascii_epochs_still_parse():
+    assert I._parse_epochnum("2") == 2 and I.split_deb_version("3:1.0-1")[0] == 3
+
+
+# --------------------------------------------------------------------------- #
+# oversized ASCII epochs are an InspectError, never left to int()'s digit limit (Python 3.11+).
+# RPM and dpkg epochs are 32-bit integers, so 10 digits is the bound.
+# --------------------------------------------------------------------------- #
+def test_epoch_bound_is_ten_digits():
+    assert I._parse_epochnum("4294967295") == 4294967295
+    assert I.split_deb_version("2147483647:1.0-1")[0] == 2147483647
+    for bad in ("1" * 11, "1" * 5000):
+        with pytest.raises(I.InspectError):
+            I._parse_epochnum(bad)
+        with pytest.raises(I.InspectError):
+            I.split_deb_version(bad + ":1.0-1")

@@ -202,6 +202,16 @@ def _run(argv, timeout=_TOOL_TIMEOUT_S):
 
 
 # --- RPM --------------------------------------------------------------------
+# RPM and dpkg epochs are 32-bit integers, so at most 10 decimal digits. The bound also keeps
+# int() far below Python's integer-string conversion limit (3.11+).
+_MAX_EPOCH_DIGITS = 10
+
+
+def _ascii_epoch(text):
+    """True for an ASCII decimal epoch of at most 10 digits (isdigit() alone also accepts "²")."""
+    return text.isascii() and text.isdigit() and len(text) <= _MAX_EPOCH_DIGITS
+
+
 def _parse_epochnum(value):
     """RPM EPOCHNUM -> int epoch or None. 0 / (none) / blank means 'no epoch'."""
     if not isinstance(value, str):
@@ -209,7 +219,7 @@ def _parse_epochnum(value):
     v = value.strip()
     if v in ("", "0", "(none)"):
         return None
-    if v.isdigit():
+    if _ascii_epoch(v):
         return int(v)
     raise InspectError("malformed RPM epoch: %r" % (value,))
 
@@ -300,7 +310,7 @@ def split_deb_version(ver):
         head, _, rest = v.partition(":")
         if ":" in rest:
             raise InspectError("malformed DEB epoch (multiple ':') in version %r" % (ver,))
-        if not head.isdigit():
+        if not _ascii_epoch(head):
             raise InspectError("malformed DEB epoch in version %r" % (ver,))
         epoch = int(head)
         v = rest

@@ -1202,3 +1202,111 @@ def test_counterpart_colliding_with_an_already_enabled_key_fails_closed():
     out, errors = P.admit_certification_counterparts(ec, catalog, base)
     assert out == base and errors == ["certification counterpart 'debian12-amd64' duplicates the "
                                       "enabled container 'other-alias'"]
+
+
+# --------------------------------------------------------------------------- #
+# capture evidence classes: present-but-invalid evidence is its own cell gap
+# --------------------------------------------------------------------------- #
+_GREEN_NO_ARTIFACT = {"latest_status": "completed", "latest_conclusion": "success", "artifact_present": False}
+_FAILED_JOB = {"latest_status": "completed", "latest_conclusion": "failure"}
+
+
+def _cap(cls, verdict="rejected", code=None, detail=""):
+    return {"verdict": verdict, "code": code, "detail": detail, "evidence_class": cls}
+
+
+@pytest.mark.parametrize("state, evidence, cap, reason, detail", [
+    # present-but-invalid evidence keeps its own reason, carrying the capture code and detail
+    ("incomplete", _GREEN_NO_ARTIFACT, _cap("invalid", code="MEMBER_SHA_MISMATCH", detail="member sha differs: x.rpm"),
+     P.GAP_PACKAGE_EVIDENCE_REJECTED, "MEMBER_SHA_MISMATCH: member sha differs: x.rpm"),
+    ("incomplete", _GREEN_NO_ARTIFACT, _cap("invalid", "ambiguous", "CELL_AMBIGUOUS_ASSOCIATIONS"),
+     P.GAP_PACKAGE_EVIDENCE_REJECTED, "CELL_AMBIGUOUS_ASSOCIATIONS"),
+    # ...and is never masked by the build job's own outcome
+    ("failed", _FAILED_JOB, _cap("invalid", code="RECEIPT_SCHEMA_INVALID", detail="wrong schema constant"),
+     P.GAP_PACKAGE_EVIDENCE_REJECTED, "RECEIPT_SCHEMA_INVALID: wrong schema constant"),
+    ("never_ran", {}, _cap("invalid", code="IDENTITY_MISMATCH"), P.GAP_PACKAGE_EVIDENCE_REJECTED, "IDENTITY_MISMATCH"),
+    # unavailable evidence stays the tolerated gap, now naming what was not there
+    ("incomplete", _GREEN_NO_ARTIFACT,
+     _cap("unavailable", code="PACKAGE_ARTIFACT_EXPIRED", detail="package artifact expired"),
+     P.GAP_PACKAGE_EVIDENCE_MISSING,
+     "build job succeeded but no verified package artifact (PACKAGE_ARTIFACT_EXPIRED: package artifact expired)"),
+    ("incomplete", _GREEN_NO_ARTIFACT, _cap("unavailable", "absent", detail="no receipt artifact"),
+     P.GAP_PACKAGE_EVIDENCE_MISSING, "build job succeeded but no verified package artifact (no receipt artifact)"),
+    ("failed", _FAILED_JOB, _cap("unavailable", "absent", detail="no receipt artifact"), "build_failed", "failure"),
+])
+def test_capture_class_decides_the_cell_gap(state, evidence, cap, reason, detail):
+    plan = build([planned_cell("c", build_state=state, evidence=evidence, selection="target_unresolved",
+                               capture_evidence=cap)])
+    assert plan["plan_resolved"] is True, plan["errors"]
+    [gap] = plan["coverage_gaps"]
+    assert (gap["scope"], gap["reason"], gap["detail"]) == ("cell", reason, detail)
+    _assert_reconciles(plan)
+
+
+@pytest.mark.parametrize("cap", [
+    "invalid", 1, [], {}, {"evidence_class": "harmless"}, {"evidence_class": None},
+    {**_cap("invalid"), "code": 7}, {**_cap("invalid"), "detail": None},
+    # the verdict/code/class relationship is re-checked here: no downgrade to an ordinary gap
+    _cap("unavailable", code="MEMBER_SHA_MISMATCH"), _cap("unavailable", code="UNKNOWN_REASON"),
+    _cap("unavailable", "ambiguous", "CELL_AMBIGUOUS_ASSOCIATIONS"), _cap("invalid", "absent"),
+    # malformed values reject normally instead of raising
+    _cap("invalid", [], "MEMBER_SHA_MISMATCH"), _cap("invalid", {}, "MEMBER_SHA_MISMATCH"),
+    _cap("invalid", code=[]), _cap("invalid", code={}),
+    {k: v for k, v in _cap("invalid", code="MEMBER_SHA_MISMATCH").items() if k != "verdict"},
+    {**_cap("invalid", code="MEMBER_SHA_MISMATCH"), "extra": 1},
+])
+def test_malformed_capture_evidence_fails_the_plan_closed(cap):
+    plan = build([planned_cell("c", build_state="incomplete", evidence=_GREEN_NO_ARTIFACT,
+                               selection="target_unresolved", capture_evidence=cap)])
+    assert plan["plan_resolved"] is False and plan["matrix"]["include"] == []
+    assert any("capture_evidence" in e for e in plan["errors"]), plan["errors"]
+
+
+@pytest.mark.parametrize("cls", ["invalid", "unavailable"])
+def test_a_target_from_evidence_capture_did_not_accept_fails_closed(cls):
+    c = cell("c", [target("rpm", "el-9", "amd64")])
+    c["capture_evidence"] = _cap(cls, code="MEMBER_SHA_MISMATCH" if cls == "invalid" else "PACKAGE_ARTIFACT_EXPIRED")
+    plan = build([c])
+    assert plan["plan_resolved"] is False and plan["matrix"]["include"] == []
+    assert any("capture_evidence" in e for e in plan["errors"]), plan["errors"]
+
+
+def test_accepted_or_absent_capture_evidence_leaves_a_runnable_target_unchanged():
+    plain = build([cell("c", [target("rpm", "el-9", "amd64")])])
+    c = cell("c", [target("rpm", "el-9", "amd64")])
+    c["capture_evidence"] = _cap("accepted", "accepted")
+    assert build([c]) == plain and plain["plan_resolved"] is True and ids(plain)
+
+
+# --------------------------------------------------------------------------- #
+# PG majors accept only ASCII decimal digits ('²' passes str.isdigit() but int() rejects it)
+# --------------------------------------------------------------------------- #
+@pytest.mark.parametrize("bad", ["²", "1²", "①", "١٦", "１６"])
+def test_non_ascii_catalog_pg_major_is_rejected_never_raises(bad):
+    pgs, _os_map, errors = P.validate_exec_catalog(exec_catalog(pgs=(bad,)))
+    assert pgs == [] and errors
+
+
+@pytest.mark.parametrize("bad", ["²", "①", "١٧"])
+def test_pg_coupled_non_ascii_build_major_is_a_gap_never_raises(bad):
+    plan = build([cell("c", [target("rpm", "el-9", "amd64", pg_coupled=True, build_pg_major=bad)])])
+    assert gap_reasons(plan) == [P.GAP_INVALID_PG_COUPLING] and plan["matrix"]["include"] == []
+
+
+# --------------------------------------------------------------------------- #
+# oversized ASCII PG majors are rejected, never left to int()'s digit limit (Python 3.11+)
+# --------------------------------------------------------------------------- #
+def test_canonical_pg_major_is_bounded():
+    assert P._is_canonical_pg_major("9999") is True
+    assert P._is_canonical_pg_major("10000") is False
+    assert P._is_canonical_pg_major("1" * 5000) is False
+
+
+def test_oversized_catalog_pg_major_is_rejected_never_raises():
+    pgs, _os_map, errors = P.validate_exec_catalog(exec_catalog(pgs=("1" * 5000,)))
+    assert pgs == [] and errors
+
+
+def test_pg_coupled_oversized_build_major_is_a_gap_never_raises():
+    plan = build([cell("c", [target("rpm", "el-9", "amd64", pg_coupled=True, build_pg_major="1" * 5000)])])
+    assert gap_reasons(plan) == [P.GAP_INVALID_PG_COUPLING] and plan["matrix"]["include"] == []

@@ -88,9 +88,10 @@ def junit(container="auto-oel9-amd-rhel", *, n_pass=2, n_skip=1, n_error=0,
 
 
 def leg_artifact(dl, name, inv, *, attempt="1", xml=None, manifest="ok", preview=False,
-                 extra_reports=(), flat=False, digest="e" * 64):
+                 extra_reports=(), flat=False, digest="e" * 64, mode="observe"):
     """Write one uploaded pep-summary artifact the way a real leg produces it. `digest`
-    is the verified install's package digest (default: planned()'s "e"*64)."""
+    is the verified install's package digest (default: planned()'s "e"*64); `mode` is the
+    leg's enforcement mode (a gate-mode pipeline needs gate-mode legs)."""
     root = Path(dl) if flat else Path(dl) / name
     root.mkdir(parents=True, exist_ok=True)
     reports = []
@@ -108,7 +109,7 @@ def leg_artifact(dl, name, inv, *, attempt="1", xml=None, manifest="ok", preview
     prov = {"caller_repo": REPO, "caller_run_id": "100", "caller_run_attempt": attempt,
             "caller_sha": SHA, "caller_ref": REF,
             "pep_requested_ref": PEP, "pep_resolved_sha": PEP}
-    summary, _ = RS.build_summary(reports=reports, mode="observe", preview=preview,
+    summary, _ = RS.build_summary(reports=reports, mode=mode, preview=preview,
                                   identity_evidence=PROVEN, provenance=prov,
                                   invocation_id=inv,
                                   installed_package_sha256=None if preview else digest)
@@ -159,8 +160,10 @@ def pipeline(tmp_path, entries, names, *, attempt="1", gaps=(), mode="observe"):
     assert rc == 0
     for f in JSON3:  # the report never edits the authoritative JSON
         assert (out / f).read_bytes() == before[f], f
-    return Run(out, (out / "consolidated-report.html").read_text(encoding="utf-8"),
-               json.loads((out / "cert-result.json").read_text()),
+    html = (out / "consolidated-report.html").read_text(encoding="utf-8")
+    # Every real pipeline pair matches, so its decision is trusted and never flagged.
+    assert 'data-trusted="true"' in verdict(html) and MISMATCH not in html
+    return Run(out, html, json.loads((out / "cert-result.json").read_text()),
                json.loads((out / "cert-decision.json").read_text()))
 
 
@@ -188,6 +191,17 @@ def vstate(html):
     m = re.search(r'class="vstate">([A-Z]+)<', html)
     assert m, "no verdict state"
     return m.group(1)
+
+
+MISMATCH = "does not match the certification result"
+
+
+def verdict(html):
+    """The verdict bar of a page whose decision is valid (state, workflow pill, optional why)."""
+    m = re.search(r'<div class="verdict".*?class="vwf".*?</span>(?:<div class="vwhy">.*?</div>)?</div>',
+                  html, re.S)
+    assert m, "no verdict bar"
+    return m.group(0)
 
 
 def assert_links(out: Path, html: str):
@@ -940,3 +954,220 @@ def test_package_proof_is_explained_in_source_neutral_words(tmp_path):
     text = _visible(run.html)
     assert not re.search(r"\b(receipt|replay|release build)\b", text, re.I)
     assert not re.search(r"\blegs?\b", text, re.I)
+
+
+# --------------------------------------------------------------------------- #
+# Decision/result pairing: the decision is re-derived only to verify the pair
+# --------------------------------------------------------------------------- #
+def scenario(tmp_path, kind, mode="observe"):
+    """One real collector -> reducer -> gate -> report run of the given kind, in its own
+    directory, so a test can build several and cross-pair their files."""
+    base = tmp_path / ("%s-%s" % (kind, mode))
+    base.mkdir()
+    dl, name = base / "dl", "pep-summary-a-a1"
+    entries, names, gaps = [planned(INV_A)], [name], ()
+    if kind == "fail":
+        leg_artifact(dl, name, INV_A, mode=mode, xml=junit(fail_msgs=["boom"]))
+    elif kind == "preview":
+        leg_artifact(dl, name, INV_A, mode=mode, preview=True, manifest="missing")
+    elif kind == "unresolved":                               # duplicate current result
+        leg_artifact(dl, name, INV_A, mode=mode)
+        leg_artifact(dl, name + "-copy", INV_A, mode=mode)
+        names.append(name + "-copy")
+    else:
+        leg_artifact(dl, name, INV_A, mode=mode)
+        if kind == "missing":                                # INV_B produced no result
+            entries.append(planned(INV_B, alias="alma10-arm64", arch="arm64"))
+        elif kind == "partial":
+            gaps = [GAP_T]
+    return pipeline(base, entries, names, gaps=gaps, mode=mode)
+
+
+def pair_report(case, result, decision, ledger=b'{"candidates": []}', legs=None):
+    """Render the report through the CLI from these exact bytes; the input JSON stays unchanged."""
+    case.mkdir()
+    for f, data in zip(JSON3, (result, decision, ledger)):
+        (case / f).write_bytes(data)
+    rc = R.main(["--result", str(case / JSON3[0]), "--decision", str(case / JSON3[1]),
+                 "--ledger", str(case / JSON3[2]), "--legs", str(legs or case), "--out", str(case)])
+    assert rc == 0                                      # a report never changes enforcement
+    for f, data in zip(JSON3, (result, decision, ledger)):
+        assert (case / f).read_bytes() == data, f
+    return (case / "consolidated-report.html").read_text(encoding="utf-8")
+
+
+def _files(run):
+    return {f: (run.out / f).read_bytes() for f in JSON3}
+
+
+def mismatch_issues(html):
+    return [b for b in re.findall(r'<div class="banner banner-issue">(.*?)</div>', html) if MISMATCH in b]
+
+
+@pytest.mark.parametrize("other", ["empty", "fail", "preview"])
+def test_mismatched_pair_is_never_a_trusted_pass(tmp_path, capsys, other):
+    """A real clean-pass decision paired with a result it was not derived from: the page keeps
+    the recorded state as text, but grey, labelled unverified, with an explicit report issue."""
+    good = scenario(tmp_path, "pass")
+    assert good.decision["certification_state"] == "pass"
+    if other == "empty":
+        result, ledger, legs = b"{}", b'{"candidates": []}', None
+    else:
+        run = scenario(tmp_path, other)
+        result, ledger, legs = _files(run)[JSON3[0]], _files(run)[JSON3[2]], run.out.parent / "dl"
+    capsys.readouterr()
+    html = pair_report(tmp_path / "case", result, _files(good)[JSON3[1]], ledger, legs)
+    v = verdict(html)
+    assert 'data-trusted="false"' in v and "--vc:#64748b" in v and "#10b981" not in v
+    assert 'class="vlabel">Recorded decision (not verified)<' in v and vstate(v) == "PASS"
+    assert MISMATCH in v and "certification_state" in v and "allows the workflow" not in v
+    [issue] = mismatch_issues(html)
+    assert "certification_state" in issue and "cert-decision.json" in issue
+    assert '<details class="audit" id="axes" open>' in html
+    if other != "empty":
+        assert re.search(r'<tr id="leg-%s"' % INV_A, html)            # test runs still render
+    err = capsys.readouterr().err
+    assert "[cert-report] WARNING" in err and "certification_state" in err
+
+
+@pytest.mark.parametrize("doc", ["wrong_schema", "list", "null"])
+def test_malformed_result_with_a_pass_decision_is_untrusted(tmp_path, doc):
+    good = scenario(tmp_path, "pass")
+    files = _files(good)
+    res = json.loads(files[JSON3[0]])
+    body = {"wrong_schema": dict(res, schema="cert-result/2"), "list": [res], "null": None}[doc]
+    html = pair_report(tmp_path / "case", json.dumps(body).encode(), files[JSON3[1]], files[JSON3[2]],
+                       good.out.parent / "dl")
+    v = verdict(html)
+    assert 'data-trusted="false"' in v and "#10b981" not in v and vstate(v) == "PASS"
+    if doc == "wrong_schema":
+        assert MISMATCH in v and len(mismatch_issues(html)) == 1
+        assert re.search(r'<tr id="leg-%s"' % INV_A, html)
+    else:                                                     # not an object: the fallback page
+        assert "Human report incomplete." in html
+
+
+def test_self_consistent_malformed_result_keeps_its_honest_decision(tmp_path):
+    """{} with the decision the gate really derives from it is a matched pair: the honest
+    blocking INCOMPLETE stays trusted and is not flagged."""
+    decision = G.decide({}, "observe")
+    assert (decision["certification_state"], decision["reason_code"]) == ("incomplete", "wrong_schema")
+    html = pair_report(tmp_path / "case", b"{}", G.to_json(decision).encode())
+    v = verdict(html)
+    assert 'data-trusted="true"' in v and "--vc:#d97706" in v and vstate(v) == "INCOMPLETE"
+    assert "reason <code>wrong_schema</code>" in v and MISMATCH not in html
+
+
+@pytest.mark.parametrize("kind, mode, state, colour, gloss", [
+    ("pass", "gate", "PASS", "#10b981", "allows the workflow"),
+    ("fail", "gate", "FAIL", "#dc2626", "blocks the workflow"),
+    ("missing", "observe", "INCOMPLETE", "#d97706", "blocks the workflow"),     # intentional block
+    ("unresolved", "gate", "INCOMPLETE", "#d97706", "blocks the workflow"),     # reducer failed closed
+])
+def test_matched_pairs_stay_trusted_including_blocking_and_unresolved(tmp_path, kind, mode, state, colour, gloss):
+    run = scenario(tmp_path, kind, mode)
+    assert run.decision == G.decide(run.result, mode)                           # a genuine pair
+    assert run.result["result_resolved"] is (kind != "unresolved")
+    v = verdict(run.html)
+    assert 'data-trusted="true"' in v and "--vc:%s" % colour in v and vstate(v) == state
+    assert 'class="vlabel">Certification<' in v and gloss in v
+    assert MISMATCH not in run.html and "not verified" not in run.html
+
+
+KINDS = ("pass", "fail", "missing", "partial", "preview")
+
+
+@pytest.mark.parametrize("mode", ["observe", "gate"])
+def test_decision_mismatch_is_empty_only_for_matched_pairs(tmp_path, mode):
+    runs = {k: scenario(tmp_path, k, mode) for k in KINDS}
+    for k, run in runs.items():
+        assert R._decision_mismatch(run.result, run.decision) == [], k
+    for a in KINDS:
+        for b in KINDS:
+            if a != b:
+                diff = R._decision_mismatch(runs[a].result, runs[b].decision)
+                assert diff, (a, b)
+                if runs[a].decision["certification_state"] != runs[b].decision["certification_state"]:
+                    assert "certification_state" in diff, (a, b)
+
+
+def test_decision_mismatch_flags_mode_and_shape_and_leaves_invalid_decisions_to_unknown(tmp_path, monkeypatch):
+    gate_pass, observe_pass = scenario(tmp_path, "pass", "gate"), scenario(tmp_path, "pass", "observe")
+    # a gate-mode result recorded as an observe decision: the gate would block it (mode_mismatch)
+    assert "certification_state" in R._decision_mismatch(gate_pass.result, observe_pass.decision)
+    res, dec = observe_pass.result, observe_pass.decision
+    assert R._decision_mismatch(res, dict(dec, note="x")) == ["note"]             # extra key
+    assert R._decision_mismatch(res, {k: v for k, v in dec.items() if k != "axes"}) == ["axes"]
+    for bad in (None, [], {"certification_state": "pass"}, dict(dec, schema="other"),
+                dict(dec, certification_state="bogus")):
+        assert R._decision_mismatch(res, bad) == []    # the UNKNOWN banner owns invalid decisions
+    monkeypatch.setattr(G, "decide", lambda *a: 1 / 0)
+    assert R._decision_mismatch(res, dec)               # a failed re-derivation is never trusted
+
+
+def test_axes_table_reads_result_axes_from_the_result_and_labels_recorded_policy(tmp_path):
+    good, bad = scenario(tmp_path, "pass"), scenario(tmp_path, "fail")
+    html = pair_report(tmp_path / "case", _files(bad)[JSON3[0]], _files(good)[JSON3[1]],
+                       _files(bad)[JSON3[2]], bad.out.parent / "dl")
+    table = html[html.index('<details class="audit" id="axes"'):]
+    table = table[:table.index("</details>")]
+    assert table.startswith('<details class="audit" id="axes" open>')
+    from_result, recorded = table.split("recorded in cert-decision.json", 1)
+    assert "from cert-result.json" in from_result
+    assert "<td>test_verdict</td><td><code>fail</code></td>" in from_result     # the result's own axis
+    assert "<td>certification_state</td>" not in from_result
+    assert "not verified" in recorded[:recorded.index("<td>")]                  # the recorded group says so
+    assert "<td>certification_state</td><td><code>pass</code></td>" in recorded
+    assert "<td>test_verdict</td>" not in recorded
+
+
+# --------------------------------------------------------------------------- #
+# a decision/result mismatch counts once in the report-issue totals (chip, summary line,
+# card, returned stats and log line); the per-test-run issue banner still counts test runs
+# --------------------------------------------------------------------------- #
+def _issue_card(html):
+    m = re.search(r'<div class="card issues"><h3>Report issues</h3><div class="value">(\d+)</div>'
+                  r'<div class="sub">(.*?)</div>', html)
+    assert m, "no report-issues card"
+    return int(m.group(1)), m.group(2)
+
+
+_RUN_ISSUE_BANNER = re.compile(r"test runs? (?:has|have) a report issue")
+
+
+def test_a_mismatch_alone_is_one_report_issue_everywhere(tmp_path, capsys):
+    good = scenario(tmp_path, "pass")
+    capsys.readouterr()
+    html = pair_report(tmp_path / "case", b"{}", json.dumps(good.decision).encode())
+    assert "report_issues=1" in capsys.readouterr().out                     # the [cert-report] log line
+    assert _issue_card(html) == (1, "test runs with unusable detail, plus the decision/result mismatch")
+    assert not _RUN_ISSUE_BANNER.search(html)                               # no test run has an issue
+    assert len(mismatch_issues(html)) == 1                                  # ...and the mismatch is named once
+    stats = R.render_report({}, good.decision, {}, tmp_path / "direct")
+    assert stats["report_issues"] == 1 and stats["decision_mismatch"]
+
+
+def test_a_mismatch_adds_exactly_one_to_existing_report_issues(tmp_path):
+    good, failed = scenario(tmp_path, "pass"), scenario(tmp_path, "fail")
+    matched = R.render_report(failed.result, failed.decision, {}, tmp_path / "matched")
+    mismatched = R.render_report(failed.result, good.decision, {}, tmp_path / "mismatched")
+    assert matched["decision_mismatch"] == [] and mismatched["decision_mismatch"]
+    assert mismatched["report_issues"] == matched["report_issues"] + 1
+    html_ok = (tmp_path / "matched" / "consolidated-report.html").read_text()
+    html_bad = (tmp_path / "mismatched" / "consolidated-report.html").read_text()
+    assert _issue_card(html_ok)[0] == matched["report_issues"]
+    assert _issue_card(html_bad)[0] == mismatched["report_issues"]
+    # the summary line under the verdict shows the same total
+    assert "&#9888; %d report issues" % mismatched["report_issues"] in verdict(html_bad)
+    assert _RUN_ISSUE_BANNER.findall(html_bad) == _RUN_ISSUE_BANNER.findall(html_ok)
+
+
+def test_matched_pairs_count_only_their_test_run_issues(tmp_path):
+    good = scenario(tmp_path, "pass")
+    assert not mismatch_issues(good.html) and _issue_card(good.html)[0] == 0      # the real pipeline page
+    # re-rendered without leg detail, its one issue is the test run's, not a mismatch
+    stats = R.render_report(good.result, good.decision, {}, tmp_path / "again")
+    html = (tmp_path / "again" / "consolidated-report.html").read_text()
+    assert stats["decision_mismatch"] == [] and not mismatch_issues(html)
+    assert stats["report_issues"] == _issue_card(html)[0] == 1
+    assert _RUN_ISSUE_BANNER.findall(html) == ["test run has a report issue"]

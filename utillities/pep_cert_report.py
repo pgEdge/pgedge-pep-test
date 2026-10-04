@@ -11,7 +11,10 @@ status/policy contract:
     coverage and policy axes and for every leg's verdict. This generator never
     recomputes them from JUnit and never overwrites them. An observe-mode
     workflow can be green while the product test verdict is fail; the report
-    shows both, plainly.
+    shows both, plainly. The decision is re-derived with ``pep_cert_gate.decide``
+    only to verify that cert-decision.json belongs to this cert-result.json; the
+    re-derived decision is never displayed or substituted, and a mismatch shows
+    the recorded decision as unverified, with a report issue.
   * The per-test-case DETAIL pages REUSE the established regression report's
     JUnit parser (``_parse_junit_testcases``) and detail renderer
     (``render_container_detail_page``) so both workflows share one test-case
@@ -74,6 +77,8 @@ from ci_consolidated_report import (  # noqa: E402
     _render_scripts,
     render_container_detail_page,
 )
+# The pure policy, used only to verify the decision/result pairing (never displayed).
+import pep_cert_gate  # noqa: E402
 
 RESULT_SCHEMA = "cert-result/1"
 DECISION_SCHEMA = "pep-cert-decision/1"
@@ -454,7 +459,11 @@ _POLICY_WORDS = {"report": "never blocks", "block": "blocks the workflow",
 _GAP_SCOPE_NOUN = {"cell": ("build cell", "build cells"),
                    "target": ("package target", "package targets"),
                    "member": ("rejected package file", "rejected package files")}
-_GAP_REASON_TEXT = {"no_enabled_platform": "No enabled PEP test container for this OS/arch"}
+_GAP_REASON_TEXT = {
+    "no_enabled_platform": "No enabled PEP test container for this OS/arch",
+    "package_evidence_rejected": ("Capture rejected the receipt or package for this build as invalid "
+                                  "(code in Detail); this blocks certification in both modes"),
+}
 # Package proof, in words that hold whether the captured package came from a build
 # receipt or from a published-package replay.
 _LEG_REASON_TEXT = {
@@ -736,6 +745,23 @@ def _valid_decision(decision) -> bool:
             and decision.get("certification_state") in _KNOWN_STATES)
 
 
+def _decision_mismatch(result, decision) -> list:
+    """Names of the recorded decision's fields (extra or missing keys included) that differ
+    from what ``pep_cert_gate.decide`` derives from this result in the decision's own
+    requested_mode; [] for a matched pair. The re-derived decision only verifies the pairing
+    and is never displayed or substituted. An invalid decision returns [] (the UNKNOWN banner
+    owns it); a failed re-derivation counts as a mismatch, never as trusted."""
+    if not _valid_decision(decision):
+        return []
+    try:
+        derived = pep_cert_gate.decide(result, decision.get("requested_mode"))
+        return sorted(k for k in set(decision) | set(derived)
+                      if k not in decision or k not in derived
+                      or json.dumps(decision[k], sort_keys=True) != json.dumps(derived[k], sort_keys=True))
+    except Exception:  # decide never raises for JSON input; if it does, nothing is verified
+        return ["re-derivation failed"]
+
+
 def _summary_line(result: dict, st: dict) -> str:
     """One line of what happened, from the partitioned leg categories and the
     authoritative coverage axis. Empty when no result was given (fallback page)."""
@@ -761,8 +787,9 @@ def _summary_line(result: dict, st: dict) -> str:
         cov_txt += ": %s with no test run (%s)" % (_plural(st["gaps"], "coverage gap"),
                                                   _esc(_gap_breakdown(st.get("gap_scopes") or Counter())))
     parts.append(cov_txt)
-    if st["issues"]:
-        parts.append("&#9888; %s" % _plural(st["issues"], "report issue"))
+    issues = st.get("report_issues", st["issues"])        # includes a decision/result mismatch, once
+    if issues:
+        parts.append("&#9888; %s" % _plural(issues, "report issue"))
     return " &middot; ".join(parts)
 
 
@@ -781,7 +808,8 @@ def _consistent_decision(state: str, conclusion: str, mode: str, policy: str) ->
     return False
 
 
-def _banner(decision, result: dict = None, st: dict = None, trusted: bool = True) -> str:
+def _banner(decision, result: dict = None, st: dict = None, trusted: bool = True,
+            mismatch=()) -> str:
     """Compact verdict bar: product certification state first, the workflow
     conclusion beside it as a separate, neutral pill, so an observe-mode green
     run can never be read as a certification pass.
@@ -789,7 +817,10 @@ def _banner(decision, result: dict = None, st: dict = None, trusted: bool = True
     The state is coloured only when it can be trusted: a valid decision whose fields
     agree with each other, on a page built from a readable result. The fallback page
     (``trusted=False``) and a contradictory decision show the recorded state in
-    neutral grey, and only a genuine observe/report decision is explained as such."""
+    neutral grey, and only a genuine observe/report decision is explained as such.
+    ``mismatch`` names the fields where the decision differs from the one re-derived
+    from this page's result; that re-derivation only verifies the pairing and is never
+    displayed or substituted, so a mismatched decision is shown as recorded, unverified."""
     st = st or _stats([], 0)
     line = _summary_line(result or {}, st)
     if not _valid_decision(decision):
@@ -811,6 +842,12 @@ def _banner(decision, result: dict = None, st: dict = None, trusted: bool = True
         why = ("This page could not read the certification result, so it cannot show or "
                "confirm test runs, coverage or gaps. The state above is copied from "
                "cert-decision.json as written; check the JSON evidence before relying on it.")
+    elif mismatch:
+        label, color = "Recorded decision (not verified)", "#64748b"
+        why = ("cert-decision.json does not match the certification result on this page "
+               "(differing fields: <b>%s</b>). The state above is copied from it as written and "
+               "is not verified; check both JSON files before relying on it."
+               % _esc(", ".join(mismatch)))
     elif not consistent:
         label, color = "Certification", "#64748b"
         why = ("The decision fields do not agree with each other (state <b>%s</b>, workflow "
@@ -824,7 +861,8 @@ def _banner(decision, result: dict = None, st: dict = None, trusted: bool = True
             why = ("The workflow is green because <b>observe</b> mode only reports; the product "
                    "certification state is <b>%s</b>. The certification JSON is authoritative."
                    % _esc(state.upper()))
-    gloss = (" &mdash; %s" % _esc(_POLICY_WORDS[policy])) if consistent and trusted else ""
+    verified = trusted and consistent and not mismatch
+    gloss = (" &mdash; %s" % _esc(_POLICY_WORDS[policy])) if verified else ""
     return (
         '<div class="verdict" data-state="%s" data-trusted="%s" style="--vc:%s">'
         '<div class="vmain"><span class="vlabel">%s</span>'
@@ -832,7 +870,7 @@ def _banner(decision, result: dict = None, st: dict = None, trusted: bool = True
         '<div class="vsum">%s%s</div>'
         '<span class="vwf" title="workflow_conclusion / requested_mode / policy_decision">'
         'Workflow <b>%s</b> &middot; %s mode &middot; policy %s%s</span>%s</div>'
-    ) % (_esc(state), "true" if trusted and consistent else "false", color, _esc(label),
+    ) % (_esc(state), "true" if verified else "false", color, _esc(label),
          _esc(state.upper()), line,
          ("%sreason <code>%s</code>" % (" &middot; " if line else "", _esc(reason))) if reason else "",
          _esc(conclusion), _esc(mode), _esc(policy), gloss,
@@ -892,7 +930,9 @@ def _cards(st: dict) -> str:
     if cats["preview"]:
         items.append(("preview", "Preview", cats["preview"], "not a certification"))
     items.append(("gap", "Coverage gaps", st["gaps"], _gap_breakdown(gap_scopes) or "none"))
-    items.append(("issues", "Report issues", st["issues"], "test runs with unusable detail"))
+    items.append(("issues", "Report issues", st.get("report_issues", st["issues"]),
+                  "test runs with unusable detail" + (", plus the decision/result mismatch"
+                                                      if st.get("decision_mismatch") else "")))
     cards = "".join('<div class="card %s"><h3>%s</h3><div class="value">%d</div><div class="sub">%s</div></div>'
                     % (cls, _esc(title), value, _esc(sub)) for cls, title, value, sub in items)
     tcline = ('<div class="tcline">Test cases (supporting detail, from each test run\'s authoritative counts): '
@@ -903,6 +943,12 @@ def _cards(st: dict) -> str:
 
 def _attention_banners(st: dict) -> str:
     out = []
+    if st.get("decision_mismatch"):
+        out.append('<div class="banner banner-issue"><strong>&#9888;</strong> The recorded certification '
+                   'decision does not match the certification result in this artifact (differing fields: '
+                   '%s), so the state above is not verified. The JSON files are unchanged, and the '
+                   'workflow outcome came from cert-decision.json.</div>'
+                   % _esc(", ".join(st["decision_mismatch"])))
     if st["cats"]["missing"]:
         out.append('<div class="banner banner-issue"><strong>&#9888;</strong> %s produced no result '
                    '&mdash; shown as MISSING below, never as a pass.</div>'
@@ -1148,30 +1194,31 @@ def _section(fam: dict, multi: bool) -> str:
          head, legs, ('<tbody class="gaps">%s</tbody>' % gaps) if gaps else "")
 
 
-def _axes_table(result: dict, decision: dict) -> str:
-    axes = (decision or {}).get("axes") if isinstance(decision, dict) else {}
-    axes = axes if isinstance(axes, dict) else {}
+def _axes_table(result: dict, decision: dict, mismatch=()) -> str:
+    """Result axes read from cert-result.json and policy values recorded in
+    cert-decision.json, in two labelled groups so one is never mistaken for the other."""
     dec = decision if isinstance(decision, dict) else {}
-    rows = [
-        ("result_resolved", result.get("result_resolved")),
-        ("execution_status", axes.get("execution_status", result.get("execution_status"))),
-        ("test_verdict", axes.get("test_verdict", result.get("test_verdict"))),
-        ("coverage_status", axes.get("coverage_status", result.get("coverage_status"))),
-        ("certification_state", dec.get("certification_state")),
-        ("policy_decision", dec.get("policy_decision")),
-        ("reason_code", dec.get("reason_code")),
-        ("workflow_conclusion", dec.get("workflow_conclusion")),
-        ("requested_mode", dec.get("requested_mode")),
+    groups = [
+        ("Result axes &mdash; from cert-result.json",
+         [(k, result.get(k)) for k in ("result_resolved", "execution_status", "test_verdict",
+                                       "coverage_status", "reason_code")]),
+        ("Policy decision &mdash; recorded in cert-decision.json%s"
+         % (" (not verified: it does not match this result)" if mismatch else ""),
+         [(k, dec.get(k)) for k in ("certification_state", "policy_decision", "reason_code",
+                                    "workflow_conclusion", "requested_mode")]),
     ]
 
     def _fmt(v):
         if isinstance(v, bool):
             return "true" if v else "false"
         return "—" if v is None else v
-    body = "".join("<tr><td>%s</td><td><code>%s</code></td></tr>"
-                   % (_esc(k), _esc(_fmt(v))) for k, v in rows)
+    body = "".join('<tr><th colspan="2">%s</th></tr>' % title
+                   + "".join("<tr><td>%s</td><td><code>%s</code></td></tr>"
+                             % (_esc(k), _esc(_fmt(v))) for k, v in rows)
+                   for title, rows in groups)
     # Collapsed normally; open when the result or decision cannot be trusted.
-    opened = result.get("result_resolved") is not True or not _valid_decision(decision)
+    opened = (result.get("result_resolved") is not True or not _valid_decision(decision)
+              or bool(mismatch))
     return ('<details class="audit" id="axes"%s><summary><b>Certification axes and policy</b> '
             '&mdash; the authoritative JSON values behind the verdict</summary>'
             '<table class="axes">%s</table></details>' % (" open" if opened else "", body))
@@ -1281,6 +1328,7 @@ _FOOTER = ('<div class="footer">Generated from cert-result/1 + pep-cert-decision
 def render_report(result: dict, decision, index: dict, out_dir: Path) -> dict:
     """Write consolidated-report.html + details/ + legs/ into out_dir."""
     out_dir = Path(out_dir)
+    mismatch = _decision_mismatch(result, decision)     # verifies the pair; displays nothing
     result = result if isinstance(result, dict) else {}
     details_dir, legs_out = out_dir / "details", out_dir / "legs"
     for d in (details_dir, legs_out):
@@ -1297,10 +1345,13 @@ def render_report(result: dict, decision, index: dict, out_dir: Path) -> dict:
     layout = _layout(views, gaps)
     st = _stats(views, len(gaps))
     st["gap_scopes"] = Counter(_txt(g.get("scope")) or "unscoped" for g in gaps)
+    st["decision_mismatch"] = mismatch
+    # Report-issue total: test runs with an issue, plus the decision/result mismatch counted once.
+    st["report_issues"] = st["issues"] + (1 if mismatch else 0)
 
     doc = (_HEAD % _css()
            + _header(result, decision, layout, st) + "\n"
-           + _banner(decision, result, st) + "\n"
+           + _banner(decision, result, st, mismatch=mismatch) + "\n"
            + _unresolved_block(result)
            + _cards(st) + "\n"
            + _attention_banners(st)
@@ -1308,12 +1359,13 @@ def render_report(result: dict, decision, index: dict, out_dir: Path) -> dict:
            + (_controls() if layout["families"] else "") + "\n"
            + "\n".join(_section(f, layout["multi"]) for f in layout["families"]) + "\n"
            + _gaps_table(gaps) + _issues_table(views)
-           + _axes_table(result, decision) + _audit_section(result)
+           + _axes_table(result, decision, mismatch) + _audit_section(result)
            + _FOOTER + "\n" + _render_scripts() + "\n" + _cert_script()
            + "\n</body></html>")
     (out_dir / CONSOLIDATED_FILENAME).write_text(doc, encoding="utf-8")
     return {"legs": len(legs), "detail_pages": sum(1 for v in views if v["detail_href"]),
-            "coverage_gaps": len(gaps), "report_issues": st["issues"]}
+            "coverage_gaps": len(gaps), "report_issues": st["report_issues"],
+            "decision_mismatch": mismatch}
 
 
 def _fallback(out_dir: Path, message: str, decision=None) -> None:
@@ -1369,6 +1421,10 @@ def main(argv=None) -> int:
         print("[cert-report] WARNING: render failed: %s; writing fallback" % e, file=sys.stderr)
         _fallback(out_dir, "render failed: %s" % e, decision)
         return 0
+    if stats["decision_mismatch"]:
+        print("[cert-report] WARNING: cert-decision.json does not match cert-result.json "
+              "(differing fields: %s); the report shows it as not verified"
+              % ", ".join(stats["decision_mismatch"]), file=sys.stderr)
     print("[cert-report] legs=%(legs)s detail_pages=%(detail_pages)s "
           "coverage_gaps=%(coverage_gaps)s report_issues=%(report_issues)s -> %(out)s"
           % dict(stats, out=out_dir / CONSOLIDATED_FILENAME))

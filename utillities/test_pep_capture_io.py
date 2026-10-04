@@ -728,3 +728,112 @@ def test_cli_malformed_execution_mode_fails_closed(tmp_path):
     with pytest.raises(SystemExit):
         IO.main(_min_inputs(tmp_path) + ["--out-dir", str(out_dir), "--execution-mode", "bogus"])
     assert not (out_dir / "cert-plan.json").exists()
+
+
+# --------------------------------------------------------------------------- #
+# failure diagnostic: the capture-error.json that pep-capture.yml uploads (failure-only
+# artifact) must be the sanitized marker only -- never raw responses, URLs or secrets
+# --------------------------------------------------------------------------- #
+def test_fail_writes_only_sanitized_bounded_capture_error(tmp_path):
+    import re                                                      # local: keep this an append-only change
+    out_dir = tmp_path / "out"; out_dir.mkdir()
+    gh = tmp_path / "ghout"; gh.write_text("")
+    msg = ("GET https://x-access-token:ghs_USERINFO1@api.github.com/repos/o/r/actions/artifacts"
+           "?sig=QSECRET&per_page=100 failed; Authorization: Bearer abcDEF123.tok-en; "
+           "leaked ghp_0123456789abcdef and gho_XYZ987 " + "A" * 2000)
+    rc = IO._fail(out_dir, str(gh), msg)
+    assert rc == 1                                                 # systemic -> nonzero exit
+    assert [p.name for p in out_dir.iterdir()] == ["capture-error.json"]   # nothing else written
+    doc = json.loads((out_dir / "capture-error.json").read_text())
+    assert set(doc) == {"capture_status", "error"}                 # exactly the sanitized marker
+    assert doc["capture_status"] == "failed"
+    err = doc["error"]
+    cap = len(IO.redact("x" * 10000))                              # redact()'s length bound
+    assert isinstance(err, str) and 0 < len(err) <= cap < 10000
+    # the secrets sat INSIDE the bounded window, so they were masked, not merely truncated away
+    assert "api.github.com/repos/o/r/actions/artifacts" in err and err.count("<redacted>") >= 3
+    assert not re.search(r"://[^/\s]*@", err) and "x-access-token" not in err and "USERINFO1" not in err
+    assert "?" not in err and "sig=" not in err and "QSECRET" not in err and "per_page" not in err
+    assert not re.search(r"(?i)bearer\s+(?!<redacted>)\S", err) and "abcDEF123" not in err
+    assert not re.search(r"gh[a-z]_[A-Za-z0-9_]+", err)
+    out = dict(l.split("=", 1) for l in gh.read_text().splitlines() if "=" in l)
+    assert out["capture_status"] == "failed" and out["error"] == err   # same sanitized text
+
+
+def test_fail_redacts_a_fine_grained_pat_from_the_written_file(tmp_path, capsys):
+    # Artifact contents are not log-masked, so the file _fail writes must already be clean.
+    # Obviously fake tokens only; the fine-grained one sits bare, in URL userinfo and in a query.
+    pat = "github_pat_" + "11FAKEREVIEWSENTINEL0_" + "A1b2C3d4" * 4
+    out_dir = tmp_path / "out"; out_dir.mkdir()
+    gh = tmp_path / "ghout"; gh.write_text("")
+    msg = ("token %s rejected; GET https://x:%s@api.github.com/repos/o/r?access_token=%s; "
+           "also ghs_FAKEINSTALL123 and Bearer FAKE.bearer-tok" % (pat, pat, pat))
+    assert IO._fail(out_dir, str(gh), msg) == 1
+    text, outputs, err = (out_dir / "capture-error.json").read_text(), gh.read_text(), capsys.readouterr().err
+    assert "<redacted>" in err and "<redacted>" in outputs                 # the same text reached both
+    for leaked in (pat, "github_pat_", "FAKEREVIEWSENTINEL", "ghs_FAKEINSTALL123", "FAKE.bearer-tok", "access_token"):
+        assert leaked not in text and leaked not in outputs and leaked not in err, leaked
+    doc = json.loads(text)
+    assert set(doc) == {"capture_status", "error"}
+    assert doc["error"].count("<redacted>") == 3                        # bare PAT, ghs_ token, Bearer value
+    assert "https://api.github.com/repos/o/r" in doc["error"]           # URL kept, userinfo + query dropped
+
+
+def test_redact_masks_a_bare_fine_grained_pat():
+    assert IO.redact("diagnostic github_pat_FAKE_SENTINEL_1234567890") == "diagnostic <redacted>"
+
+
+# --------------------------------------------------------------------------- #
+# explicitly labelled authorization values are masked whole (fake values only): base64 /
+# token68 punctuation (+ / = ~) cannot leave a partial value behind, and an "Authorization:
+# token ..." value is masked even without a known GitHub prefix
+# --------------------------------------------------------------------------- #
+@pytest.mark.parametrize("raw, expected", [
+    ("Authorization: Bearer +FAKE_SENTINEL_ABCD/EFGH==", "Authorization: Bearer <redacted>"),
+    ("Authorization: Bearer PREFIX+FAKE_SENTINEL_ABCD/EFGH==", "Authorization: Bearer <redacted>"),
+    ("Authorization: token FAKE_SENTINEL_ABCD", "Authorization: token <redacted>"),
+    ("authorization=Basic FAKE_SENTINEL_ABCD==", "authorization=Basic <redacted>"),
+    ('"Authorization": "token FAKE_SENTINEL_ABCD"', '"Authorization": "token <redacted>"'),
+    ("Authorization: FAKE_SENTINEL_ABCD/+==", "Authorization: <redacted>"),
+    ("retry after Bearer a.b-c_d~e+f/FAKE_SENTINEL== failed", "retry after Bearer <redacted> failed"),
+])
+def test_redact_masks_labelled_authorization_values_whole(raw, expected):
+    assert IO.redact(raw) == expected
+
+
+@pytest.mark.parametrize("prose", [
+    "token expired; refresh the token and retry",
+    "Authorization header missing from the request",
+    "the token endpoint returned HTTP 401",
+])
+def test_redact_leaves_ordinary_token_prose_alone(prose):
+    assert IO.redact(prose) == prose
+
+
+def test_redact_masks_repeated_labelled_values_and_is_stable():
+    raw = ("Authorization: Bearer +FAKE_SENTINEL_ONE/A==; then Authorization: token FAKE_SENTINEL_TWO; "
+           "then Bearer FAKE_SENTINEL_THREE+/= and Authorization: Bearer ghs_FAKESENTINELFOUR")
+    once = IO.redact(raw)
+    assert "FAKE_SENTINEL" not in once and "FAKESENTINEL" not in once
+    assert once.count("<redacted>") == 4
+    assert IO.redact(once) == once                                        # re-redaction changes nothing
+
+
+def test_fail_masks_labelled_authorization_values_in_every_output(tmp_path, capsys):
+    out_dir = tmp_path / "out"; out_dir.mkdir()
+    gh = tmp_path / "ghout"; gh.write_text("")
+    msg = ("GET https://x:FAKE_SENTINEL_USERINFO@api.github.com/repos/o/r?sig=FAKE_SENTINEL_QUERY failed; "
+           "Authorization: Bearer +FAKE_SENTINEL_ABCD/EFGH==; "
+           "Authorization: Bearer PREFIX+FAKE_SENTINEL_ABCD/EFGH==; "
+           "Authorization: token FAKE_SENTINEL_ABCD")
+    assert IO._fail(out_dir, str(gh), msg) == 1
+    text, outputs, err = (out_dir / "capture-error.json").read_text(), gh.read_text(), capsys.readouterr().err
+    for where in (text, outputs, err):
+        assert "FAKE_SENTINEL" not in where
+    error = json.loads(text)["error"]
+    # URL kept without userinfo/query; each labelled value is masked up to the next whitespace,
+    # so its trailing ";" goes with it
+    assert error == ("GET https://api.github.com/repos/o/r failed; "
+                     "Authorization: Bearer <redacted> Authorization: Bearer <redacted> "
+                     "Authorization: token <redacted>")
+    assert len(error) <= len(IO.redact("x" * 10000))                         # the existing length bound

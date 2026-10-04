@@ -26,9 +26,10 @@ Trust and failure model (fail closed throughout):
   * ``EvidenceError`` — a CELL-LOCAL receipt/package rejection, carrying a STABLE closed
     ``code`` (see ``REJECTION_CODES``) plus bounded, sanitized ``detail``. The collector
     catches it per planned cell; downstream branches on ``code`` only, NEVER on message
-    text. A rejected or conflicting cell yields NO artifact record, so the unchanged
-    reducer reports it as ``incomplete``/``never_ran`` (per job evidence) and never as
-    eligible; capture-evidence retains the more precise rejection/ambiguity.
+    text. A rejected or conflicting cell yields NO artifact record, so it is never
+    eligible. The envelope's ``capture_cells`` carries every planned cell's verdict, code
+    and evidence class (``pep_evidence_class``): unavailable evidence stays an
+    ordinary coverage gap, while present-but-invalid evidence blocks certification.
 
 Multiplicity is treated as UNTRUSTED: the complete artifact inventory is adversarial
 input, so a cell with more than one live receipt artifact is ambiguous and suppresses
@@ -44,7 +45,7 @@ across cells, and no token, URL, query string, signed redirect, Authorization va
 temporary path is ever placed in the reducer envelope, the capture evidence, or a
 persisted output.
 
-Stdlib only (plus the committed ``pep_pkg_inspect`` and ``pep_cert_adapter``).
+Stdlib only (plus the committed ``pep_pkg_inspect``, ``pep_cert_adapter`` and ``pep_evidence_class``).
 Unit-testable via ``pytest utillities/test_pep_capture.py``.
 """
 from __future__ import annotations
@@ -60,6 +61,7 @@ import zipfile
 import zlib
 
 import pep_cert_adapter as A
+import pep_evidence_class as E
 import pep_pkg_inspect as I
 
 RECEIPT_SCHEMA = "pep-receipt/2"
@@ -118,6 +120,17 @@ _ZIP_MEMBER_ERRORS = (zipfile.BadZipFile, RuntimeError, NotImplementedError,
 
 # Verdict vocabulary for a per-planned-cell capture result.
 VERDICTS = ("accepted", "rejected", "ambiguous", "absent")
+
+# --- evidence classes: what a cell's capture outcome means for certification ---
+# One shared definition (pep_evidence_class), also used by the cert-plan reducer and the
+# invocation planner: unavailable evidence is an ordinary coverage gap, while present but
+# malformed, unsafe, ambiguous or contradictory evidence blocks certification in both modes.
+# The class comes from the stable code, not the 'rejected' verdict (capture also rejects a
+# missing or expired package).
+EVIDENCE_ACCEPTED, EVIDENCE_UNAVAILABLE, EVIDENCE_INVALID = E.ACCEPTED, E.UNAVAILABLE, E.INVALID
+EVIDENCE_CLASSES = E.CLASSES
+EVIDENCE_CLASS_BY_CODE = E.CLASS_BY_CODE
+evidence_class = E.evidence_class
 
 
 class CaptureSystemError(Exception):
@@ -790,6 +803,12 @@ def capture_to_reducer_input(*, detector_matrices, job_pages, artifact_pages, bl
             component_policy=component_policy, provenance=provenance)
     except A.AdapterError as e:
         raise CaptureSystemError("reducer envelope assembly failed: %s" % (e,))
+    # Every planned cell's capture outcome and evidence class, so the reducer can keep a
+    # present-but-invalid rejection distinct from evidence that is merely unavailable.
+    env["capture_cells"] = [
+        {"cell_id": v["cell_id"], "verdict": v["verdict"], "code": v["code"], "detail": v["detail"],
+         "evidence_class": evidence_class(v["verdict"], v["code"])}
+        for v in sorted(verdicts, key=lambda v: v["cell_id"])]
 
     evidence = _capture_evidence(planned_ids, verdicts, inventory, verified, provenance, rc_count)
     return env, evidence

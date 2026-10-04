@@ -1391,3 +1391,119 @@ def test_module_has_no_network_clock_or_extractall():
     attr_names = {n.attr for n in ast.walk(tree) if isinstance(n, ast.Attribute)}
     for banned in ("extractall", "environ", "getenv", "getenvb", "popen", "system"):
         assert banned not in attr_names, "pep_capture must not access .%s" % banned
+
+
+# --------------------------------------------------------------------------- #
+# T. evidence classification: absent/expired evidence vs present-but-invalid evidence
+# --------------------------------------------------------------------------- #
+def test_every_rejection_code_has_exactly_one_evidence_class():
+    # One explicit table: adding a rejection code without classifying it fails here.
+    assert set(C.EVIDENCE_CLASS_BY_CODE) == set(C.REJECTION_CODES)
+    assert set(C.EVIDENCE_CLASS_BY_CODE.values()) == {C.EVIDENCE_UNAVAILABLE, C.EVIDENCE_INVALID}
+    unavailable = {k for k, v in C.EVIDENCE_CLASS_BY_CODE.items() if v == C.EVIDENCE_UNAVAILABLE}
+    assert unavailable == {C.PACKAGE_ARTIFACT_ABSENT, C.PACKAGE_ARTIFACT_EXPIRED}
+
+
+@pytest.mark.parametrize("verdict,code,expected", [
+    ("accepted", None, "accepted"),
+    ("absent", None, "unavailable"),                         # no receipt, or only expired receipts
+    ("rejected", C.PACKAGE_ARTIFACT_ABSENT, "unavailable"),  # 'rejected' verdict, but nothing there
+    ("rejected", C.PACKAGE_ARTIFACT_EXPIRED, "unavailable"),
+    ("rejected", C.PACKAGE_ARCHIVE_DIGEST_MISMATCH, "invalid"),
+    ("rejected", C.MEMBER_SHA_MISMATCH, "invalid"),
+    ("rejected", C.IDENTITY_MISMATCH, "invalid"),
+    ("rejected", C.RECEIPT_SCHEMA_INVALID, "invalid"),       # malformed receipts block too
+    ("rejected", C.RECEIPT_EXPIRY_MALFORMED, "invalid"),
+    ("ambiguous", C.CELL_AMBIGUOUS_ASSOCIATIONS, "invalid"),
+    ("ambiguous", C.RECEIPT_EXPIRY_MALFORMED, "invalid"),
+    # unknown or inconsistent classification data is never harmless
+    ("rejected", "SOME_NEW_CODE", "invalid"),
+    ("rejected", None, "invalid"),
+    ("ambiguous", C.PACKAGE_ARTIFACT_EXPIRED, "invalid"),
+    ("accepted", C.MEMBER_SHA_MISMATCH, "invalid"),
+    ("absent", C.PACKAGE_ARTIFACT_ABSENT, "invalid"),
+    ("mystery", None, "invalid"),
+    (None, None, "invalid"),
+])
+def test_evidence_class_mapping(verdict, code, expected):
+    assert C.evidence_class(verdict, code) == expected
+
+
+def _two_cell_capture(tmp_path, monkeypatch, bad_kwargs=None, edit_inv=None):
+    """A valid cell plus a second cell (built with ``bad_kwargs``; ``edit_inv`` may then edit
+    the combined inventory/blobs) through the REAL capture entry point."""
+    good = build_cell(tmp_path, monkeypatch, cell_id="good", pkg_id=111, receipt_id=222)
+    bad = build_cell(tmp_path, monkeypatch, cell_id="bad", pkg_id=333, receipt_id=444, **(bad_kwargs or {}))
+    inv, blobs = good.inv + bad.inv, {**good.blobs, **bad.blobs}
+    if edit_inv is not None:
+        inv, blobs = edit_inv(bad, inv, blobs)
+    return C.capture_to_reducer_input(
+        detector_matrices=[_det(["good", "bad"])],
+        job_pages=_pages([_job("good", 1), _job("bad", 2)], "jobs"),
+        artifact_pages=_pages(inv, "artifacts"), blobs=blobs,
+        release_intent=_RI, component_policy=_POL, publication_results={"rpm": "success"},
+        provenance=_PROV)
+
+
+def _drop(pred):
+    return lambda bad, inv, blobs: ([e for e in inv if not pred(bad, e)], blobs)
+
+
+def _extra_receipt(expired):
+    def edit(bad, inv, blobs):
+        sib = dict(next(e for e in inv if e["id"] == bad.receipt_id)); sib["id"] = 445; sib["expired"] = expired
+        return inv + [sib], {**blobs, 445: bad.receipt_zip}
+    return edit
+
+
+_BAD_CELL_CASES = {
+    "no_receipt": ({}, _drop(lambda b, e: e["id"] == b.receipt_id), "absent", None, "unavailable"),
+    "receipt_expired": ({"receipt_expired": True}, None, "absent", None, "unavailable"),
+    "package_absent": ({}, _drop(lambda b, e: e["id"] == b.pkg_id),
+                       "rejected", C.PACKAGE_ARTIFACT_ABSENT, "unavailable"),
+    "package_expired": ({"pkg_expired": True}, None, "rejected", C.PACKAGE_ARTIFACT_EXPIRED, "unavailable"),
+    "archive_digest": ({"pkg_inv_digest": "sha256:" + "0" * 64}, None,
+                       "rejected", C.PACKAGE_ARCHIVE_DIGEST_MISMATCH, "invalid"),
+    "member_sha": ({"receipt_mutator": lambda r: {**r, "members": [{**r["members"][0], "sha256": "0" * 64}]}},
+                   None, "rejected", C.MEMBER_SHA_MISMATCH, "invalid"),
+    "identity": ({"receipt_mutator": lambda r: {**r, "members": [{**r["members"][0], "version": "9.9.9"}]}},
+                 None, "rejected", C.IDENTITY_MISMATCH, "invalid"),
+    "malformed_receipt": ({"receipt_mutator": lambda r: {**r, "schema": "pep-receipt/1"}}, None,
+                          "rejected", C.RECEIPT_SCHEMA_INVALID, "invalid"),
+    "two_live_receipts": ({}, _extra_receipt(False), "ambiguous", C.CELL_AMBIGUOUS_ASSOCIATIONS, "invalid"),
+    "malformed_expiry_sibling": ({}, _extra_receipt("maybe"), "ambiguous", C.RECEIPT_EXPIRY_MALFORMED, "invalid"),
+}
+
+
+@pytest.mark.parametrize("case", sorted(_BAD_CELL_CASES))
+def test_capture_classifies_every_planned_cell_in_the_envelope(tmp_path, monkeypatch, case):
+    bad_kwargs, edit, verdict, code, cls = _BAD_CELL_CASES[case]
+    env, ev = _two_cell_capture(tmp_path, monkeypatch, bad_kwargs, edit)
+    by = {x["cell_id"]: x for x in env["capture_cells"]}
+    assert [x["cell_id"] for x in env["capture_cells"]] == ["bad", "good"]      # every planned cell, sorted
+    assert by["good"] == {"cell_id": "good", "verdict": "accepted", "code": None, "detail": "",
+                          "evidence_class": "accepted"}
+    assert (by["bad"]["verdict"], by["bad"]["code"], by["bad"]["evidence_class"]) == (verdict, code, cls)
+    # the envelope entry is exactly the capture-evidence verdict plus its class
+    ev_bad = {x["cell_id"]: x for x in ev["cells"]}["bad"]
+    assert by["bad"]["detail"] == ev_bad["detail"] and by["bad"]["verdict"] == ev_bad["verdict"]
+
+
+def test_legitimate_receipt_beside_an_expired_sibling_is_accepted(tmp_path, monkeypatch):
+    # A genuinely expired older receipt is ignored; the live one verifies.
+    env, _ev = _two_cell_capture(tmp_path, monkeypatch, {}, _extra_receipt(True))
+    assert {x["cell_id"]: x["evidence_class"] for x in env["capture_cells"]} == {"good": "accepted", "bad": "accepted"}
+
+
+@pytest.mark.parametrize("fixture", ["spike0_attempt2.json", "spike0_attempt3.json"])
+def test_real_rerun_records_are_never_classified_invalid(fixture, tmp_path, monkeypatch):
+    # Preserved Spike-0 reruns: re-run-failed carries legs forward without new artifacts, and
+    # re-run-all deletes earlier artifacts. Neither leaves two live receipts for one cell, so
+    # every cell is accepted, or unavailable where the rerun left no evidence (attempt-3 full-A).
+    captured, _baseline, cids, ev = _run_mechanics(fixture, tmp_path, monkeypatch)
+    classes = {c["cell_id"]: (c["capture_evidence"] or {}).get("evidence_class") for c in captured["cells"]}
+    surviving = {a["name"] for a in _load_fixture(fixture)["artifacts"]}
+    for cid in cids:
+        expected = "accepted" if ("pkg-" + cid) in surviving else "unavailable"
+        assert classes[cid] == expected, (cid, classes)
+    assert captured["plan_resolved"] is True, captured["errors"]

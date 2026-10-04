@@ -29,16 +29,31 @@ Contract guarantees:
   - Require unique planned cell_id and artifact_name. Exact-duplicate job records are
     deduplicated; conflicting duplicates are ambiguous.
 
-Stdlib only. Reuses PEP family/channel/arch vocabulary. Identity uses an EXACT native
-comparison grounded in the shared pgEdge packaging convention (pkg/common.sh,
-pkg/build-rpm.sh, pkg/build-deb.sh) — NOT the coarse L1 normalizer. Unit-testable via
+Stdlib only (plus the stdlib-only ``pep_evidence_class``). Reuses PEP family/channel/arch
+vocabulary. Identity uses an EXACT native comparison grounded in the shared pgEdge packaging
+convention (pkg/common.sh, pkg/build-rpm.sh, pkg/build-deb.sh) — NOT the coarse L1 normalizer. Unit-testable via
 `pytest utillities/test_pep_cert_plan.py`.
 """
 from __future__ import annotations
 
+import importlib.util as _ilu
 import json
 import re
+import sys as _sys
 from collections import Counter
+from pathlib import Path as _Path
+
+# The shared capture evidence classification (stdlib only, imports nothing from this repository).
+# Reuse the already-imported module when present; otherwise load it by path and register it, so
+# every importer shares one instance (the same boundary pep_invocation_plan uses for its siblings).
+if "pep_evidence_class" in _sys.modules:
+    _ev = _sys.modules["pep_evidence_class"]
+else:
+    _ev_spec = _ilu.spec_from_file_location("pep_evidence_class",
+                                            str(_Path(__file__).with_name("pep_evidence_class.py")))
+    _ev = _ilu.module_from_spec(_ev_spec)
+    _sys.modules["pep_evidence_class"] = _ev
+    _ev_spec.loader.exec_module(_ev)
 
 SCHEMA = "cert-plan/1"
 
@@ -70,6 +85,11 @@ _REQUIRED_CELL_KEYS = ("cell_id", "artifact_name", "family", "os", "normalized_a
 
 _SHA256_RE = re.compile(r"[0-9a-fA-F]{64}\Z")
 _PG_MAJOR_RE = re.compile(r"\A[0-9]+\Z")          # build_pg_major: nonblank, digits only
+
+# Capture's per-cell outcome (envelope ``capture_cells``, produced by pep_capture). Each entry's
+# verdict, code and evidence class must agree with the shared table (pep_evidence_class) and with
+# the verified artifacts; it is then carried onto the cell as ``capture_evidence``.
+_CAPTURE_KEYS = frozenset(("cell_id", "verdict", "code", "detail", "evidence_class"))
 
 
 def _parse_simulated(value):
@@ -591,6 +611,55 @@ def _pg_build_identity(cell):
     return normalized, errors
 
 
+def _capture_classes(inp, planned_list, artifacts):
+    """``({cell_id: capture_evidence}, errors)`` from the envelope's ``capture_cells``.
+
+    An envelope without the key (one not produced by pep_capture) gives ``(None, [])`` and
+    every cell carries a null ``capture_evidence``. When the key is present, every planned
+    cell must be classified exactly once, its verdict, code and evidence class must agree with
+    the shared table (``pep_evidence_class.outcome_errors``), and the class must agree with the
+    verified artifacts: an accepted cell has its artifact, any other cell has none. Anything
+    else is an error that fails the plan closed. Never raises."""
+    if "capture_cells" not in inp:
+        return None, []
+    raw = inp["capture_cells"]
+    if not isinstance(raw, list):
+        return {}, ["capture_cells must be a list"]
+    planned_ids = {c["cell_id"] for c in planned_list
+                   if isinstance(c, dict) and isinstance(c.get("cell_id"), str)}
+    art_names = {a.get("name") for a in artifacts if isinstance(a.get("name"), str)}
+    out, errors = {}, []
+    for i, e in enumerate(raw):
+        if not isinstance(e, dict) or frozenset(e) != _CAPTURE_KEYS:
+            errors.append("capture_cells[%d] must be an object with exactly %s" % (i, sorted(_CAPTURE_KEYS)))
+            continue
+        cid, verdict, code, cls = e["cell_id"], e["verdict"], e["code"], e["evidence_class"]
+        if not _nonblank_str(cid) or cid.strip() != cid:
+            errors.append("capture_cells[%d].cell_id must be a nonblank, unpadded string" % i)
+            continue
+        if cid in out:
+            errors.append("capture_cells classifies cell %r more than once" % cid)
+            continue
+        if cid not in planned_ids:
+            errors.append("capture_cells classifies unplanned cell %r" % cid)
+            continue
+        outcome = _ev.outcome_errors(verdict, code, e["detail"], cls)
+        if outcome:
+            errors.append("capture_cells cell %r: %s" % (cid, outcome[0]))
+            continue
+        cell = next(c for c in planned_list if isinstance(c, dict) and c.get("cell_id") == cid)
+        has_artifact = isinstance(cell.get("artifact_name"), str) and cell["artifact_name"] in art_names
+        if (cls == "accepted") != has_artifact:
+            errors.append("capture_cells cell %r: evidence_class %r disagrees with the verified artifacts"
+                          % (cid, cls))
+            continue
+        out[cid] = {"verdict": verdict, "code": code, "detail": e["detail"], "evidence_class": cls}
+    missing = sorted(planned_ids - set(out))
+    if missing and not errors:
+        errors.append("capture_cells does not classify planned cell(s) %s" % missing)
+    return out, errors
+
+
 # --- top-level reducer ------------------------------------------------------
 def reduce(inp):
     """Reduce structured build/publication inputs to a deterministic cert-plan/1 dict.
@@ -679,6 +748,15 @@ def reduce(inp):
         plan_resolved = False
         errors.append("duplicate artifact_name: %s" % sorted(dup_ans))
 
+    # Capture's per-cell evidence classes are settled before any eligibility, like the checks above.
+    capture_by_cell, capture_errors = _capture_classes(inp, planned_list, artifacts)
+    if capture_errors:
+        plan_resolved = False
+        errors.extend(capture_errors)
+
+    def _capture_of(cid):
+        return capture_by_cell.get(cid) if (capture_by_cell and isinstance(cid, str)) else None
+
     # Build-PG identity is validated in a PRE-PASS (like entry_reasons/dups) so the global
     # plan_resolved stop is fully settled BEFORE any target eligibility is computed. Doing it
     # inside the cell loop made the stop order-dependent (a valid cell processed before a
@@ -696,7 +774,8 @@ def reduce(inp):
     for i, c in enumerate(planned_list):
         header = _cell_header(c)
         pg_norm = pg_norms[i]                        # reuse cached normalized PG identity
-        base = {**header, **pg_norm, "_index": i, "planned": True}
+        base = {**header, **pg_norm, "_index": i, "planned": True,
+                "capture_evidence": _capture_of(header["cell_id"])}
         if entry_reasons[i]:                        # malformed entry: fail closed, never eligible
             cells_out.append({**base, "build_state": "ambiguous", "invalid_reasons": entry_reasons[i],
                               "build_evidence": _empty_evidence(), "members": [],

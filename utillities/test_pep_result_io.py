@@ -738,3 +738,26 @@ def test_malformed_listing_writes_both_and_returns_nonzero(tmp_path):
     assert code == 1
     assert json.loads(out.read_text())["result_resolved"] is False
     assert json.loads(ledger.read_text())["listing_ok"] is False
+
+
+# --------------------------------------------------------------------------- #
+# non-ASCII digits in the current attempt: both documents are still written
+# --------------------------------------------------------------------------- #
+@pytest.mark.parametrize("bad", ["²", "١"])
+def test_non_ascii_current_attempt_still_writes_both_documents(tmp_path, bad):
+    plan = _plan([_inv("rag-a-pg17-aaaa")])
+    name = PREFIX + "rag-a-pg17-aaaa-r123-a1"
+    _write_flat(tmp_path, _summary("rag-a-pg17-aaaa"))
+    result, ledger, _summaries, code = _run(plan, [_artifact(11, name)], tmp_path, attempt=bad)
+    assert code == 1 and result["result_resolved"] is False
+    assert any("current_run_attempt" in e for e in result["errors"])
+    assert ledger["current_run_attempt"] == bad
+
+
+def test_oversized_current_attempt_still_writes_both_documents(tmp_path):
+    plan = _plan([_inv("rag-a-pg17-aaaa")])
+    name = PREFIX + "rag-a-pg17-aaaa-r123-a1"
+    _write_flat(tmp_path, _summary("rag-a-pg17-aaaa"))
+    result, ledger, _summaries, code = _run(plan, [_artifact(11, name)], tmp_path, attempt="1" * 5000)
+    assert code == 1 and result["result_resolved"] is False
+    assert ledger["current_run_attempt"] == "1" * 5000

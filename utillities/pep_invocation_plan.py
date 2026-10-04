@@ -92,6 +92,17 @@ else:
     _sys.modules["pep_verify"] = _pv
     _pv_spec.loader.exec_module(_pv)
 
+# Same reuse boundary for the shared capture evidence classification: a cert-plan cell's
+# capture_evidence is re-checked here against the one table rather than a local copy.
+if "pep_evidence_class" in _sys.modules:
+    _ev = _sys.modules["pep_evidence_class"]
+else:
+    _ev_spec = _ilu.spec_from_file_location("pep_evidence_class",
+                                            str(_Path(__file__).with_name("pep_evidence_class.py")))
+    _ev = _ilu.module_from_spec(_ev_spec)
+    _sys.modules["pep_evidence_class"] = _ev
+    _ev_spec.loader.exec_module(_ev)
+
 SCHEMA = "pep-invocation-plan/1"
 EXEC_CATALOG_SCHEMA = "pep-exec-catalog/1"
 CERT_PLAN_SCHEMA = "cert-plan/1"
@@ -125,9 +136,14 @@ GAP_SCOPE_TARGET = "target"    # a selected target that is not runnable, or runn
 GAP_SCOPE_MEMBER = "member"    # a rejected allowed runtime file in a cell that still has a target
 
 # Cell-scope reasons. A build that never became available is ``build_<build_state>`` (the cert-plan's
-# own vocabulary), except a SUCCESSFUL build job without a verified package artifact (absent,
-# rejected or ambiguous receipt): the build ran but its evidence was lost.
+# own vocabulary), except where capture explains it. Evidence capture classed ``invalid`` (present but
+# malformed, unsafe, ambiguous or contradictory) is ``package_evidence_rejected`` whatever the build
+# job did; its code and detail are the gap detail, and the result reducer blocks on it in both modes.
+# A SUCCESSFUL build job whose evidence was merely unavailable (no receipt, or an expired or vanished
+# artifact) is ``package_evidence_missing``: an ordinary coverage gap.
 GAP_PACKAGE_EVIDENCE_MISSING = "package_evidence_missing"
+GAP_PACKAGE_EVIDENCE_REJECTED = "package_evidence_rejected"
+_CAPTURE_EVIDENCE_KEYS = frozenset(("verdict", "code", "detail", "evidence_class"))
 GAP_TARGET_AMBIGUOUS = "target_ambiguous"           # >1 package with the same name + arch in one cell
 GAP_NO_RUNTIME_TARGET = "no_runtime_target"         # built, but no allowed runtime package with valid evidence
 # A selected target not runnable in the requested mode; the cert-plan's reason is the gap detail.
@@ -154,10 +170,15 @@ def _blank_to_empty(v):
     return v
 
 
+_MAX_PG_MAJOR_DIGITS = 4      # far above any PostgreSQL major; keeps int() trivially bounded
+
+
 def _is_canonical_pg_major(x):
-    """A PG major given in canonical form: a bare decimal with no padding or whitespace
-    (``"16"`` ok; ``" 16"``, ``"016"``, ``"08"`` rejected)."""
-    return isinstance(x, str) and x.isdigit() and str(int(x)) == x
+    """A PG major given in canonical form: a bare ASCII decimal of at most 4 digits with no
+    padding or whitespace (``"16"`` ok; ``" 16"``, ``"016"``, ``"08"``, ``"²"``, ``"10000"``
+    rejected)."""
+    return (isinstance(x, str) and x.isascii() and x.isdigit() and len(x) <= _MAX_PG_MAJOR_DIGITS
+            and str(int(x)) == x)
 
 
 def _is_canonical_token(s):
@@ -531,15 +552,28 @@ def _exclusions(member):
     return sorted({r for r in rs if isinstance(r, str)}) if isinstance(rs, list) else []
 
 
+def _capture_reason(cap):
+    """'CODE: detail' (or whichever is present) from a cell's capture evidence, else None."""
+    if not isinstance(cap, dict):
+        return None
+    parts = [cap.get(k) for k in ("code", "detail") if _nonblank_str(cap.get(k))]
+    return ": ".join(parts) or None
+
+
 def _no_target_gap(cell):
     """The single cell-scope gap for a planned cell that yielded no selected target."""
+    cap = cell.get("capture_evidence")
+    if isinstance(cap, dict) and cap.get("evidence_class") == "invalid":
+        return _cell_gap(cell, GAP_SCOPE_CELL, GAP_PACKAGE_EVIDENCE_REJECTED, _capture_reason(cap))
     state = cell.get("build_state")
     if state != "available":
         ev = cell.get("build_evidence") if isinstance(cell.get("build_evidence"), dict) else {}
         if (state == "incomplete" and ev.get("latest_status") == "completed"
                 and ev.get("latest_conclusion") == "success" and ev.get("artifact_present") is not True):
+            detail = "build job succeeded but no verified package artifact"
+            why = _capture_reason(cap)
             return _cell_gap(cell, GAP_SCOPE_CELL, GAP_PACKAGE_EVIDENCE_MISSING,
-                             "build job succeeded but no verified package artifact")
+                             "%s (%s)" % (detail, why) if why else detail)
         detail = next((v for v in (cell.get("ambiguity_reason"), ev.get("invalid_reason"),
                                    ev.get("latest_conclusion"), ev.get("latest_status"))
                        if _nonblank_str(v)), None)
@@ -589,7 +623,29 @@ def _cells_structure_errors(cert_plan):
         elif not (isinstance(cell.get("targets"), list)
                   and all(isinstance(t, dict) for t in cell["targets"])):
             errors.append("source cert-plan cells[%d].targets must be a list of objects" % i)
+        else:
+            errors.extend(_capture_evidence_errors(i, cell))
     return errors
+
+
+def _capture_evidence_errors(i, cell):
+    """A cell's optional ``capture_evidence`` (null when the cert-plan was not built from capture)
+    must be exactly a verdict, code, detail and evidence class that agree with the shared table
+    (``pep_evidence_class.outcome_errors``), and only accepted evidence can have produced a target.
+    Unknown, inconsistent or malformed classification fails the plan closed rather than reading
+    as harmless."""
+    cap = cell.get("capture_evidence")
+    if cap is None:
+        return []
+    if not (isinstance(cap, dict) and frozenset(cap) == _CAPTURE_EVIDENCE_KEYS):
+        return ["source cert-plan cells[%d].capture_evidence is malformed" % i]
+    outcome = _ev.outcome_errors(cap["verdict"], cap["code"], cap["detail"], cap["evidence_class"])
+    if outcome:
+        return ["source cert-plan cells[%d].capture_evidence is malformed: %s" % (i, outcome[0])]
+    if cell["targets"] and cap["evidence_class"] != "accepted":
+        return ["source cert-plan cells[%d] has targets but its capture_evidence is %r"
+                % (i, cap["evidence_class"])]
+    return []
 
 
 # --------------------------------------------------------------------------- #

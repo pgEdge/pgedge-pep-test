@@ -530,3 +530,20 @@ def test_main_missing_required_arg_is_argparse_exit(tmp_path):
     (tmp_path / "cr.json").write_text(json.dumps(_cr()))
     with pytest.raises(SystemExit):
         gate.main(["--result", str(tmp_path / "cr.json"), "--mode", "observe"])  # no --out
+
+
+@pytest.mark.parametrize("mode", ["observe", "gate"])
+@pytest.mark.parametrize("execution_status, test_verdict, legs", [
+    ("incomplete", "pass", "matched"),       # valid legs passed
+    ("incomplete", "fail", "matched"),       # a product failure does not mask it
+    ("incomplete", "not_run", "matched"),    # nor does a preview
+    ("incomplete", "not_run", "none"),       # nothing runnable at all
+    ("infra_failure", "not_run", "missing"),
+])
+def test_rejected_package_evidence_blocks_both_modes_by_name(mode, execution_status, test_verdict, legs):
+    legs = {"matched": [_leg(mode)], "missing": [_missing_leg()], "none": []}[legs]
+    cr = _cr(execution_status=execution_status, test_verdict=test_verdict, coverage_status="partial",
+             reason_code="package_evidence_rejected", legs=legs)
+    dec = _d(cr, mode)
+    assert dec["reason_code"] == "package_evidence_rejected"
+    assert _tuple(dec) == ("incomplete", "block", "failure")

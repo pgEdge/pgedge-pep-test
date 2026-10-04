@@ -101,6 +101,9 @@ _OBSERVED_SHA256_RE = re.compile(r"[0-9a-f]{64}")
 RC_DIGEST_MISMATCH = "package_digest_mismatch"
 RC_DIGEST_MISSING = "package_digest_missing"
 RC_IDENTITY_UNPROVEN = "identity_unproven"
+# The planner's gap reason for capture evidence that was present but invalid (malformed,
+# unsafe, ambiguous or contradictory); pep_invocation_plan.GAP_PACKAGE_EVIDENCE_REJECTED.
+RC_EVIDENCE_REJECTED = "package_evidence_rejected"
 # Family -> (its exact package-manager pin field, the opposite family's field).
 _PIN_FIELDS = {"rpm": ("expected_rpm", "expected_deb"), "deb": ("expected_deb", "expected_rpm")}
 
@@ -146,11 +149,18 @@ def _coerce(v):
     return str(v).strip()
 
 
+# GitHub run ids and attempts are 64-bit integers, so at most 20 decimal digits. The bound also
+# keeps int() far below Python's integer-string conversion limit (3.11+).
+_MAX_DECIMAL_DIGITS = 20
+
+
 def _is_positive_decimal_str(v):
-    """A positive decimal string ("1", "123") — the form the capture path emits for a
-    run id/attempt. Rejects booleans, ints, objects, arrays, zero, negatives and blanks
-    (isdigit() is false for "-1"/""/non-digits; "0" is rejected by the >0 guard)."""
-    return isinstance(v, str) and v.isdigit() and int(v) > 0
+    """A positive ASCII decimal string of at most 20 digits ("1", "123") — the form the capture
+    path emits for a run id/attempt. Rejects booleans, ints, objects, arrays, zero, negatives,
+    blanks, oversized values and non-ASCII digits such as "²" or "١" (isdigit() alone accepts
+    those, and int() then raises or converts them; "0" is rejected by the >0 guard)."""
+    return (isinstance(v, str) and v.isascii() and v.isdigit() and len(v) <= _MAX_DECIMAL_DIGITS
+            and int(v) > 0)
 
 
 def _is_nonneg_int(v):
@@ -507,17 +517,22 @@ def _sorted_historical(historical):
 # --------------------------------------------------------------------------- #
 # aggregate axes (kept independent)
 # --------------------------------------------------------------------------- #
-def _aggregate_execution(legs, n_expected):
+def _aggregate_execution(legs, n_expected, plan_gaps=()):
     """(execution_status, reason_code). The status is unchanged by package proof:
     missing/infra -> infra_failure; mixed preview or any incomplete leg -> incomplete;
     all preview -> preview; all completed -> completed; zero eligible is its own case.
+    A planner gap for rejected capture evidence makes an otherwise preview or completed
+    run incomplete, so neither a product failure nor a preview can mask it.
 
     The reason is the first that applies, in a fixed order: package_digest_mismatch
     (positive evidence of wrong bytes, so it outranks every absence of evidence) ->
-    missing_result -> infra_leg -> mixed_mode -> package_digest_missing ->
-    identity_unproven -> leg_incomplete. Leg reason codes are read, never recomputed."""
+    package_evidence_rejected (present-but-invalid capture evidence) -> missing_result ->
+    infra_leg -> mixed_mode -> package_digest_missing -> identity_unproven ->
+    leg_incomplete. With nothing expected, rejected evidence still names itself before
+    zero_eligible. Leg reason codes and gap reasons are read, never recomputed."""
+    rejected = any(isinstance(g, dict) and g.get("reason") == RC_EVIDENCE_REJECTED for g in plan_gaps)
     if n_expected == 0:
-        return "incomplete", "zero_eligible"
+        return "incomplete", (RC_EVIDENCE_REJECTED if rejected else "zero_eligible")
     codes = {l["reason_code"] for l in legs}
     has_missing = any(l["reconciliation"] == "missing" for l in legs)
     has_infra_matched = any(
@@ -527,7 +542,7 @@ def _aggregate_execution(legs, n_expected):
     mixed = has_preview and any(st != "preview" for st in statuses)
     if has_missing or has_infra_matched:
         status = "infra_failure"
-    elif mixed or any(st == "incomplete" for st in statuses):
+    elif mixed or rejected or any(st == "incomplete" for st in statuses):
         status = "incomplete"
     elif has_preview:                                        # all preview
         return "preview", None
@@ -535,6 +550,8 @@ def _aggregate_execution(legs, n_expected):
         return "completed", None                             # >=1 leg, all completed
     if RC_DIGEST_MISMATCH in codes:
         return status, RC_DIGEST_MISMATCH
+    if rejected:
+        return status, RC_EVIDENCE_REJECTED
     if has_missing:
         return status, "missing_result"
     if has_infra_matched:
@@ -878,7 +895,7 @@ def build_cert_result(plan, summaries, current_run_attempt):
     # ---- Phase 5: aggregate the three independent axes ----
     n_expected = len(expected)
     plan_gaps = plan["coverage_gaps"]          # validated list (Phase 0b)
-    execution_status, reason_code = _aggregate_execution(legs, n_expected)
+    execution_status, reason_code = _aggregate_execution(legs, n_expected, plan_gaps)
     test_verdict = _aggregate_verdict(legs, n_expected)
     coverage_status = _aggregate_coverage(legs, n_expected, plan_gaps)
 

@@ -22,6 +22,7 @@ on:
       - 'utillities/pep_capture.py'
       - 'utillities/pep_cert_adapter.py'
       - 'utillities/pep_cert_plan.py'
+      - 'utillities/pep_evidence_class.py'
       - 'utillities/pep_pkg_inspect.py'
       - 'utillities/pep_capture_policy.json'
 

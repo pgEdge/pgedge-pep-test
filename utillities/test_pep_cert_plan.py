@@ -8,6 +8,8 @@ import copy
 import json
 from pathlib import Path
 
+import pytest
+
 import pep_cert_plan as R
 
 FX = Path(__file__).parent / "cert_plan_fixtures"
@@ -1001,3 +1003,97 @@ def test_resolve_publication_simulated_success_is_fail_closed():
     assert R._resolve_publication("rpm", "available", {}, True) == ("publish_skipped", "simulated")
     assert R._resolve_publication("rpm", "available", {"rpm": "failure"}, True) == \
         ("publish_unconfirmed", "family_push_failure")
+
+
+# ---- capture evidence classes (envelope capture_cells -> cell capture_evidence) ----
+def _cap(cid, verdict="accepted", code=None, cls="accepted", detail=""):
+    return {"cell_id": cid, "verdict": verdict, "code": code, "detail": detail, "evidence_class": cls}
+
+
+_UNSET = object()
+
+
+def _two_cells_inp(capture_cells=_UNSET):
+    """'a' built and uploaded; 'b' built, but capture accepted no evidence for it (no artifact)."""
+    inp = _inp([_cell("a"), _cell("b")], [_job("a", 1, 1), _job("b", 2, 1)],
+               [{"name": "art-a", "id": 10, "members": [_member("pgedge-rag-server2", "x86_64")]}],
+               allowed=["pgedge-rag-server2"], pubs={"rpm": "success"})
+    if capture_cells is not _UNSET:
+        inp["capture_cells"] = capture_cells
+    return inp
+
+
+_B_INVALID = _cap("b", "rejected", "MEMBER_SHA_MISMATCH", "invalid", "member sha differs: x.rpm")
+
+
+def test_capture_classes_are_copied_onto_their_cells_without_changing_the_plan():
+    plan = R.reduce(_two_cells_inp([_cap("a"), _B_INVALID]))
+    assert plan["plan_resolved"] is True, plan["errors"]
+    by = cells_by_id(plan)
+    assert by["a"]["capture_evidence"] == {"verdict": "accepted", "code": None, "detail": "",
+                                           "evidence_class": "accepted"}
+    assert by["b"]["capture_evidence"] == {"verdict": "rejected", "code": "MEMBER_SHA_MISMATCH",
+                                           "detail": "member sha differs: x.rpm", "evidence_class": "invalid"}
+    # the classification is carried, never used to change build states, eligibility or counts
+    base = R.reduce(_two_cells_inp())
+    def strip(p):
+        return [{k: v for k, v in c.items() if k != "capture_evidence"} for c in p["cells"]]
+    assert strip(plan) == strip(base)
+    assert plan["coverage_denominators"] == base["coverage_denominators"]
+
+
+def test_an_envelope_without_capture_cells_carries_null_classes():
+    # Only pep_capture produces capture_cells; other envelopes keep their existing plan.
+    plan = R.reduce(_two_cells_inp())
+    assert plan["plan_resolved"] is True, plan["errors"]
+    assert [c["capture_evidence"] for c in plan["cells"]] == [None, None]
+
+
+@pytest.mark.parametrize("caps", [
+    pytest.param(None, id="null"),
+    pytest.param({"a": _cap("a")}, id="not_a_list"),
+    pytest.param(["a", _B_INVALID], id="entry_not_object"),
+    pytest.param([{**_cap("a"), "extra": 1}, _B_INVALID], id="unexpected_key"),
+    pytest.param([{k: v for k, v in _cap("a").items() if k != "detail"}, _B_INVALID], id="missing_key"),
+    pytest.param([_cap(" "), _B_INVALID], id="blank_cell_id"),
+    pytest.param([_cap("a"), _cap("b", "lost", None, "unavailable")], id="unknown_verdict"),
+    pytest.param([_cap("a"), _cap("b", "rejected", "MEMBER_SHA_MISMATCH", "harmless")], id="unknown_class"),
+    pytest.param([_cap("a"), _cap("b", "rejected", 7, "invalid")], id="code_not_a_string"),
+    pytest.param([_cap("a"), _cap("b", "rejected", "member sha", "invalid")], id="code_not_a_token"),
+    pytest.param([_cap("a"), _cap("b", "rejected", None, "invalid")], id="rejected_without_code"),
+    pytest.param([_cap("a"), _cap("b", "absent", "PACKAGE_ARTIFACT_ABSENT", "unavailable")], id="absent_with_code"),
+    pytest.param([_cap("a"), {**_B_INVALID, "detail": None}], id="detail_not_a_string"),
+    pytest.param([_cap("a"), _cap("b", "absent", None, "invalid")], id="absent_but_invalid"),
+    pytest.param([_cap("a"), _cap("b", "ambiguous", "CELL_AMBIGUOUS_ASSOCIATIONS", "unavailable")],
+                 id="ambiguous_but_unavailable"),
+    pytest.param([_cap("a", "accepted", None, "invalid"), _B_INVALID], id="accepted_but_invalid"),
+    pytest.param([_cap("a"), _cap("b", "rejected", "MEMBER_SHA_MISMATCH", "accepted")], id="rejected_but_accepted"),
+    pytest.param([_cap("a"), _B_INVALID, _B_INVALID], id="duplicate_cell"),
+    pytest.param([_cap("a")], id="planned_cell_unclassified"),
+    pytest.param([_cap("a"), _B_INVALID, _cap("z", "absent", None, "unavailable")], id="unplanned_cell"),
+    pytest.param([_cap("a", "rejected", "IDENTITY_MISMATCH", "invalid"), _B_INVALID], id="not_accepted_but_artifact"),
+    pytest.param([_cap("a"), _cap("b")], id="accepted_but_no_artifact"),
+    # a present classification must agree with the shared code table: no downgrade to "missing"
+    pytest.param([_cap("a"), _cap("b", "rejected", "MEMBER_SHA_MISMATCH", "unavailable")],
+                 id="member_sha_labelled_unavailable"),
+    pytest.param([_cap("a"), _cap("b", "rejected", "UNKNOWN_REASON", "unavailable")],
+                 id="unknown_code_labelled_unavailable"),
+    # malformed values reject normally instead of raising
+    pytest.param([_cap("a"), _cap("b", [], "MEMBER_SHA_MISMATCH", "invalid")], id="list_verdict"),
+    pytest.param([_cap("a"), _cap("b", {}, "MEMBER_SHA_MISMATCH", "invalid")], id="object_verdict"),
+    pytest.param([_cap("a"), _cap("b", "rejected", [], "invalid")], id="list_code"),
+    pytest.param([_cap("a"), _cap("b", "rejected", {}, "invalid")], id="object_code"),
+    pytest.param([_cap("a"), _cap("b", "rejected", "MEMBER_SHA_MISMATCH", [])], id="list_class"),
+    pytest.param([_cap([]), _B_INVALID], id="list_cell_id"),
+])
+def test_malformed_capture_classification_fails_the_plan_closed(caps):
+    plan = R.reduce(_two_cells_inp(caps))          # never raises
+    assert plan["plan_resolved"] is False
+    assert any("capture_cells" in e for e in plan["errors"]), plan["errors"]
+    assert plan["coverage_denominators"]["eligible_targets"] == 0
+
+
+def test_an_unknown_code_classified_invalid_is_carried_and_blocks_downstream():
+    plan = R.reduce(_two_cells_inp([_cap("a"), _cap("b", "rejected", "UNKNOWN_REASON", "invalid")]))
+    assert plan["plan_resolved"] is True, plan["errors"]
+    assert cells_by_id(plan)["b"]["capture_evidence"]["evidence_class"] == "invalid"

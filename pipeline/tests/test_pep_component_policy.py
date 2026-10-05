@@ -1,13 +1,13 @@
 """The single PEP-owned component/package policy.
 
-`utillities/pep_capture_policy.json` (schema pep-capture-policy/1) is the ONE authority for
+`aspects/pipeline/pep_capture_policy.json` (schema pep-capture-policy/1) is the ONE authority for
 which runtime package names belong to each logical component. These tests prove the three
 consumers -- release capture (pep_capture_io.resolve_component_policy), invocation planning
 (pep_invocation_plan) and per-run request validation (pep_request.normalize_request) -- all
 agree on the SAME mapping, that adding/retiring a mapping is a localized JSON change, and that
 a missing/malformed policy fails clearly.
 
-Stdlib only. Runs in the exact PEP Self-Test unit selection via the test_pep_*.py glob.
+Stdlib only. Runs in the exact PEP Self-Test unit selection (pipeline/tests/).
 """
 import json
 import subprocess
@@ -24,8 +24,8 @@ import pep_capture_io as IO        # noqa: E402
 import pep_invocation_plan as P    # noqa: E402
 
 _HERE = Path(__file__).resolve().parent
-_UTIL = _HERE.parents[1] / "utillities"            # the bridge loaders and the policy stay here
-_POLICY = _UTIL / "pep_capture_policy.json"
+_HELPERS = _HERE.parents[1] / "aspects" / "pipeline"   # the shared request contract, its loaders and the policy
+_POLICY = _HELPERS / "pep_capture_policy.json"
 
 
 # --------------------------------------------------------------------------- #
@@ -180,7 +180,7 @@ _LOADER_ORDERS = [
 @pytest.mark.parametrize("order", _LOADER_ORDERS,
                          ids=lambda o: "-".join(m.split("_")[-1] for m in o))
 def test_pep_request_singleton_is_import_order_independent(order):
-    paths = [str(_HERE.parent), str(_UTIL)]     # pipeline/ (the planner) + utillities/ (the bridge)
+    paths = [str(_HERE.parent), str(_HELPERS)]  # pipeline/ (planner, resolver) + aspects/pipeline/ (request, env)
     proc = subprocess.run([sys.executable, "-c", _ORDER_CHECK.format(order=order, paths=paths)],
                           cwd=str(_HERE), capture_output=True, text=True)
     assert proc.returncode == 0, (

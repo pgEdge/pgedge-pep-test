@@ -65,8 +65,10 @@ import re
 import sys as _sys
 from pathlib import Path as _Path
 
-# pep_request, pep_verify and container_resolver are shared with the standalone bridge and stay in
-# utillities/ (pipeline/ depends on utillities/, never the reverse).
+# pep_request and pep_verify are the shared integration helpers in aspects/pipeline/; container_resolver
+# is shared with the standalone regression and stays in utillities/. pipeline/ depends on both, never
+# the reverse.
+_HELPERS_DIR = _Path(__file__).resolve().parent.parent / "aspects" / "pipeline"
 _UTIL_DIR = _Path(__file__).resolve().parent.parent / "utillities"
 if str(_UTIL_DIR) not in _sys.path:
     _sys.path.append(str(_UTIL_DIR))
@@ -80,7 +82,7 @@ if str(_UTIL_DIR) not in _sys.path:
 if "pep_request" in _sys.modules:
     _pr = _sys.modules["pep_request"]
 else:
-    _pr_spec = _ilu.spec_from_file_location("pep_request", str(_UTIL_DIR / "pep_request.py"))
+    _pr_spec = _ilu.spec_from_file_location("pep_request", str(_HELPERS_DIR / "pep_request.py"))
     _pr = _ilu.module_from_spec(_pr_spec)
     _sys.modules["pep_request"] = _pr
     _pr_spec.loader.exec_module(_pr)
@@ -93,7 +95,7 @@ VALID_CHANNELS = _pr.VALID_CHANNELS              # ("release", "staging", "daily
 if "pep_verify" in _sys.modules:
     _pv = _sys.modules["pep_verify"]
 else:
-    _pv_spec = _ilu.spec_from_file_location("pep_verify", str(_UTIL_DIR / "pep_verify.py"))
+    _pv_spec = _ilu.spec_from_file_location("pep_verify", str(_HELPERS_DIR / "pep_verify.py"))
     _pv = _ilu.module_from_spec(_pv_spec)
     _sys.modules["pep_verify"] = _pv
     _pv_spec.loader.exec_module(_pv)

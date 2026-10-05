@@ -7,7 +7,7 @@ name: PEP Capture Smoke
 #
 # The two cells are TEST FIXTURES ONLY — they do not define any supported OS/arch/
 # PG/component universe. Certification policy comes from the PEP-owned capture policy
-# file (utillities/pep_capture_policy.json), never from this workflow.
+# file (aspects/pipeline/pep_capture_policy.json), never from this workflow.
 on:
   workflow_dispatch: {}
   # Durable, PATH-SCOPED (not tag/branch-name) trigger: run the smoke whenever the
@@ -24,7 +24,7 @@ on:
       - 'pipeline/pep_cert_plan.py'
       - 'pipeline/pep_evidence_class.py'
       - 'pipeline/pep_pkg_inspect.py'
-      - 'utillities/pep_capture_policy.json'
+      - 'aspects/pipeline/pep_capture_policy.json'
 
 # actions:read is granted at the caller so the reusable capture job (capped by the
 # caller token) can list + download this run's jobs and artifacts.

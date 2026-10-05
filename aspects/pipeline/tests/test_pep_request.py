@@ -1,4 +1,4 @@
-"""Unit tests for utillities.pep_request."""
+"""Unit tests for pep_request."""
 import importlib.util
 import sys
 from pathlib import Path
@@ -11,7 +11,7 @@ if "pep_request" in sys.modules:
     pr = sys.modules["pep_request"]
 else:
     _spec = importlib.util.spec_from_file_location(
-        "pep_request", str(Path(__file__).parent / "pep_request.py")
+        "pep_request", str(Path(__file__).resolve().parents[1] / "pep_request.py")
     )
     pr = importlib.util.module_from_spec(_spec)
     sys.modules["pep_request"] = pr

@@ -10,7 +10,7 @@ from pathlib import Path
 
 import pytest
 
-_p = Path(__file__).resolve().parent.parent / "aspects" / "package_management.py"
+_p = Path(__file__).resolve().parents[3] / "aspects" / "package_management.py"
 _spec = importlib.util.spec_from_file_location("pm_inst", str(_p))
 pm = importlib.util.module_from_spec(_spec)
 sys.modules["pm_inst"] = pm

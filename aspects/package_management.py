@@ -10,14 +10,14 @@ from pathlib import Path as _Path
 
 _nz_spec = _ilu.spec_from_file_location(
     "pep_version_normalize",
-    str(_Path(__file__).resolve().parent.parent / "utillities" / "pep_version_normalize.py"))
+    str(_Path(__file__).resolve().parent / "pipeline" / "pep_version_normalize.py"))
 _nz = _ilu.module_from_spec(_nz_spec)
 _nz_spec.loader.exec_module(_nz)
 
 # Pure install-decision/assertion module (owns assert_safe_version); imported by path.
 _pv_spec = _ilu.spec_from_file_location(
     "pep_verify",
-    str(_Path(__file__).resolve().parent.parent / "utillities" / "pep_verify.py"))
+    str(_Path(__file__).resolve().parent / "pipeline" / "pep_verify.py"))
 _pv = _ilu.module_from_spec(_pv_spec)
 _pv_spec.loader.exec_module(_pv)
 
@@ -250,7 +250,7 @@ def normalize_version(version_string, package_name=""):
     Returns:
         str: Normalized version string in format "1.0.0.beta2" (dots as separators) or "1.0.0" for non-beta
     """
-    # Delegates to the shared normalizer (utillities/pep_version_normalize.py),
+    # Delegates to the shared normalizer (aspects/pipeline/pep_version_normalize.py),
     # which handles RPM/deb packaging suffixes and folds the Debian pre-release
     # tilde (1.0.0~beta2 -> 1.0.0-beta2) so a deb-installed pre-release compares
     # equal to the hyphenated value from the config env files.

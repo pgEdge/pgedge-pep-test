@@ -1,4 +1,4 @@
-"""Unit tests for utillities.pep_result_summary."""
+"""Unit tests for pep_result_summary."""
 import importlib.util
 import json
 import sys
@@ -7,7 +7,7 @@ from pathlib import Path
 import pytest
 
 _spec = importlib.util.spec_from_file_location(
-    "pep_result_summary", str(Path(__file__).parent / "pep_result_summary.py")
+    "pep_result_summary", str(Path(__file__).resolve().parents[1] / "pep_result_summary.py")
 )
 prs = importlib.util.module_from_spec(_spec)
 sys.modules["pep_result_summary"] = prs

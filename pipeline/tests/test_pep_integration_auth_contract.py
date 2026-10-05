@@ -19,7 +19,7 @@ import re
 import unittest
 from pathlib import Path
 
-_REPO = Path(__file__).resolve().parent.parent
+_REPO = Path(__file__).resolve().parents[2]
 _INTEGRATION = _REPO / ".github" / "workflows" / "pep-integration.yml"
 _SELFTEST = _REPO / ".github" / "workflows" / "pep-selftest.yml"
 

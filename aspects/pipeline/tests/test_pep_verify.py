@@ -1,4 +1,4 @@
-"""Unit tests for utillities.pep_verify (pure install-decision + identity
+"""Unit tests for pep_verify (pure install-decision + identity
 assertion; no Docker)."""
 import importlib.util
 import sys
@@ -7,7 +7,7 @@ from pathlib import Path
 import pytest
 
 _spec = importlib.util.spec_from_file_location(
-    "pep_verify", str(Path(__file__).parent / "pep_verify.py"))
+    "pep_verify", str(Path(__file__).resolve().parents[1] / "pep_verify.py"))
 pv = importlib.util.module_from_spec(_spec)
 sys.modules["pep_verify"] = pv
 _spec.loader.exec_module(pv)

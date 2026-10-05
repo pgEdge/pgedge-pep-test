@@ -40,7 +40,7 @@ internally from the SINGLE PEP-owned component/package policy file (``pep_captur
 schema ``pep-capture-policy/1`` — filename/schema retained historically) keyed by the release's
 logical component; it is NEVER a caller-supplied workflow input. That file is the ONE authority
 for which package names belong to each component, shared by capture, invocation planning and
-per-run request validation (see utillities/pep_request.py). ``expected_binary_version`` in it
+per-run request validation (see aspects/pipeline/pep_request.py). ``expected_binary_version`` in it
 is capture-time identity policy; the file NEVER defines the platforms/OS/arch/PG PEP can execute
 — that universe is owned by the execution/container catalogs. Detector evidence says what was
 BUILT; the later coordinator forms the execution set by INTERSECTING the built cells with PEP's
@@ -335,7 +335,7 @@ def resolve_component_policy(policy_path, component):
     policy content is never a workflow input.
 
     This file is the SHARED authority for which package names belong to each component — the same
-    source invocation planning and per-run request validation consume (utillities/pep_request.py).
+    source invocation planning and per-run request validation consume (aspects/pipeline/pep_request.py).
     ``expected_binary_version`` is capture-time identity policy. The file NEVER carries the
     platforms/OS/arch/PG PEP can execute: that universe is owned by the execution/container
     catalogs; detector evidence says what was BUILT, and the coordinator forms the execution set

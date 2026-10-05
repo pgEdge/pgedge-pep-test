@@ -15,10 +15,10 @@ from aspects import configure_repository, package_management, machine_cleanup, m
 
 
 def _load_util(name):
-    """Load a utillities/ module by path (no package __init__ there), so these
-    imports work however this file is loaded."""
+    """Load a shared integration helper from aspects/pipeline/ by path (no package
+    __init__ there), so these imports work however this file is loaded."""
     spec = _ilu.spec_from_file_location(
-        name, os.path.join(os.path.dirname(__file__), '..', 'utillities', name + '.py'))
+        name, os.path.join(os.path.dirname(__file__), '..', 'aspects', 'pipeline', name + '.py'))
     mod = _ilu.module_from_spec(spec)
     spec.loader.exec_module(mod)
     return mod

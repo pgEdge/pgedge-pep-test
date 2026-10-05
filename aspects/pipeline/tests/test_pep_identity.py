@@ -1,4 +1,4 @@
-"""Unit tests for utillities.pep_identity."""
+"""Unit tests for pep_identity."""
 import importlib.util
 import sys
 from pathlib import Path
@@ -6,7 +6,7 @@ from pathlib import Path
 import pytest
 
 _spec = importlib.util.spec_from_file_location(
-    "pep_identity", str(Path(__file__).parent / "pep_identity.py")
+    "pep_identity", str(Path(__file__).resolve().parents[1] / "pep_identity.py")
 )
 pid = importlib.util.module_from_spec(_spec)
 sys.modules["pep_identity"] = pid

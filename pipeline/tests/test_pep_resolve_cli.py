@@ -12,7 +12,7 @@ _HERE = Path(__file__).parent
 
 
 def _load(name, filename):
-    spec = importlib.util.spec_from_file_location(name, str(_HERE / filename))
+    spec = importlib.util.spec_from_file_location(name, str(_HERE.parent / filename))
     mod = importlib.util.module_from_spec(spec)
     sys.modules[name] = mod
     spec.loader.exec_module(mod)

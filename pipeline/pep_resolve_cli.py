@@ -21,8 +21,8 @@ _spec.loader.exec_module(rz)
 if "pep_request" in sys.modules:
     _pr = sys.modules["pep_request"]
 else:
-    _pr_spec = importlib.util.spec_from_file_location(
-        "pep_request", str(Path(__file__).with_name("pep_request.py")))
+    _pr_spec = importlib.util.spec_from_file_location(   # the shared helper in aspects/pipeline/
+        "pep_request", str(Path(__file__).resolve().parent.parent / "aspects" / "pipeline" / "pep_request.py"))
     _pr = importlib.util.module_from_spec(_pr_spec)
     sys.modules[_pr_spec.name] = _pr
     _pr_spec.loader.exec_module(_pr)

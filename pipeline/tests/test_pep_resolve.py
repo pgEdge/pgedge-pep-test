@@ -1,7 +1,7 @@
 import importlib.util, sys
 from pathlib import Path
 _spec = importlib.util.spec_from_file_location(
-    "pep_resolve", str(Path(__file__).parent / "pep_resolve.py"))
+    "pep_resolve", str(Path(__file__).resolve().parents[1] / "pep_resolve.py"))
 rz = importlib.util.module_from_spec(_spec); sys.modules["pep_resolve"] = rz
 _spec.loader.exec_module(rz)
 

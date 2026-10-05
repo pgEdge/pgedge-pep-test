@@ -428,7 +428,7 @@ def test_resolve_component_policy_malformed_or_no_components(tmp_path):
 def test_committed_policy_is_valid_and_seeds_smoke():
     # The PEP-owned seed policy must exist, carry the exact schema, and resolve the smoke
     # component through the same validated path the workflow uses.
-    p = HERE.parents[1] / "utillities" / "pep_capture_policy.json"
+    p = HERE.parents[1] / "aspects" / "pipeline" / "pep_capture_policy.json"
     data = json.loads(p.read_text())
     assert data.get("schema") == IO.POLICY_SCHEMA
     assert isinstance(data.get("components"), dict) and data["components"], "policy must seed >=1 component"

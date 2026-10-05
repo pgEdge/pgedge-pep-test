@@ -11,7 +11,7 @@ name: PEP Capture
 #
 # The consumer boundary is thin and GENERIC: detector matrices, release intent and
 # publication results are EVIDENCE the caller passes. Certification component_policy is
-# PEP-OWNED and resolved internally from utillities/pep_capture_policy.json (schema
+# PEP-OWNED and resolved internally from aspects/pipeline/pep_capture_policy.json (schema
 # pep-capture-policy/1, filename/schema retained historically) by the release's logical
 # component — it is NOT a caller input. That file is the SHARED PEP-owned component/package
 # authority (which package names belong to each component), also consumed by invocation
@@ -135,7 +135,7 @@ jobs:
             --deb-matrix capture-in/deb_matrix.json \
             --release-intent capture-in/release_intent.json \
             --publication-results capture-in/publication_results.json \
-            --policy utillities/pep_capture_policy.json \
+            --policy aspects/pipeline/pep_capture_policy.json \
             --execution-mode "${EXECUTION_MODE}" \
             --out-dir capture-out \
             --tmp-root "${RUNNER_TEMP}/pep-capture-dl"

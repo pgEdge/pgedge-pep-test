@@ -7,7 +7,7 @@ coarser L1 component-version match (`component_version_matches`) reuses the
 shared `pep_version_normalize.normalize_version` (itself extracted from
 aspects.package_management.normalize_version, which now delegates to it).
 
-Stdlib only -> unit-testable in isolation via `pytest utillities/test_pep_identity.py`.
+Stdlib only -> unit-testable in isolation via `pytest aspects/pipeline/tests/test_pep_identity.py`.
 """
 from __future__ import annotations
 

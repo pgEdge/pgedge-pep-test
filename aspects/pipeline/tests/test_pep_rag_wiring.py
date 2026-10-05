@@ -13,7 +13,7 @@ import docker
 
 
 # --- load the real component-test module by path, with the daemon call neutralized ---
-_RAG_PATH = os.path.join(os.path.dirname(__file__), "..", "component-test", "test_pep_rag.py")
+_RAG_PATH = os.path.join(os.path.dirname(__file__), "..", "..", "..", "component-test", "test_pep_rag.py")
 
 
 def _load_rag():

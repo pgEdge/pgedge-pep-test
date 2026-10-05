@@ -15,7 +15,7 @@ Identity-rung classification is deliberately CONSERVATIVE about decision gate G6
     into an expected string requires a transform whose owner G6 has not decided.
     They are recorded as derivation_pending and do NOT raise identity_target.
 
-Stdlib only -> unit-testable via `pytest utillities/test_pep_request.py`.
+Stdlib only -> unit-testable via `pytest aspects/pipeline/tests/test_pep_request.py`.
 """
 from __future__ import annotations
 
@@ -25,16 +25,17 @@ import sys as _sys
 import importlib.util as _ilu
 from pathlib import Path as _Path
 
-# Sibling module (no package __init__), imported by path like the other pep_* modules.
-# It defines @dataclass types, so it MUST be registered in sys.modules under its own
-# name BEFORE exec_module — dataclass field introspection looks the module up there.
+# The shared container resolver (utillities/, also used by the standalone regression; no package
+# __init__), imported by path like the other pep_* modules. It defines @dataclass types, so it MUST
+# be registered in sys.modules under its own name BEFORE exec_module — dataclass field
+# introspection looks the module up there.
 _cr_spec = _ilu.spec_from_file_location(
-    "container_resolver", str(_Path(__file__).with_name("container_resolver.py")))
+    "container_resolver", str(_Path(__file__).resolve().parents[2] / "utillities" / "container_resolver.py"))
 _cr = _ilu.module_from_spec(_cr_spec)
 _sys.modules.setdefault("container_resolver", _cr)
 _cr_spec.loader.exec_module(_cr)
 # Default container catalog (overridable per call for tests).
-_DEFAULT_CATALOG = _Path(__file__).resolve().parent.parent / "configuration" / "containers_list.json"
+_DEFAULT_CATALOG = _Path(__file__).resolve().parents[2] / "configuration" / "containers_list.json"
 
 VALID_CHANNELS = ("release", "staging", "daily")
 VALID_FAMILIES = ("rpm", "deb")

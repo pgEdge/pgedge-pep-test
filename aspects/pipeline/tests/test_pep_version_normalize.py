@@ -1,10 +1,10 @@
-"""Unit tests for utillities.pep_version_normalize."""
+"""Unit tests for pep_version_normalize."""
 import importlib.util
 import sys
 from pathlib import Path
 
 _spec = importlib.util.spec_from_file_location(
-    "pep_version_normalize", str(Path(__file__).parent / "pep_version_normalize.py"))
+    "pep_version_normalize", str(Path(__file__).resolve().parents[1] / "pep_version_normalize.py"))
 nz = importlib.util.module_from_spec(_spec)
 sys.modules["pep_version_normalize"] = nz
 _spec.loader.exec_module(nz)

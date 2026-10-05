@@ -7,7 +7,7 @@ install's installed_package_sha256 (null when no file was verified). Report-only
 in 'observe' mode every HANDLED outcome exits 0; in 'gate' mode a product failure
 or a non-completed run exits non-zero.
 
-Stdlib only -> unit-testable via `pytest utillities/test_pep_result_summary.py`.
+Stdlib only -> unit-testable via `pytest pipeline/tests/test_pep_result_summary.py`.
 """
 from __future__ import annotations
 

@@ -15,7 +15,7 @@ from pathlib import Path
 
 import pytest
 
-_REPO_ROOT = Path(__file__).resolve().parent.parent
+_REPO_ROOT = Path(__file__).resolve().parents[2]
 _SCRIPT = _REPO_ROOT / "run_pep_tf.sh"
 
 _BASE_ARGS = [
@@ -94,7 +94,7 @@ def test_standalone_run_triggers_no_integration_behavior():
     # ANY integration behavior. Remove any integration artifacts left by other
     # tests, run a pure standalone dry-run (NO integration flags), and assert
     # this run created none of them. Relies on serial execution of the unit
-    # layer, which is how the plan runs it: `pytest utillities/test_pep_*.py`.
+    # layer, which is how the plan runs it: `pytest pipeline/tests/`.
     for f in ("test-logs/resolved-config.json", "test-logs/current-run.json",
               "test-logs/observed-identity.json"):
         try:
@@ -129,7 +129,7 @@ def test_certification_reports_effective_upgrade_false_and_runtime_agrees():
     assert data["upgrade"]["source"] == "scenario_policy", data["upgrade"]
     # The runtime UPGRADE is derived from the SAME resolved decision via --get.
     getproc = subprocess.run(
-        [sys.executable, str(_REPO_ROOT / "utillities" / "pep_resolve_cli.py"),
+        [sys.executable, str(_REPO_ROOT / "pipeline" / "pep_resolve_cli.py"),
          "--get", "upgrade"],
         cwd=str(_REPO_ROOT), capture_output=True, text=True,
     )

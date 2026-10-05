@@ -14,8 +14,7 @@ from pathlib import Path
 import pytest
 
 _HERE = Path(__file__).resolve().parent
-_PIPELINE = _HERE.parent                          # the certification modules
-_UTIL = _HERE.parents[1] / "utillities"           # the summarizer stays with the bridge
+_PIPELINE = _HERE.parent                          # the summarizer and the certification modules
 
 
 def _load(name, directory=_PIPELINE):
@@ -26,9 +25,12 @@ def _load(name, directory=_PIPELINE):
     return mod
 
 
-RS = _load("pep_result_summary", _UTIL)
+RS = _load("pep_result_summary")
 CR = _load("pep_cert_result")
 G = _load("pep_cert_gate")
+# The RAG component-test wiring suite lives with the shared helpers it drives (a test-only
+# cross-layer dependency).
+sys.path.insert(0, str(_HERE.parents[1] / "aspects" / "pipeline" / "tests"))
 import test_pep_rag_wiring as W                  # the real component test, Docker neutralized
 
 IID = "rag-debian12-amd64-pg17-0123456789abcdef"

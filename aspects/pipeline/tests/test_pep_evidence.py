@@ -1,4 +1,4 @@
-"""Docker-free unit tests for utillities.pep_evidence.record_identity_verdict:
+"""Docker-free unit tests for pep_evidence.record_identity_verdict:
 the identity verdict + evidence persistence that drives the integration RAG
 identity test. Proves evidence is persisted BEFORE the verdict (so a failing
 identity never loses it) and that attemptable rungs drive pass/fail."""
@@ -8,7 +8,7 @@ import sys
 from pathlib import Path
 
 _spec = importlib.util.spec_from_file_location(
-    "pep_evidence", str(Path(__file__).parent / "pep_evidence.py"))
+    "pep_evidence", str(Path(__file__).resolve().parents[1] / "pep_evidence.py"))
 ev_mod = importlib.util.module_from_spec(_spec)
 sys.modules["pep_evidence"] = ev_mod
 _spec.loader.exec_module(ev_mod)
@@ -275,7 +275,7 @@ def test_precondition_evidence_passes_strict_summary_validator(tmp_path):
 
 def _load_summary():
     _s = importlib.util.spec_from_file_location(
-        "pep_result_summary", str(Path(__file__).parent / "pep_result_summary.py"))
+        "pep_result_summary", str(Path(__file__).resolve().parents[3] / "pipeline" / "pep_result_summary.py"))
     prs = importlib.util.module_from_spec(_s)
     _s.loader.exec_module(prs)
     return prs

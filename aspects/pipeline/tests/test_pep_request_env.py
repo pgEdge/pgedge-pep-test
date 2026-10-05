@@ -8,8 +8,8 @@ from pathlib import Path
 import pytest
 
 _HERE = Path(__file__).resolve().parent
-_REPO_ROOT = _HERE.parent
-_MODULE = _HERE / "pep_request_env.py"
+_REPO_ROOT = _HERE.parents[2]
+_MODULE = _HERE.parent / "pep_request_env.py"
 
 _spec = _ilu.spec_from_file_location("pep_request_env", str(_MODULE))
 _env_mod = _ilu.module_from_spec(_spec)
@@ -88,7 +88,7 @@ def test_invalid_enforcement_mode_raises():
 
 def _run_cli(env):
     return subprocess.run(
-        [sys.executable, "utillities/pep_request_env.py"],
+        [sys.executable, "aspects/pipeline/pep_request_env.py"],
         cwd=str(_REPO_ROOT), env=env,
         capture_output=True, text=True,
     )

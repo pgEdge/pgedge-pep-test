@@ -376,7 +376,7 @@ jobs:
           fi
           # else (full, clean exit, manifest + identity present): no flag -> the
           # summarizer parses the manifest and JUnit drives the real verdict.
-          python3 utillities/pep_result_summary.py "${args[@]}"
+          python3 pipeline/pep_result_summary.py "${args[@]}"
       - name: Emit outputs
         id: emit
         if: always()

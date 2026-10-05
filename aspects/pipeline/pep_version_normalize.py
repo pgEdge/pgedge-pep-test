@@ -1,6 +1,6 @@
 """Canonical version normalization for PEP (L1): the single shared normalizer
 used by both the standalone package check (aspects.package_management) and the
-integration identity check (utillities.pep_identity). Stdlib only."""
+integration identity check (pep_identity). Stdlib only."""
 from __future__ import annotations
 import re
 

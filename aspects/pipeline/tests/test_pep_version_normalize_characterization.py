@@ -2,14 +2,14 @@
 aspects.package_management.normalize_version, taken BEFORE extraction.
 
 This guards against silently changing behavior while extracting the logic
-into utillities/pep_version_normalize.py (L1). Imports the current module
+into aspects/pipeline/pep_version_normalize.py (L1). Imports the current module
 by path shim (no package __init__ in aspects/ or utillities/).
 """
 import importlib.util
 import sys
 from pathlib import Path
 
-_p = Path(__file__).resolve().parent.parent / "aspects" / "package_management.py"
+_p = Path(__file__).resolve().parents[3] / "aspects" / "package_management.py"
 _spec = importlib.util.spec_from_file_location("pm_char", str(_p))
 pm = importlib.util.module_from_spec(_spec)
 sys.modules["pm_char"] = pm

@@ -7,7 +7,7 @@
 # The adapter:
 #   1. validates those facts and turns them into pep-certify.yml's existing inputs
 #      (release_intent, publication_results, execution_mode, enforcement) with
-#      utillities/pep_release_inputs.py; preview is selected only by simulated=true;
+#      pipeline/pep_release_inputs.py; preview is selected only by simulated=true;
 #   2. calls pep-certify.yml at this workflow's own commit (relative path), so the
 #      caller's single `uses: ...pep-release-certify.yml@<SHA>` pin selects the
 #      adapter, the certifier and everything the certifier runs;
@@ -110,7 +110,7 @@ jobs:
           RPM_PUBLICATION: ${{ inputs.rpm_publication }}
           DEB_PUBLICATION: ${{ inputs.deb_publication }}
           ENFORCEMENT:     ${{ inputs.enforcement }}
-        run: python3 utillities/pep_release_inputs.py compose
+        run: python3 pipeline/pep_release_inputs.py compose
 
   # --- 2. certify with the existing certifier, at this workflow's own commit ---
   certify:
@@ -187,7 +187,7 @@ jobs:
           CERT_REASON:      ${{ needs.certify.outputs.reason_code }}
           CERT_EVIDENCE:    ${{ needs.certify.outputs.evidence_artifact_name }}
           PEP_SHA:          ${{ steps.id.outputs.pep_ref }}
-        run: python3 utillities/pep_release_inputs.py summary >> "$GITHUB_STEP_SUMMARY"
+        run: python3 pipeline/pep_release_inputs.py summary >> "$GITHUB_STEP_SUMMARY"
       - name: Minimal summary (the full summary could not be written)
         if: ${{ failure() }}
         env:

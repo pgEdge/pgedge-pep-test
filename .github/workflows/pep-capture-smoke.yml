@@ -18,12 +18,12 @@ on:
       - '.github/workflows/pep-capture-smoke.yml'
       - '.github/workflows/pep-capture.yml'
       - '.github/actions/pep-package-receipt/**'
-      - 'utillities/pep_capture_io.py'
-      - 'utillities/pep_capture.py'
-      - 'utillities/pep_cert_adapter.py'
-      - 'utillities/pep_cert_plan.py'
-      - 'utillities/pep_evidence_class.py'
-      - 'utillities/pep_pkg_inspect.py'
+      - 'pipeline/pep_capture_io.py'
+      - 'pipeline/pep_capture.py'
+      - 'pipeline/pep_cert_adapter.py'
+      - 'pipeline/pep_cert_plan.py'
+      - 'pipeline/pep_evidence_class.py'
+      - 'pipeline/pep_pkg_inspect.py'
       - 'utillities/pep_capture_policy.json'
 
 # actions:read is granted at the caller so the reusable capture job (capped by the

@@ -310,6 +310,7 @@ pgedge-pep-test/
 ├── actual-output/           # Actual test outputs
 ├── test-logs/               # Test execution reports
 ├── sql/                     # SQL scripts for testing
+├── pipeline/                # Release certification (receipts, capture, plans, results, report); tests in pipeline/tests/
 ├── utillities/              # Helper utilities
 ├── run_pep_tf.sh            # Main test runner script
 └── requirements.txt         # Python dependencies

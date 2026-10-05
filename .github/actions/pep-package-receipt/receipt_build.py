@@ -28,7 +28,7 @@ and SHA-256 against the receipt; only that step closes the loop.
 
 The inspector is resolved from the action's own repository checkout (via this
 file's location), so a remote consumer needs no separate PEP checkout and the
-inspector stays centralized in ``utillities/``. Stdlib only.
+inspector stays centralized in ``pipeline/``. Stdlib only.
 """
 from __future__ import annotations
 
@@ -39,12 +39,12 @@ import re
 import sys
 
 # Resolve the centralized inspector from the action's own checkout:
-# <repo>/.github/actions/pep-package-receipt/receipt_build.py -> <repo>/utillities
+# <repo>/.github/actions/pep-package-receipt/receipt_build.py -> <repo>/pipeline
 _HERE = os.path.dirname(os.path.abspath(__file__))
 _REPO_ROOT = os.path.abspath(os.path.join(_HERE, "..", "..", ".."))
-_UTIL_DIR = os.path.join(_REPO_ROOT, "utillities")
-if _UTIL_DIR not in sys.path:
-    sys.path.insert(0, _UTIL_DIR)
+_PIPELINE_DIR = os.path.join(_REPO_ROOT, "pipeline")
+if _PIPELINE_DIR not in sys.path:
+    sys.path.insert(0, _PIPELINE_DIR)
 
 import pep_pkg_inspect as I  # noqa: E402  (path set above)
 

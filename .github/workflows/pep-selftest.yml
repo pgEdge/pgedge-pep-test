@@ -34,7 +34,9 @@ jobs:
         # out to container_resolver.py, so a regression there would break the
         # integration path without any test_pep_*.py failing — these two named
         # suites are NOT matched by the test_pep_*.py glob and must be run too.
-        run: pytest utillities/test_pep_*.py utillities/test_container_resolver.py utillities/test_ci_consolidated_report.py -v
+        # pipeline/tests/ holds the release-certification suites; the whole directory
+        # runs, so later suites there are picked up automatically too.
+        run: pytest utillities/test_pep_*.py utillities/test_container_resolver.py utillities/test_ci_consolidated_report.py pipeline/tests/ -v
         # Phase 2a: test_pep_{identity,request,result_summary,version_normalize,
         # version_normalize_characterization,resolve,request_env,bridge}.py plus the
         # two regression suites above. Phase 2b adds test_pep_{verify,install_pinned}.py.

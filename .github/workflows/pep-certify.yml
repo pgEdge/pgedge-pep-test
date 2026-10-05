@@ -139,9 +139,9 @@ jobs:
           # or malformed output document, is a genuine planner failure and fails this job (so `set -e`
           # is dropped only around the planner call, which is classified explicitly below).
           set +e
-          python3 utillities/pep_invocation_plan.py \
+          python3 pipeline/pep_invocation_plan.py \
             --cert-plan plan-in/cert-plan.json \
-            --exec-catalog utillities/pep_exec_catalog.json \
+            --exec-catalog pipeline/pep_exec_catalog.json \
             --containers configuration/containers_list.json \
             --execution-mode "${EXECUTION_MODE}" \
             --out "$out"
@@ -335,7 +335,7 @@ jobs:
           # yields a written cert-result + ledger. Its unresolved exit (1) is a HANDLED
           # result -- capture it so the aggregate keeps producing evidence.
           set +e
-          python3 utillities/pep_result_io.py \
+          python3 pipeline/pep_result_io.py \
             --plan plan-dl/invocation-plan.json \
             --artifacts-listing listing.json \
             --download-dir dl \
@@ -355,7 +355,7 @@ jobs:
           # The policy helper is pure + fail-closed: a missing/malformed cert-result still
           # yields a written BLOCK decision. Its block exit (1) is a HANDLED result.
           set +e
-          python3 utillities/pep_cert_gate.py \
+          python3 pipeline/pep_cert_gate.py \
             --result out/cert-result.json \
             --mode "${MODE}" \
             --out out/cert-decision.json
@@ -399,7 +399,7 @@ jobs:
         if: ${{ always() }}
         run: |
           set +e
-          python3 utillities/pep_cert_report.py \
+          python3 pipeline/pep_cert_report.py \
             --result out/cert-result.json \
             --decision out/cert-decision.json \
             --ledger out/collection-ledger.json \

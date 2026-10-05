@@ -16,7 +16,7 @@ on:
     paths:
       - '.github/actions/pep-package-receipt/**'
       - '.github/workflows/pep-receipt-smoke.yml'
-      - 'utillities/pep_pkg_inspect.py'
+      - 'pipeline/pep_pkg_inspect.py'
 
 permissions:
   contents: read

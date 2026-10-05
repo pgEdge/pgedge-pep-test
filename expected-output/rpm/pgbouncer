@@ -17,6 +17,6 @@
 /usr/share/licenses/pgedge-pgbouncer/COPYRIGHT
 /usr/share/man/man1/pgbouncer.1.gz
 /usr/share/man/man5/pgbouncer.5.gz
-/usr/share/pgbouncer-sbom.json
-/usr/share/pgbouncer-sbom.json.asc
+/usr/share/pgedge-pgbouncer/pgbouncer-sbom.json
+/usr/share/pgedge-pgbouncer/pgbouncer-sbom.json.asc
 /var/run/pgbouncer

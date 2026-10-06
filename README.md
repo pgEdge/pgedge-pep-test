@@ -305,11 +305,13 @@ pgedge-pep-test/
 │   ├── machine_cleanup.py       # Post-test environment cleanup
 │   ├── machine_prereq_setup.py  # OS prerequisite installation
 │   ├── package_management.py    # RPM/DEB install, upgrade, uninstall helpers
-│   └── pg_server_management.py  # PostgreSQL init, start, stop helpers
+│   ├── pg_server_management.py  # PostgreSQL init, start, stop helpers
+│   └── pipeline/                # Shared integration helpers (request contract, install verification, evidence) + component policy; tests in aspects/pipeline/tests/
 ├── expected-output/         # Expected test outputs for comparison
 ├── actual-output/           # Actual test outputs
 ├── test-logs/               # Test execution reports
 ├── sql/                     # SQL scripts for testing
+├── pipeline/                # Integration steps and release certification (resolver, summaries, receipts, capture, plans, results, report); tests in pipeline/tests/
 ├── utillities/              # Helper utilities
 ├── run_pep_tf.sh            # Main test runner script
 └── requirements.txt         # Python dependencies

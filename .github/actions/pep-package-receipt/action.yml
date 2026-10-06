@@ -1,0 +1,120 @@
+name: PEP Package Receipt
+description: >-
+  Inspect the producer's LOCAL package files (the flat directory it just uploaded
+  as a package artifact) and emit a pinned pep-receipt/2 evidence artifact binding
+  those packages to that artifact's immutable id + name + archive digest. It
+  inspects the local files after their upload, NOT the uploaded archive itself
+  (the later capture stage re-verifies the archive by immutable id). PEP-owned; it
+  does not own or replace the producer's package upload. Runner requirements:
+  Python 3 and family-appropriate package tooling (dpkg-deb for deb; rpm for rpm,
+  which this action installs on supported Ubuntu runners when absent).
+
+# CONSUMER FOOTPRINT (thin, by design): a producer build cell adds exactly
+#   (1) an `id:` on its EXISTING package upload-artifact step, and
+#   (2) one pinned invocation of this action, right after that upload.
+# This action owns package inspection, receipt generation and receipt upload.
+# It never owns or replaces the producer's package upload.
+
+inputs:
+  cell_id:
+    description: "Build-cell identity from the detector: an opaque, artifact-safe [A-Za-z0-9._-] token; this action adds no length cap of its own. Preserved VERBATIM in the receipt and (prefixed) as the receipt artifact name; never parsed here."
+    required: true
+  family:
+    description: "Package family: exactly 'rpm' or 'deb'. Every file in package_dir must match, by magic bytes."
+    required: true
+  package_dir:
+    description: "Flat directory of the package files that were just uploaded (no nested dirs, symlinks or sidecars)."
+    required: true
+  package_artifact_id:
+    description: "The immutable id of the producer's package artifact (the `artifact-id` output of its upload step)."
+    required: true
+  package_artifact_name:
+    description: "The exact name of the producer's package artifact."
+    required: true
+  package_artifact_digest:
+    description: "The producer package artifact's archive digest (the `artifact-digest` output; 'sha256:'-prefixed hex is accepted)."
+    required: true
+
+outputs:
+  receipt_artifact_id:
+    description: "Immutable id of the uploaded receipt artifact."
+    value: ${{ steps.upload.outputs.artifact-id }}
+  receipt_artifact_name:
+    description: "Name of the uploaded receipt artifact (pep-receipt-<cell_id>)."
+    value: ${{ steps.build.outputs.receipt_artifact_name }}
+  receipt_artifact_digest:
+    description: "Archive digest of the uploaded receipt artifact."
+    value: ${{ steps.upload.outputs.artifact-digest }}
+
+runs:
+  using: composite
+  steps:
+    # Verify the runtime tooling this action needs and FAIL WITH A CLEAR MESSAGE
+    # if it cannot be provided (rather than an opaque command-not-found later).
+    # Python 3 is always required. RPM tooling is needed only to inspect rpm
+    # packages and is absent on stock ubuntu runners, so it is installed when
+    # missing (via apt-get on supported Ubuntu runners). dpkg-deb (for deb) ships
+    # on ubuntu runners and is only checked, never installed.
+    - name: Ensure tooling (Python 3 + ${{ inputs.family }} package tooling)
+      shell: bash
+      env:
+        IN_FAMILY: ${{ inputs.family }}
+      run: |
+        set -euo pipefail
+        fail() { echo "pep-package-receipt: $1" >&2; exit 1; }
+        command -v python3 >/dev/null 2>&1 || fail "Python 3 is required but was not found on this runner."
+        case "$IN_FAMILY" in
+          rpm)
+            if ! command -v rpm >/dev/null 2>&1; then
+              if command -v apt-get >/dev/null 2>&1; then
+                sudo apt-get update -qq || true
+                sudo apt-get install -y -qq rpm || true
+              fi
+            fi
+            command -v rpm >/dev/null 2>&1 || fail "rpm tooling is required for family=rpm but could not be provided on this runner (no rpm present and no apt-get to install it)."
+            ;;
+          deb)
+            command -v dpkg-deb >/dev/null 2>&1 || fail "dpkg-deb is required for family=deb but was not found on this runner."
+            ;;
+          *)
+            fail "unsupported family: '$IN_FAMILY' (expected 'rpm' or 'deb')."
+            ;;
+        esac
+
+    - name: Build pep-receipt/2 (inspect packages via committed pep_pkg_inspect)
+      id: build
+      shell: bash
+      env:
+        # Inputs routed via env (never interpolated into the shell body) so no
+        # input value can break out of its argument.
+        IN_CELL_ID: ${{ inputs.cell_id }}
+        IN_FAMILY: ${{ inputs.family }}
+        IN_PACKAGE_DIR: ${{ inputs.package_dir }}
+        IN_ARTIFACT_ID: ${{ inputs.package_artifact_id }}
+        IN_ARTIFACT_NAME: ${{ inputs.package_artifact_name }}
+        IN_ARTIFACT_DIGEST: ${{ inputs.package_artifact_digest }}
+        ACTION_PATH: ${{ github.action_path }}
+        OUT_DIR: ${{ runner.temp }}/pep-package-receipt
+      run: |
+        set -euo pipefail
+        python3 "$ACTION_PATH/receipt_build.py" \
+          --cell-id "$IN_CELL_ID" \
+          --family "$IN_FAMILY" \
+          --package-dir "$IN_PACKAGE_DIR" \
+          --artifact-id "$IN_ARTIFACT_ID" \
+          --artifact-name "$IN_ARTIFACT_NAME" \
+          --artifact-digest "$IN_ARTIFACT_DIGEST" \
+          --out-dir "$OUT_DIR" \
+          --github-output "$GITHUB_OUTPUT"
+
+    # Upload EXACTLY one root file, receipt.json (path is the single file, so the
+    # artifact root contains only receipt.json regardless of the out dir).
+    # Pinned to the repository's upload-artifact SHA; fail if the receipt is
+    # missing; never overwrite (default).
+    - name: Upload receipt artifact
+      id: upload
+      uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
+      with:
+        name: ${{ steps.build.outputs.receipt_artifact_name }}
+        path: ${{ steps.build.outputs.receipt_path }}
+        if-no-files-found: error

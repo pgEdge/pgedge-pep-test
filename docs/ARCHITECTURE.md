@@ -184,6 +184,11 @@ Each test suite follows a standard workflow:
 - Remove test users
 - Comprehensive environment cleanup
 
+#### `pipeline/` (shared integration helpers)
+- The integration request contract (`pep_request.py`, `pep_request_env.py`) and the component policy (`pep_capture_policy.json`)
+- Exact-version install verification and identity evidence (`pep_verify.py`, `pep_identity.py`, `pep_evidence.py`, `pep_version_normalize.py`)
+- Used by `package_management.py`, the component tests and the top-level `pipeline/` steps; tests in `aspects/pipeline/tests/`
+
 ---
 
 ### 4. Configuration Layer

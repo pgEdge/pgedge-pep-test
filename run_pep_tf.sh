@@ -645,16 +645,16 @@ for env in "${env_list[@]}"; do
     rm -f test-logs/resolved-config.json
     PEP_CALLER_REPO="${REPO_OVERRIDE:-}" PEP_CONFIG_REPO="${CONFIG_REPO:-}" \
     PEP_CALLER_SCENARIO="${SCENARIO:-}" PEP_CFG_UPGRADE="${UPGRADE:-}" \
-      python3 utillities/pep_resolve_cli.py
+      python3 pipeline/pep_resolve_cli.py
     rc=$?; [[ "$rc" != "0" ]] && _pep_die_by_rc "$rc"
-    PEP_CHANNEL="$(python3 utillities/pep_resolve_cli.py --get repo)"
+    PEP_CHANNEL="$(python3 pipeline/pep_resolve_cli.py --get repo)"
     rc=$?; [[ "$rc" != "0" ]] && _pep_die_by_rc "$rc"
-    PEP_SCENARIO="$(python3 utillities/pep_resolve_cli.py --get scenario)"
+    PEP_SCENARIO="$(python3 pipeline/pep_resolve_cli.py --get scenario)"
     rc=$?; [[ "$rc" != "0" ]] && _pep_die_by_rc "$rc"
     # Runtime UPGRADE is the resolver's EFFECTIVE decision (certification policy
     # already folded in), read back from the SAME resolved-config.json that was
     # just written — so the artifact and the runtime cannot disagree.
-    PEP_UPGRADE="$(python3 utillities/pep_resolve_cli.py --get upgrade)"
+    PEP_UPGRADE="$(python3 pipeline/pep_resolve_cli.py --get upgrade)"
     rc=$?; [[ "$rc" != "0" ]] && _pep_die_by_rc "$rc"
     export PEP_CHANNEL PEP_SCENARIO
     export REPO="$PEP_CHANNEL"
@@ -696,7 +696,7 @@ for env in "${env_list[@]}"; do
 
     # (d) Request preflight on the COMPLETE env (rejects an incomplete/invalid
     #     request with exit 3 before any dry-run/real work happens).
-    python3 utillities/pep_request_env.py
+    python3 aspects/pipeline/pep_request_env.py
     rc=$?; [[ "$rc" != "0" ]] && _pep_die_by_rc "$rc"
 
     unset _pep_family

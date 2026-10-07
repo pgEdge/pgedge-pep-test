@@ -186,7 +186,7 @@ When no options are provided, the script runs in interactive menu mode.
 
 OPTIONS:
   --pgver <versions>      PostgreSQL versions to test (default: all)
-                          Values: 16, 17, 18, all
+                          Values: 16, 17, 18, 19, all
                           Comma-separated for multiple: 16,17
 
   --platforms <platforms>  Target platforms (default: all)
@@ -390,7 +390,8 @@ else
   echo "1) 16"
   echo "2) 17"
   echo "3) 18"
-  echo "4) All"
+  echo "4) 19"
+  echo "5) All"
   echo ""
   echo "💡 You can specify multiple environments separated by commas"
   echo "   Example: 16,17"
@@ -454,7 +455,7 @@ fi
 
 # Determine environments to run
 if [[ "$env_choice" == "all" || "$env_choice" == "All" ]]; then
-  env_list=(16 17 18)
+  env_list=(16 17 18 19)
 else
   # Split by comma and trim whitespace
   IFS=',' read -ra env_list <<< "$env_choice"

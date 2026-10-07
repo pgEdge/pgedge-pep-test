@@ -210,6 +210,11 @@ jobs:
   # attempt, so any carried-forward (previously green) leg is missing and that rerun cannot
   # certify. Recover with a fresh certification run.
   run:
+    # Display name only (the job id stays `run`): platform/arch, PG version and physical
+    # package come first so every leg reads apart, also for multi-package components; the
+    # called job adds preview/full. It must never contain the "[pep-cell:" marker, which
+    # capture reads from the caller's package-job names.
+    name: ${{ matrix.container_alias }} · PG${{ matrix.pg_major }} · ${{ matrix.package_name }}
     needs: [identity, plan]      # identity for pep_ref (per-leg checkout), plan for the matrix
     if: ${{ needs.plan.outputs.has_targets == 'true' }}
     permissions:
@@ -404,7 +409,8 @@ jobs:
             --decision out/cert-decision.json \
             --ledger out/collection-ledger.json \
             --legs dl \
-            --out out
+            --out out \
+            --markdown report-summary/summary.md
           rc=$?
           if [ "${rc}" -ne 0 ]; then
             echo "::warning::certification report generation exited ${rc}; JSON evidence is preserved"
@@ -424,6 +430,22 @@ jobs:
           name: ${{ steps.names.outputs.evidence_name }}
           path: out/
           if-no-files-found: warn
+      - name: Write the certification job summary
+        # Reporting only, after the upload so the link uses the real artifact id (no id ->
+        # no link, said plainly). The Markdown comes from the same report run above, kept
+        # outside out/ so the evidence artifact is unchanged; this never alters a decision.
+        if: ${{ always() }}
+        continue-on-error: true
+        env:
+          EVIDENCE_ARTIFACT_ID:   ${{ steps.up_evidence.outputs.artifact-id }}
+          EVIDENCE_ARTIFACT_NAME: ${{ steps.names.outputs.evidence_name }}
+        run: |
+          if [ -f pipeline/pep_result_presentation.py ]; then
+            python3 pipeline/pep_result_presentation.py certification-summary \
+              --body report-summary/summary.md >> "$GITHUB_STEP_SUMMARY"
+          else
+            printf '## PEP certification results\n\nThe results summary could not be written because the PEP implementation was not checked out. No results are shown here.\n' >> "$GITHUB_STEP_SUMMARY"
+          fi
 
   # --- 5. enforce: colour the workflow from the aggregate decision (fail closed) ---
   enforce:

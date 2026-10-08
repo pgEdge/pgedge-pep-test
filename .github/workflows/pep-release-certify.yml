@@ -186,6 +186,7 @@ jobs:
           CERT_COVERAGE:    ${{ needs.certify.outputs.coverage_status }}
           CERT_REASON:      ${{ needs.certify.outputs.reason_code }}
           CERT_EVIDENCE:    ${{ needs.certify.outputs.evidence_artifact_name }}
+          CERT_EVIDENCE_ID: ${{ needs.certify.outputs.evidence_artifact_id }}   # link only from a real upload
           PEP_SHA:          ${{ steps.id.outputs.pep_ref }}
         run: python3 pipeline/pep_release_inputs.py summary >> "$GITHUB_STEP_SUMMARY"
       - name: Minimal summary (the full summary could not be written)

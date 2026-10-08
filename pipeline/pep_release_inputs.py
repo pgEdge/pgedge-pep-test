@@ -24,7 +24,8 @@ Rules (fail closed; nothing is guessed or manufactured):
 
 CLI (environment-driven, so the facts are never interpolated into a shell script):
   compose   append the pep-certify inputs to $GITHUB_OUTPUT; exit 2 if a fact is rejected
-  summary   print the Markdown summary to stdout; never fails
+  summary   print the Markdown summary to stdout; never fails. It links the report
+            artifact only when CERT_EVIDENCE_ID is the id of a real upload.
 """
 import json
 import os
@@ -177,17 +178,44 @@ def _publication_rows(facts):
     return rows, conflicts
 
 
-def render_summary(facts, normalize_result, certify_result, outputs, pep_sha):
-    """The adapter's summary. Publication rows are the caller's own publication results;
-    the certification rows are pep-certify's outputs. Never raises."""
+# The report link comes from the shared presentation module, imported only for the summary
+# so that composing certification inputs never depends on reporting code.
+def _report_url(env):
+    """The validated report-artifact link (only from a real upload's id), or None."""
     try:
-        return _render(facts, normalize_result, certify_result, outputs, pep_sha)
+        import pep_result_presentation
+        return pep_result_presentation.artifact_url(
+            env.get("GITHUB_SERVER_URL"), env.get("GITHUB_REPOSITORY"), env.get("GITHUB_RUN_ID"),
+            env.get("CERT_EVIDENCE_ID"))
+    except Exception:
+        return None
+
+
+def _report_link_line(url, artifact_name, artifact_id=None):
+    try:
+        import pep_result_presentation
+        return pep_result_presentation.report_link_line(
+            url, artifact_name, None if url else pep_result_presentation.link_unavailable_reason(artifact_id))
+    except Exception:
+        return "**Full report:** download link unavailable."
+
+
+def render_summary(facts, normalize_result, certify_result, outputs, pep_sha, report_url=None,
+                   report_artifact_id=None):
+    """The adapter's summary. Publication rows are the caller's own publication results;
+    the certification rows are pep-certify's outputs; ``report_url`` is the validated
+    download link of the report artifact, or None (``report_artifact_id`` then explains
+    why). Never raises."""
+    try:
+        return _render(facts, normalize_result, certify_result, outputs, pep_sha, report_url,
+                       report_artifact_id)
     except Exception as exc:                   # the summary must always be written
         return ("## PEP release certification\n\nThe summary could not be rendered (%s). "
                 "normalize job: %s, certify job: %s.\n" % (_md(exc), _md(normalize_result), _md(certify_result)))
 
 
-def _render(facts, normalize_result, certify_result, outputs, pep_sha):
+def _render(facts, normalize_result, certify_result, outputs, pep_sha, report_url=None,
+            report_artifact_id=None):
     try:
         composed, rejection = compose(facts), None
     except InputError as exc:
@@ -228,7 +256,8 @@ def _render(facts, normalize_result, certify_result, outputs, pep_sha):
     else:
         headline = "Certification did not run (release inputs job: %s, certify job: %s)." % (
             _md(normalize_result), _md(certify_result))
-    out += [headline, ""]
+    out += [headline, "",
+            _report_link_line(report_url, outputs.get("evidence_artifact_name"), report_artifact_id), ""]
 
     rows = [("release", "%s %s-%s, tag %s, channel %s" % (
                 _md(facts.get("component")), _md(facts.get("version")), _md(facts.get("buildnum")),
@@ -264,8 +293,10 @@ def main(argv=None, env=None):
         return 0
     if argv == ["summary"]:
         outputs = {name: env.get(var) for name, var in CERTIFY_OUTPUTS}
+        url = _report_url(env)
         sys.stdout.write(render_summary(facts_from_env(env), env.get("NORMALIZE_RESULT"),
-                                        env.get("CERTIFY_RESULT"), outputs, env.get("PEP_SHA")))
+                                        env.get("CERTIFY_RESULT"), outputs, env.get("PEP_SHA"), url,
+                                        env.get("CERT_EVIDENCE_ID")))
         return 0
     print("usage: pep_release_inputs.py compose|summary", file=sys.stderr)
     return 64

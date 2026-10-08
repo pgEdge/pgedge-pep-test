@@ -285,6 +285,20 @@ def _summary_malformed_reason(s):
     return _status_verdict_counts_reason(s["execution_status"], s["test_verdict"], s["counts"])
 
 
+def summary_problem(s):
+    """Read-only public view of the structural check above, for reporting: the reason an
+    atomic summary would be rejected as malformed, or None. A per-run log line uses it so
+    it never presents a summary this reducer would not accept as a result."""
+    return _summary_malformed_reason(s)
+
+
+def summary_binding_errors(s, run_context):
+    """Read-only public view of the attempt-stable binding check below, for reporting: the
+    errors if a structurally valid summary's caller repository/run_id/sha/ref do not match
+    ``run_context`` (keys repository/run_id/sha/ref); [] when it binds."""
+    return _stable_binding_errors(s.get("invocation_id"), s.get("provenance") or {}, run_context)
+
+
 def _evidence(s, reason):
     """Deterministic identifying evidence for an unexpected/duplicate/malformed input.
     A dict record is preserved COMPLETE (every field: counts, identity_evidence, reason,

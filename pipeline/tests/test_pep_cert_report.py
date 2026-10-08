@@ -24,6 +24,7 @@ import pytest
 import pep_cert_gate as G
 import pep_cert_report as R
 import pep_result_io as IO
+import pep_result_presentation as P
 import pep_result_summary as RS
 
 SHA = "c" * 40
@@ -124,8 +125,8 @@ def leg_artifact(dl, name, inv, *, attempt="1", xml=None, manifest="ok", preview
 
 
 class Run:
-    def __init__(self, out, html, result, decision):
-        self.out, self.html, self.result, self.decision = out, html, result, decision
+    def __init__(self, out, html, result, decision, md=""):
+        self.out, self.html, self.result, self.decision, self.md = out, html, result, decision, md
 
     def row(self, inv):
         m = re.search(r'<tr id="leg-%s"[^>]*>.*?</tr>' % re.escape(inv), self.html, re.S)
@@ -153,18 +154,22 @@ def pipeline(tmp_path, entries, names, *, attempt="1", gaps=(), mode="observe"):
     G.main(["--result", str(out / "cert-result.json"), "--mode", mode,
             "--out", str(out / "cert-decision.json")])
     before = {f: (out / f).read_bytes() for f in JSON3}
+    md_path = tmp_path / "report-summary" / "summary.md"
     rc = R.main(["--result", str(out / "cert-result.json"),
                  "--decision", str(out / "cert-decision.json"),
                  "--ledger", str(out / "collection-ledger.json"),
-                 "--legs", str(dl), "--out", str(out)])
+                 "--legs", str(dl), "--out", str(out), "--markdown", str(md_path)])
     assert rc == 0
     for f in JSON3:  # the report never edits the authoritative JSON
         assert (out / f).read_bytes() == before[f], f
+    assert not list(out.rglob("*.md"))  # the job-summary Markdown stays out of the evidence artifact
     html = (out / "consolidated-report.html").read_text(encoding="utf-8")
     # Every real pipeline pair matches, so its decision is trusted and never flagged.
     assert 'data-trusted="true"' in verdict(html) and MISMATCH not in html
+    md = md_path.read_text(encoding="utf-8")
+    assert "not verified" not in md and "UNKNOWN" not in md
     return Run(out, html, json.loads((out / "cert-result.json").read_text()),
-               json.loads((out / "cert-decision.json").read_text()))
+               json.loads((out / "cert-decision.json").read_text()), md)
 
 
 def _nums(row):
@@ -1171,3 +1176,255 @@ def test_matched_pairs_count_only_their_test_run_issues(tmp_path):
     assert stats["decision_mismatch"] == [] and not mismatch_issues(html)
     assert stats["report_issues"] == _issue_card(html)[0] == 1
     assert _RUN_ISSUE_BANNER.findall(html) == ["test run has a report issue"]
+
+
+# --------------------------------------------------------------------------- #
+# Job-summary Markdown (--markdown): the same checked model as the HTML page
+# --------------------------------------------------------------------------- #
+def md_pair(case, result, decision, ledger=b'{"candidates": []}', legs=None):
+    """Like pair_report, also writing the job-summary Markdown; returns (html, md)."""
+    case.mkdir()
+    for f, data in zip(JSON3, (result, decision, ledger)):
+        (case / f).write_bytes(data)
+    md = case.parent / (case.name + "-summary.md")
+    rc = R.main(["--result", str(case / JSON3[0]), "--decision", str(case / JSON3[1]),
+                 "--ledger", str(case / JSON3[2]), "--legs", str(legs or case), "--out", str(case),
+                 "--markdown", str(md)])
+    assert rc == 0
+    return (case / "consolidated-report.html").read_text(encoding="utf-8"), md.read_text(encoding="utf-8")
+
+
+def md_table(md, heading):
+    """The rows of the table under the first line that starts with ``heading``, as lists of
+    cells (the header row first, then the separator, then the data rows)."""
+    lines = md.splitlines()
+    i = next(n for n, ln in enumerate(lines) if ln.startswith(heading))
+    rows = []
+    for ln in lines[i + 1:]:
+        if ln.startswith("|"):
+            rows.append([c.strip() for c in ln.strip().strip("|").split(" | ")])
+        elif rows:
+            break
+    return rows
+
+
+def _outside_code(md):
+    """The Markdown with inline code spans removed (their content is shown literally); an
+    escaped backtick is literal text, never a code-span delimiter."""
+    return re.sub(r"`[^`\n]*`", "", md.replace("\\`", ""))
+
+
+def test_markdown_preview_says_nothing_was_installed_or_tested(tmp_path):
+    leg_artifact(tmp_path / "dl", "pep-summary-a-a1", INV_A, preview=True, manifest="missing")
+    leg_artifact(tmp_path / "dl", "pep-summary-b-a1", INV_B, preview=True, manifest="missing")
+    run = pipeline(tmp_path, [planned(INV_A), planned(INV_B, alias="alma10-arm64", arch="arm64")],
+                   ["pep-summary-a-a1", "pep-summary-b-a1"])
+    md = run.md
+    assert md.startswith("**Certification: PREVIEW** · workflow `success` · `observe` mode")
+    assert "**Preview only:** 2 of 2 test runs installed nothing and ran no product tests" in md
+    rows = md_table(md, "**RPM** (2 test runs)")
+    assert rows[0] == ["Platform", "PG16"]
+    assert sorted(rows[2:]) == [["alma10-arm64", "PREVIEW"], ["oel9-amd64", "PREVIEW"]]
+    assert "PASS" not in md and "passed" not in md and "test cases" not in md
+
+
+def test_markdown_full_pass_counts_test_cases_never_as_zero_passed(tmp_path):
+    run = scenario(tmp_path, "pass")
+    md = run.md
+    assert md.startswith("**Certification: PASS** · workflow `success` · `observe` mode · policy "
+                         "`allow` (allows the workflow) · reason `clean_pass`")
+    assert md_table(md, "**RPM** (1 test run)")[2] == ["oel9-amd64", "PASS · 3 tests"]
+    assert "3 test cases: 2 passed, 0 failed, 1 skipped" in md
+    assert "observe mode only reports" not in md and "Preview only" not in md
+
+
+def test_markdown_full_fail_lists_the_failed_run_with_its_first_failure(tmp_path):
+    run = scenario(tmp_path, "fail")
+    md = run.md
+    assert md.startswith("**Certification: FAIL**")
+    assert "The workflow is green because observe mode only reports; the product certification state is FAIL." in md
+    assert md_table(md, "**RPM** (1 test run)")[2] == ["oel9-amd64", "FAIL · 1 of 4 failed"]
+    failed = md.split("**Failed test runs (1)**", 1)[1]
+    assert "- oel9-amd64 · PG16 · pgedge-rag-server2: 1 of 4 failed (first: test\\_f0: boom)" in failed
+
+
+def test_markdown_gate_mode_failure_says_it_blocks(tmp_path):
+    md = scenario(tmp_path, "fail", mode="gate").md
+    assert "policy `block` (blocks the workflow)" in md and "observe mode only reports" not in md
+
+
+def test_markdown_coverage_gaps_are_explicit_and_not_a_complete_certification(tmp_path):
+    pg19 = {"scope": "target", "arch": "amd64", "cell_id": "pepcell.v1.rpm.el-9.amd64.pg19",
+            "target_id": "pepcell.v1.rpm.el-9.amd64.pg19::pgedge-x_19", "family": "rpm", "os": "el-9",
+            "physical_package": "pgedge-x_19", "reason": "pg_not_supported", "detail": "PG 19"}
+    leg_artifact(tmp_path / "dl", "pep-summary-a-a1", INV_A)
+    run = pipeline(tmp_path, [planned(INV_A)], ["pep-summary-a-a1"], gaps=[GAP_T, pg19])
+    md = run.md
+    assert "**Coverage is incomplete:** 2 coverage gaps (2 package targets) had no test run, so even a " \
+           "green workflow is not a complete certification." in md
+    rows = md_table(md, "**Coverage gaps (2)**")
+    assert rows[0] == ["Family", "Build", "Package", "Why not tested"]
+    assert ["DEB", "bookworm · amd64", "`pgedge-rag-server2`",
+            "package-target gap: No enabled PEP test container for this OS/arch (bookworm)"] in rows
+    assert ["RPM", "el-9 · amd64", "`pgedge-x_19`", "package-target gap: pg not supported (PG 19)"] in rows
+    assert "coverage `partial`" in md
+    # A gap is never drawn as a PG result: the tested run's table has only its own PG column
+    # (the gap-only package makes this a multi-package report, so rows name their package).
+    assert md_table(md, "**RPM** (1 test run)")[0] == ["Platform", "Package", "PG16"]
+    assert "packages `pgedge-rag-server2`, `pgedge-x_19` (not tested)" in md
+
+
+def test_markdown_multi_package_rows_and_evidence_derived_pg_columns(tmp_path):
+    inv_p, inv_q = "rag-oel9-amd64-pg17-ccccccccccccccc3", "rag-oel9-amd64-pg19-ccccccccccccccc4"
+    leg_artifact(tmp_path / "dl", "pep-summary-p-a1", inv_p)
+    leg_artifact(tmp_path / "dl", "pep-summary-q-a1", inv_q, xml=junit(fail_msgs=["x"]))
+    run = pipeline(tmp_path, [planned(inv_p, pg="17", pkg="pgedge-ext_17"),
+                              planned(inv_q, pg="19", pkg="pgedge-ext_19")],
+                   ["pep-summary-p-a1", "pep-summary-q-a1"])
+    md = run.md
+    assert "packages `pgedge-ext_17`, `pgedge-ext_19`" in md and "PG 17, 19" in md
+    rows = md_table(md, "**RPM** (2 test runs)")
+    assert rows[0] == ["Platform", "Package", "PG17", "PG19"]          # never a hard-coded 16-18
+    assert ["oel9-amd64", "`pgedge-ext_17`", "PASS · 3 tests", "—"] in rows
+    assert ["oel9-amd64", "`pgedge-ext_19`", "—", "FAIL · 1 of 4 failed"] in rows
+
+
+def test_markdown_missing_run_is_shown_as_missing_never_as_a_pass(tmp_path):
+    md = scenario(tmp_path, "missing").md
+    rows = md_table(md, "**RPM** (2 test runs)")
+    assert ["alma10-arm64", "MISSING"] in rows and ["oel9-amd64", "PASS · 3 tests"] in rows
+    assert "1 passed · 1 missing" in md
+
+
+def test_markdown_report_issue_is_flagged_and_verdict_kept(tmp_path):
+    leg_artifact(tmp_path / "dl", "pep-summary-a-a1", INV_A, xml=junit(n_pass=2, n_skip=1, suite_tests=4))
+    md = pipeline(tmp_path, [planned(INV_A)], ["pep-summary-a-a1"]).md
+    assert md_table(md, "**RPM** (1 test run)")[2][1].startswith("⚠ ")
+    assert "⚠ 1 report issue: 1 test run had test-case detail that could not be attached" in md
+
+
+def test_markdown_unresolved_result_shows_the_reducer_errors(tmp_path):
+    run = scenario(tmp_path, "unresolved")
+    assert "**Certification: INCOMPLETE**" in run.md and "**Result unresolved:**" in run.md
+    for err in run.result["errors"]:
+        assert P.md_text(err, 200) in run.md
+    assert "| Platform |" not in run.md
+
+
+@pytest.mark.parametrize("other", ["empty", "fail", "preview"])
+def test_markdown_mismatched_pair_is_never_a_verified_pass(tmp_path, other):
+    good = scenario(tmp_path, "pass")
+    if other == "empty":
+        result, ledger, legs = b"{}", b'{"candidates": []}', None
+    else:
+        run = scenario(tmp_path, other)
+        result, ledger, legs = _files(run)[JSON3[0]], _files(run)[JSON3[2]], run.out.parent / "dl"
+    _, md = md_pair(tmp_path / "case", result, _files(good)[JSON3[1]], ledger, legs)
+    assert md.startswith("**Recorded decision (not verified): PASS**")
+    assert "does not match the certification result (differing fields: " in md
+    assert "**Certification: PASS**" not in md and "allows the workflow" not in md
+
+
+@pytest.mark.parametrize("decision", [b"{}", b"[]", b"not json",
+                                      json.dumps({"schema": "pep-cert-decision/1",
+                                                  "certification_state": "great"}).encode()])
+def test_markdown_invalid_decision_is_unknown(tmp_path, decision):
+    good = scenario(tmp_path, "pass")
+    _, md = md_pair(tmp_path / "case", _files(good)[JSON3[0]], decision, _files(good)[JSON3[2]],
+                    good.out.parent / "dl")
+    assert md.startswith("**Certification: UNKNOWN.**") and "PASS" not in md.split("\n", 1)[0]
+
+
+@pytest.mark.parametrize("result", [b"{not json", b"[]"])
+def test_markdown_unreadable_result_is_unavailable_never_a_trusted_state(tmp_path, result):
+    good = scenario(tmp_path, "pass")
+    _, md = md_pair(tmp_path / "case", result, _files(good)[JSON3[1]])
+    assert md.startswith("**Results unavailable.** The certification result could not be read (")
+    assert "**Recorded decision (not verified): PASS**" in md and "**Certification: PASS**" not in md
+    assert "| Platform |" not in md
+
+
+def test_markdown_hostile_values_cannot_break_tables_or_inject(tmp_path):
+    """Defensive (hand-built result): every identity value reaches the Markdown escaped."""
+    evil = 'x|y`z [a](javascript:alert(1)) <img src=x onerror=alert(1)>\n## h *b* _i_'
+    leg = _hand_leg("inv-x", "fail_no_cases", alias=evil, pg="16")
+    leg["planned_invocation"]["package"] = {"name": evil}
+    gap = dict(GAP_T, os=evil, reason=evil, detail=evil, physical_package=evil)
+    md_path = tmp_path / "s.md"
+    R.render_report({"schema": "cert-result/1", "result_resolved": True,
+                     "legs": [leg, _hand_leg("inv-y", "pass"), _hand_leg("inv-z", "pass", pg=evil)],
+                     "coverage_gaps": [gap], "release": {"logical_component": evil}},
+                    None, {}, tmp_path, markdown_path=md_path)
+    md = md_path.read_text()
+    text = _outside_code(md)                 # code-span content is displayed literally
+    assert "<img" not in text and "\n## h" not in md
+    assert not re.search(r"(?<!\\)\]\(", text)       # no unescaped "](": a link can never form
+    assert "&lt;img src=x onerror=alert(1)&gt;" in text and "\\[a\\](javascript" in text
+    for ln in md.splitlines():
+        if ln.startswith("|"):                       # every table row keeps its column count
+            cells = re.split(r"(?<!\\)\|", ln.strip())[1:-1]
+            header = [l for l in md.splitlines() if l.startswith("| ")]
+            assert len(cells) in {len(re.split(r"(?<!\\)\|", h.strip())[1:-1]) for h in header}, ln
+    assert md.startswith("**Certification: UNKNOWN.**")
+
+
+def test_markdown_write_failure_never_fails_the_report(tmp_path, capsys):
+    run = scenario(tmp_path, "pass")
+    blocker = tmp_path / "not-a-dir"
+    blocker.write_text("x")
+    case = tmp_path / "case"
+    case.mkdir()
+    for f, data in _files(run).items():
+        (case / f).write_bytes(data)
+    rc = R.main(["--result", str(case / JSON3[0]), "--decision", str(case / JSON3[1]),
+                 "--ledger", str(case / JSON3[2]), "--legs", str(run.out.parent / "dl"),
+                 "--out", str(case), "--markdown", str(blocker / "summary.md")])
+    assert rc == 0 and (case / "consolidated-report.html").is_file()
+    assert "could not write the Markdown summary" in capsys.readouterr().err
+
+
+def test_a_markdown_failure_never_replaces_the_html_report(tmp_path, monkeypatch, capsys):
+    """Regression: the HTML is written before the Markdown, and a Markdown-only exception must
+    leave it byte-identical (and the JSON untouched) instead of reaching main's fallback."""
+    run = scenario(tmp_path, "fail")
+    plain = tmp_path / "plain"
+    plain.mkdir()
+    for f, data in _files(run).items():
+        (plain / f).write_bytes(data)
+    legs = str(run.out.parent / "dl")
+    args = lambda d: ["--result", str(d / JSON3[0]), "--decision", str(d / JSON3[1]),
+                      "--ledger", str(d / JSON3[2]), "--legs", legs, "--out", str(d)]
+    assert R.main(args(plain)) == 0                       # reference: no Markdown requested
+    broken = tmp_path / "broken"
+    broken.mkdir()
+    for f, data in _files(run).items():
+        (broken / f).write_bytes(data)
+
+    def boom(*a, **k):
+        raise RuntimeError("markdown exploded")
+    monkeypatch.setattr(R, "render_markdown", boom)
+    capsys.readouterr()
+    md = tmp_path / "broken-summary.md"
+    assert R.main(args(broken) + ["--markdown", str(md)]) == 0
+    html = (broken / "consolidated-report.html").read_bytes()
+    assert html == (plain / "consolidated-report.html").read_bytes()
+    assert b"Human report incomplete" not in html
+    for f, data in _files(run).items():
+        assert (broken / f).read_bytes() == data, f
+    assert md.read_text().startswith("**Results summary not rendered.** The summary could not be built "
+                                     "(markdown exploded)")
+    assert "could not render the Markdown summary: markdown exploded" in capsys.readouterr().err
+
+
+def test_html_is_byte_identical_with_and_without_markdown(tmp_path):
+    run = scenario(tmp_path, "partial")
+    a, b = tmp_path / "a", tmp_path / "b"
+    for d in (a, b):
+        d.mkdir()
+        for f, data in _files(run).items():
+            (d / f).write_bytes(data)
+    legs = str(run.out.parent / "dl")
+    for d, extra in ((a, []), (b, ["--markdown", str(tmp_path / "b.md")])):
+        assert R.main(["--result", str(d / JSON3[0]), "--decision", str(d / JSON3[1]),
+                       "--ledger", str(d / JSON3[2]), "--legs", legs, "--out", str(d)] + extra) == 0
+    assert (a / "consolidated-report.html").read_bytes() == (b / "consolidated-report.html").read_bytes()

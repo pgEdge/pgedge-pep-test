@@ -23,6 +23,10 @@ status/policy contract:
     matrix grouped by package family, coloured by each leg's authoritative
     verdict (never a JUnit failure rate), with coverage gaps as separate rows
     that are never drawn as a pass or as a failed test.
+  * With ``--markdown PATH`` it also writes a compact Markdown view of the SAME checked
+    model (verdict with the same trust rules, the evidence-derived platform x PG table,
+    failed runs, coverage gaps, report issues) for the GitHub job summary. It is written
+    outside the evidence artifact and never computes a verdict of its own.
   * It is a REPORT, not a gate. It always exits 0. On missing, empty, partial or
     disagreeing per-case evidence it emits a truthful report issue (never a
     false pass), and on a fatal input problem it writes a fallback page that
@@ -83,6 +87,8 @@ from ci_consolidated_report import (  # noqa: E402
 )
 # The pure policy, used only to verify the decision/result pairing (never displayed).
 import pep_cert_gate  # noqa: E402
+# Safe Markdown text for the job-summary rendering of this same report.
+import pep_result_presentation as presentation  # noqa: E402
 
 RESULT_SCHEMA = "cert-result/1"
 DECISION_SCHEMA = "pep-cert-decision/1"
@@ -1322,6 +1328,226 @@ def _audit_section(result: dict) -> str:
     return "".join(parts)
 
 
+# --------------------------------------------------------------------------- #
+# Markdown summary for the GitHub job summary. It is a compact view of the SAME
+# checked model the HTML page uses (leg views and their evidence issues, the
+# evidence-derived layout, the stats and the decision/result pairing check), so it
+# never computes a verdict of its own and cannot disagree with the report.
+# --------------------------------------------------------------------------- #
+_MD_MAX_GAP_ROWS = 50
+_MD_MAX_FAILED_ROWS = 20
+_MD_CAT_WORD = {"pass": "passed", "fail": "failed", "preview": "preview", "missing": "missing",
+                "infra": "infra failure", "incomplete": "incomplete", "notrun": "not run",
+                "unknown": "unknown"}
+_MD_CAT_ORDER = ("pass", "fail", "missing", "infra", "incomplete", "notrun", "unknown", "preview")
+
+
+def _md_verdict(decision, mismatch=(), trusted=True) -> list:
+    """Headline lines with the HTML banner's trust rules: the recorded state reads as
+    verified only for a valid, self-consistent decision that matches this result."""
+    md, code = presentation.md_text, presentation.md_code
+    if not _valid_decision(decision):
+        return ["**Certification: UNKNOWN.** The certification decision is missing or invalid; "
+                "the JSON evidence in the report artifact is authoritative."]
+    state = decision["certification_state"]
+    conclusion = _txt(decision.get("workflow_conclusion")) or "unknown"
+    mode = _txt(decision.get("requested_mode")) or "unknown"
+    policy = _txt(decision.get("policy_decision")) or "unknown"
+    reason = _txt(decision.get("reason_code"))
+    pills = "workflow %s · %s mode · policy %s" % (code(conclusion), code(mode), code(policy))
+    if not trusted:
+        return ["**Recorded decision (not verified): %s** · %s" % (md(state.upper()), pills),
+                "The certification result could not be read, so this state is copied from "
+                "cert-decision.json as written and nothing here is a verified result."]
+    if mismatch:
+        return ["**Recorded decision (not verified): %s** · %s" % (md(state.upper()), pills),
+                "cert-decision.json does not match the certification result (differing fields: "
+                "%s); check both JSON files before relying on it." % md(", ".join(mismatch))]
+    if not _consistent_decision(state, conclusion, mode, policy):
+        return ["**Certification: %s** · %s" % (md(state.upper()), pills),
+                "The decision fields do not agree with each other, so the workflow result is not "
+                "explained here; see cert-decision.json."]
+    lines = ["**Certification: %s** · %s (%s)%s" % (
+        md(state.upper()), pills, _POLICY_WORDS[policy], (" · reason %s" % code(reason)) if reason else "")]
+    if policy == "report":
+        lines.append("The workflow is green because observe mode only reports; the product "
+                     "certification state is %s." % md(state.upper()))
+    return lines
+
+
+def _md_leg(v: dict, prefix: str = "") -> str:
+    """One test run's cell text: its authoritative category, its test-case counts when it
+    recorded any (worded so a count can never read as tests passed), and a warning sign
+    for a report issue."""
+    leg, cat = v["leg"], v["cat"]
+    ac = _auth_counts(leg)
+    label = "PASS" if cat == "pass" else (_CELL_LABEL.get(cat) or leg_status(leg)[0])
+    counts = ""
+    if _has_counts(leg) and ac["tests"]:
+        counts = (" · %d of %d failed" % (ac["failed"], ac["tests"]) if ac["failed"]
+                  else " · %s" % _plural(ac["tests"], "test"))
+    return "%s%s%s%s" % (presentation.md_text(prefix), "⚠ " if v["issues"] else "",
+                         presentation.md_text(label, 40), counts)
+
+
+def _md_failures(views: list) -> list:
+    """Failed test runs with their first failing test case, so a failure is findable from
+    the summary; the HTML report holds every case."""
+    failed = [v for v in views if v["cat"] == "fail"]
+    if not failed:
+        return []
+    out = ["", "**Failed test runs (%d)**" % len(failed), ""]
+    for v in failed[:_MD_MAX_FAILED_ROWS]:
+        pi, ac = _pi(v), _auth_counts(v["leg"])
+        where = " · ".join(x for x in (_txt(pi.get("container_alias")), _pg_label(_txt(pi.get("pg_major"))),
+                                       _package_name(pi)) if x)
+        clue = ("%s: %s" % v["clues"][0]) if v["clues"] else ""
+        out.append("- %s: %d of %d failed%s" % (
+            presentation.md_text(where, 160), ac["failed"], ac["tests"],
+            (" (first: %s)" % presentation.md_text(clue, 200)) if clue else ""))
+    if len(failed) > _MD_MAX_FAILED_ROWS:
+        out.append("- %d more failed test runs are listed in the report." % (len(failed) - _MD_MAX_FAILED_ROWS))
+    return out
+
+
+def _md_cell(vs: list) -> str:
+    if not vs:
+        return "—"
+    if len(vs) == 1:
+        return _md_leg(vs[0])
+    return "<br>".join(_md_leg(v, prefix=v["inv"].rsplit("-", 1)[-1][:8] + ": ") for v in vs)
+
+
+def _md_family(fam: dict, pgs: list, multi: bool) -> list:
+    if not fam["rows"]:
+        return []
+    head = ["Platform"] + (["Package"] if multi else []) + [presentation.md_text(_pg_label(pg)) for pg in pgs]
+    out = ["", "**%s** (%s)" % (presentation.md_text(fam["label"]), _plural(len(fam["views"]), "test run")),
+           "", "| %s |" % " | ".join(head), "|%s" % (" --- |" * len(head))]
+    for row in fam["rows"]:
+        cells = [presentation.md_text(row["platform"])]
+        if multi:
+            cells.append(presentation.md_code(row["package"]))
+        cells += [_md_cell(row["cells"].get(pg, [])) for pg in pgs]
+        out.append("| %s |" % " | ".join(cells))
+    return out
+
+
+def _md_gaps(gaps: list) -> list:
+    if not gaps:
+        return []
+    out = ["", "**Coverage gaps (%d)**: planned work with no test run on any PG version." % len(gaps),
+           "", "| Family | Build | Package | Why not tested |", "| --- | --- | --- | --- |"]
+    for g in gaps[:_MD_MAX_GAP_ROWS]:
+        detail = _txt(g.get("detail"))
+        out.append("| %s | %s | %s | %s%s |" % (
+            presentation.md_text(_txt(g.get("family")).upper() or "-"),
+            presentation.md_text(_gap_label(g)),
+            presentation.md_code(_txt(g.get("physical_package"))),
+            presentation.md_text(_gap_words(g), 160),
+            (" (%s)" % presentation.md_text(detail, 160)) if detail else ""))
+    if len(gaps) > _MD_MAX_GAP_ROWS:
+        out.append("")
+        out.append("%d more coverage gaps are listed in the report." % (len(gaps) - _MD_MAX_GAP_ROWS))
+    return out
+
+
+def render_markdown(result: dict, decision, views: list, layout: dict, st: dict,
+                    gaps: list, mismatch=()) -> str:
+    """The job-summary body (no heading or link; the workflow adds those after upload)."""
+    md, code = presentation.md_text, presentation.md_code
+    result = result if isinstance(result, dict) else {}
+    out = []
+    for line in _md_verdict(decision, mismatch):
+        out += [line, ""]
+    out.pop()
+    if result.get("result_resolved") is False:
+        errs = [e for e in (result.get("errors") or []) if isinstance(e, str)] \
+            if isinstance(result.get("errors"), list) else []
+        out += ["", "**Result unresolved:** the reducer failed closed (reason %s), so no test "
+                "runs are shown. Its errors:" % code(result.get("reason_code") or "-"), ""]
+        out += ["- %s" % md(e, 200) for e in errs[:10]] or ["- (no errors listed)"]
+        if len(errs) > 10:
+            out.append("- %d more in cert-result.json" % (len(errs) - 10))
+    cats, n = st["cats"], st["legs"]
+    if cats["preview"]:
+        out += ["", "**Preview only:** %d of %d test runs installed nothing and ran no product "
+                "tests. A preview is not a certification." % (cats["preview"], n)]
+    if gaps:
+        out += ["", "**Coverage is incomplete:** %s (%s) had no test run, so even a green "
+                "workflow is not a complete certification." % (
+                    _plural(len(gaps), "coverage gap"), md(_gap_breakdown(st.get("gap_scopes") or Counter()), 200))]
+
+    rel = result.get("release") if isinstance(result.get("release"), dict) else {}
+    untested = set(layout["untested_packages"])
+    pkgs = ", ".join(code(p) + (" (not tested)" if p in untested else "") for p in layout["packages"]) or "-"
+    out += ["", "%s %s (build %s) · tag %s · channel %s · %s %s" % (
+        code(rel.get("logical_component")), code(rel.get("intended_version")),
+        code(rel.get("intended_buildnum")), code(rel.get("effective_tag")), code(rel.get("channel")),
+        "packages" if len(layout["packages"]) > 1 else "package", pkgs)]
+    platforms = {r["platform"] for f in layout["families"] for r in f["rows"]}
+    parts = ["%s on %s" % (_plural(n, "test run"), _plural(len(platforms), "platform"))]
+    pg_txt = ", ".join(md(p) for p in layout["pgs"] if p)
+    if layout["pgs"]:
+        parts.append(("PG " + pg_txt) if pg_txt else "PG unknown")
+    parts += ["%d %s" % (cats[c], _MD_CAT_WORD[c]) for c in _MD_CAT_ORDER if cats[c]]
+    parts.append("coverage %s" % code(result.get("coverage_status")))
+    if st["tests"]:
+        parts.append("%d test cases: %d passed, %d failed, %d skipped" % (
+            st["tests"], st["passed"], st["failed"], st["skipped"]))
+    out += ["", " · ".join(parts)]
+
+    for fam in layout["families"]:
+        out += _md_family(fam, layout["pgs"], layout["multi"])
+    if layout["families"] and any(f["rows"] for f in layout["families"]):
+        out += ["", "Each cell is that test run's certification verdict%s. — means no test run "
+                "was planned for that platform and PG version." % (
+                    ", with its test-case counts" if st["tests"] else "")]
+    out += _md_failures(views)
+    out += _md_gaps(gaps)
+
+    issues = st.get("report_issues", st["issues"])
+    if issues:
+        out += ["", "⚠ %s: %s test-case detail that could not be attached or did not agree with "
+                "the counts%s. Verdicts above stay authoritative; see the report." % (
+                    _plural(issues, "report issue"),
+                    "%s had" % _plural(st["issues"], "test run") if st["issues"] else "no test run had",
+                    ", plus the decision/result mismatch" if mismatch else "")]
+    unexpected = len(_as_list_of_dicts(result.get("unexpected_results")))
+    hist = len(_as_list_of_dicts(result.get("historical_results")))
+    if unexpected or hist:
+        out += ["", "%s and %s are listed in the report for audit; they are not counted above." % (
+            _plural(unexpected, "rejected result record"), _plural(hist, "prior-attempt result"))]
+    return "\n".join(out) + "\n"
+
+
+def fallback_markdown(message: str, decision=None) -> str:
+    """Job-summary body when the result cannot be read: never a trusted state."""
+    head = (_md_verdict(decision, trusted=False) if _valid_decision(decision)
+            else _md_verdict(None))
+    return "\n\n".join(["**Results unavailable.** The certification result could not be read (%s), "
+                        "so no test runs, coverage or gaps are shown and nothing here is a verified "
+                        "result." % presentation.md_text(message, 200)] + head) + "\n"
+
+
+def _emit_markdown(path, build) -> None:
+    """Best effort and isolated: build and write the job-summary Markdown. Any failure here
+    only replaces the Markdown with a truthful 'not rendered' note; it never raises, so it
+    can never replace the HTML report, touch the JSON or change certification."""
+    try:
+        text = build()
+    except Exception as e:
+        print("[cert-report] WARNING: could not render the Markdown summary: %s" % e, file=sys.stderr)
+        text = ("**Results summary not rendered.** The summary could not be built (%s); the HTML "
+                "report and JSON evidence in the report artifact are unaffected.\n"
+                % presentation.md_text(str(e), 200))
+    try:
+        Path(path).parent.mkdir(parents=True, exist_ok=True)
+        Path(path).write_text(text, encoding="utf-8")
+    except Exception as e:
+        print("[cert-report] WARNING: could not write the Markdown summary: %s" % e, file=sys.stderr)
+
+
 _HEAD = ('<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"/>'
          '<meta name="viewport" content="width=device-width, initial-scale=1"/>'
          '<title>PEP Certification Report</title>%s</head><body>\n')
@@ -1329,8 +1555,9 @@ _FOOTER = ('<div class="footer">Generated from cert-result/1 + pep-cert-decision
            'The JSON evidence in this artifact is authoritative for status and policy.</div>')
 
 
-def render_report(result: dict, decision, index: dict, out_dir: Path) -> dict:
-    """Write consolidated-report.html + details/ + legs/ into out_dir."""
+def render_report(result: dict, decision, index: dict, out_dir: Path, markdown_path=None) -> dict:
+    """Write consolidated-report.html + details/ + legs/ into out_dir, and, when
+    ``markdown_path`` is given, the job-summary Markdown built from the same model."""
     out_dir = Path(out_dir)
     mismatch = _decision_mismatch(result, decision)     # verifies the pair; displays nothing
     result = result if isinstance(result, dict) else {}
@@ -1367,6 +1594,8 @@ def render_report(result: dict, decision, index: dict, out_dir: Path) -> dict:
            + _FOOTER + "\n" + _render_scripts() + "\n" + _cert_script()
            + "\n</body></html>")
     (out_dir / CONSOLIDATED_FILENAME).write_text(doc, encoding="utf-8")
+    if markdown_path is not None:      # isolated: a Markdown problem never touches the HTML above
+        _emit_markdown(markdown_path, lambda: render_markdown(result, decision, views, layout, st, gaps, mismatch))
     return {"legs": len(legs), "detail_pages": sum(1 for v in views if v["detail_href"]),
             "coverage_gaps": len(gaps), "report_issues": st["report_issues"],
             "decision_mismatch": mismatch}
@@ -1399,6 +1628,8 @@ def main(argv=None) -> int:
     ap.add_argument("--ledger", required=True, help="collection-ledger.json")
     ap.add_argument("--legs", required=True, help="directory of downloaded pep-summary artifacts")
     ap.add_argument("--out", required=True, help="output directory (the pep-certification artifact dir)")
+    ap.add_argument("--markdown", help="also write the job-summary Markdown here (keep it outside --out "
+                                       "so the evidence artifact is unchanged)")
     args = ap.parse_args(argv)
     out_dir = Path(args.out)
 
@@ -1416,14 +1647,18 @@ def main(argv=None) -> int:
     except ReportError as e:
         print("[cert-report] WARNING: %s; writing fallback report" % e, file=sys.stderr)
         _fallback(out_dir, str(e), decision)
+        if args.markdown:
+            _emit_markdown(args.markdown, lambda: fallback_markdown(str(e), decision))
         return 0  # report != gate: never fail the artifact upload
 
     try:
         index = build_summary_index(Path(args.legs), ledger)
-        stats = render_report(result, decision, index, out_dir)
+        stats = render_report(result, decision, index, out_dir, markdown_path=args.markdown)
     except Exception as e:  # pragma: no cover - defensive last resort
         print("[cert-report] WARNING: render failed: %s; writing fallback" % e, file=sys.stderr)
         _fallback(out_dir, "render failed: %s" % e, decision)
+        if args.markdown:
+            _emit_markdown(args.markdown, lambda: fallback_markdown("render failed: %s" % e, decision))
         return 0
     if stats["decision_mismatch"]:
         print("[cert-report] WARNING: cert-decision.json does not match cert-result.json "

@@ -53,6 +53,9 @@ on:
       summary_artifact:  {value: "${{ jobs.run.outputs.summary_artifact }}"}
 jobs:
   run:
+    # Display name only (the job id stays `run`): what this run does. A caller's job name
+    # carries the platform, PG version and package.
+    name: ${{ inputs.execution_mode == 'full' && 'full test (install and product tests)' || (inputs.execution_mode == 'preview' && 'preview (no install, no product tests)' || 'rejected (invalid execution mode)') }}
     runs-on: ${{ inputs.arch == 'arm64' && 'ubuntu-24.04-arm' || 'ubuntu-24.04' }}
     outputs:
       execution_status:  ${{ steps.emit.outputs.execution_status }}
@@ -413,3 +416,25 @@ jobs:
           # truthfully-classified validation/incomplete job red.
           name: ${{ steps.preflight.outputs.artifact_name }}
           path: test-logs/
+      - name: Report the result (ALWAYS)
+        # One readable line at the end of this run's log, also after a setup failure or a
+        # gate-mode failure. Reporting only: it shows summary.json only if the reducer's checks
+        # accept it and it binds to this job's run, attempt and PEP checkout; it is one test
+        # run's result, not the certification decision, and never changes the job's outcome,
+        # outputs or artifact. GITHUB_* run variables come from the runner environment.
+        if: always()
+        continue-on-error: true
+        env:
+          IN_ALIAS: ${{ inputs.container_alias }}
+          IN_PG: ${{ inputs.pg_major }}
+          IN_PKG: ${{ inputs.package_name }}
+          IN_EXEC: ${{ inputs.execution_mode }}
+          IN_PEP_REF: ${{ inputs.pep_implementation_ref }}
+          IN_INVOCATION_ID_VALID: ${{ steps.preflight.outputs.invocation_id }}
+        run: |
+          if [ -f pipeline/pep_result_presentation.py ]; then
+            EXPECTED_PEP_SHA="$(git rev-parse HEAD 2>/dev/null || true)" \
+              python3 pipeline/pep_result_presentation.py result-line test-logs/summary.json
+          else
+            printf 'PEP test-run result: UNAVAILABLE · %s · PG%s · %s: the PEP implementation was not checked out, so no result was recorded (unverified).\n' "$IN_ALIAS" "$IN_PG" "$IN_PKG"
+          fi

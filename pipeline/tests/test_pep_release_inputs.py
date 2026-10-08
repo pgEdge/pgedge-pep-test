@@ -345,6 +345,51 @@ def test_summary_cli_reads_the_environment(capsys):
     assert "Certification completed: state `pass`, reason `clean_pass`" in capsys.readouterr().out
 
 
+LINK_ENV = {"GITHUB_SERVER_URL": "https://github.com", "GITHUB_REPOSITORY": "pgEdge/pgedge-rag-server",
+            "GITHUB_RUN_ID": "37332830883"}
+
+
+def test_summary_links_the_report_artifact_from_a_real_upload(capsys):
+    env = dict(_env(REAL), **LINK_ENV, NORMALIZE_RESULT="success", CERTIFY_RESULT="success", CERT_STATE="pass",
+               CERT_CONCLUSION="success", CERT_REASON="clean_pass", PEP_SHA=PEP_SHA,
+               CERT_EVIDENCE="pep-certification-r22-a1", CERT_EVIDENCE_ID="11355805781")
+    assert RI.main(["summary"], env) == 0
+    out = capsys.readouterr().out
+    assert ("**Full report:** [Download `pep-certification-r22-a1`]"
+            "(https://github.com/pgEdge/pgedge-rag-server/actions/runs/37332830883/artifacts/11355805781)") in out
+    # The link sits between the headline and the certification table.
+    assert out.index("Certification completed") < out.index("**Full report:**") < out.index("| certification | value |")
+
+
+@pytest.mark.parametrize("artifact_id", [None, "", "0", "abc", "-5", "1" * 21])
+def test_summary_without_a_real_upload_says_so_and_links_nothing(capsys, artifact_id):
+    env = dict(_env(REAL), **LINK_ENV, NORMALIZE_RESULT="success", CERTIFY_RESULT="failure",
+               CERT_EVIDENCE="pep-certification-r22-a1")
+    if artifact_id is not None:
+        env["CERT_EVIDENCE_ID"] = artifact_id
+    assert RI.main(["summary"], env) == 0
+    out = capsys.readouterr().out
+    want = ("no report artifact ID was provided" if not artifact_id
+            else "the link could not be formed from the run context and artifact ID")
+    assert "**Full report:** download link unavailable: %s." % want in out and "](" not in out
+
+
+def test_rejected_inputs_summary_has_no_report_link():
+    s = RI.render_summary(dict(REAL, simulated="maybe"), "failure", "skipped", {}, PEP_SHA)
+    assert "Certification did not run" in s and "**Full report:** download link unavailable" in s
+    assert "](" not in s
+
+
+def test_composing_inputs_does_not_load_the_reporting_module():
+    src = (_HERE.parent / "pep_release_inputs.py").read_text()
+    assert not re.search(r"^import pep_result_presentation", src, re.M)
+
+
+def test_summary_step_passes_the_evidence_artifact_id():
+    step = ADAPTER.split("- name: Write the release certification summary", 1)[1].split("- name:", 1)[0]
+    assert "CERT_EVIDENCE_ID: ${{ needs.certify.outputs.evidence_artifact_id }}" in step
+
+
 # --------------------------------------------------------------- workflow contract
 ADAPTER = (_WF / "pep-release-certify.yml").read_text()
 CERTIFIER = (_WF / "pep-certify.yml").read_text()

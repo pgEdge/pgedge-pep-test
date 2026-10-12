@@ -250,6 +250,33 @@ def setup_alma10():
 
 
 
+# Prepended to each command that install_prerequisites_on_container() runs. That shell is
+# already root (docker exec with user="root"; SSHExecutor wraps root commands in sudo itself),
+# so a plain `sudo cmd` only needs to run `cmd`. The OS handlers keep `sudo` for standalone,
+# possibly non-root use (main()); inside a root shell it adds nothing and, on images whose PAM
+# account check rejects root (oraclelinux:9), it fails. A shell function replaces only the
+# command `sudo`, so quoted text and compound commands run exactly as written; `sudo -<option>`
+# (e.g. -u to switch user) still goes to the real sudo.
+ROOT_SUDO_SHIM = 'sudo() { case "$1" in -*) command sudo "$@" ;; *) "$@" ;; esac; }; '
+
+# Tools the shared test steps call directly in the container with no install fallback of
+# their own (binary-strip check: file; RPM SBOM key download: wget). Prerequisite setup that
+# leaves one missing must fail. sq is not listed: ensure_sq_installed() repairs apt sources
+# and retries before the SBOM step, and fails there itself. Everything else the OS handlers
+# do (repo enablement, pgdg disabling, extra packages) stays best effort, as before.
+ESSENTIAL_TOOLS = {"deb": ("file",), "rpm": ("file", "wget")}
+
+
+def root_shell_command(cmd):
+    """The argv that runs a handler command in an already-root shell (see ROOT_SUDO_SHIM)."""
+    return ["/bin/sh", "-c", ROOT_SUDO_SHIM + cmd]
+
+
+def _missing_essential_tools(container, os_id):
+    family = "deb" if os_id in ("debian", "ubuntu") else "rpm"
+    return [tool for tool in ESSENTIAL_TOOLS[family] if not _cmd_exists(container, tool)]
+
+
 def _container_run(container, cmd):
     """Run a shell command on the container as root, print a warning on failure."""
     print(f"  >>> {cmd}")
@@ -478,10 +505,11 @@ def install_prerequisites_on_container(container):
     print(f"\n--- Installing prerequisites on container ---")
 
     # Create a container-aware executor. Commands are run through /bin/sh so
-    # shell operators (&&, |, >, ;) work correctly.
+    # shell operators (&&, |, >, ;) work correctly. They run as root, where a plain
+    # sudo is a pass-through (see ROOT_SUDO_SHIM).
     def container_executor(cmd):
         print(f"\n>>> Running: {cmd}")
-        exit_code, output = container.exec_run(["/bin/sh", "-c", cmd], user="root")
+        exit_code, output = container.exec_run(root_shell_command(cmd), user="root")
         if exit_code != 0:
             print(f"WARNING: Command failed (exit={exit_code}): {output.decode()[:200]}")
         return exit_code
@@ -547,6 +575,11 @@ def install_prerequisites_on_container(container):
             return True, f"{os_id} {major}", "Unsupported OS - prerequisites skipped"
     except Exception as e:
         raise Exception(f"Failed to install prerequisites: {str(e)}")
+
+    missing = _missing_essential_tools(container, os_id)
+    if missing:
+        raise Exception(f"Failed to install prerequisites: essential tools missing on "
+                        f"{os_id} {major}: {', '.join(missing)}")
 
     message = f"Prerequisites installed successfully for {os_id} {major}"
     print(f"\n✅ {message}")

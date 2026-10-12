@@ -1,0 +1,156 @@
+name: OEL9 native smoke (spike)
+# Temporary spike caller, kept off the production fix branch. It runs the fixed PEP prerequisite
+# setup on native amd64 runners against the already-published daily RAG v2.0.0-test2 el9 RPM, with
+# the inputs the oel9-amd64 legs of RAG Release run 38242831031 used. A smoke only: no detector,
+# capture, receipts, plan or reducer, so it is not a certification. It fires only on a push to its
+# own branch. Observe mode keeps failing legs green, so `assert` checks the three atomic summaries.
+on:
+  push:
+    branches: [spike/oel9-native-smoke]
+permissions:
+  contents: read
+jobs:
+  smoke:
+    name: oel9-amd64 · PG${{ matrix.pg }} · pgedge-rag-server2
+    strategy:
+      fail-fast: false
+      matrix:
+        pg: ["16", "17", "18"]
+    uses: ./.github/workflows/pep-integration.yml
+    with:
+      component: rag
+      package_name: pgedge-rag-server2
+      channel: daily
+      expected_version: "2.0.0"
+      expected_buildnum: test2_1
+      effective_tag: v2.0.0-test2
+      expected_rpm: 2.0.0-test2_1.el9
+      container_alias: oel9-amd64
+      pg_major: ${{ matrix.pg }}
+      family: rpm
+      arch: amd64
+      scenario: certification
+      mode: observe
+      execution_mode: full
+      invocation_id: oel9-smoke-pg${{ matrix.pg }}
+      pep_implementation_ref: ${{ github.sha }}
+
+  # Informational, never gating: the call the original setup made, on today's amd64 image,
+  # without and then with the fix's sudo function, in a container created like PEP creates one.
+  control:
+    name: control · root sudo on oraclelinux:9 (amd64)
+    runs-on: ubuntu-24.04
+    permissions: {}
+    steps:
+      - name: Unshimmed vs shimmed root sudo
+        run: |
+          c="sudo-control-${GITHUB_RUN_ID}"
+          docker run -dit --privileged --platform linux/amd64 --name "$c" oraclelinux:9 /bin/bash >/dev/null
+          digest=$(docker image inspect oraclelinux:9 --format '{{index .RepoDigests 0}}')
+          rc0=0; docker exec -u root "$c" /bin/sh -c "dnf install -y sudo" >/dev/null 2>&1 || rc0=$?
+          rc1=0; out1=$(docker exec -u root "$c" /bin/sh -c "sudo dnf install -y file" 2>&1) || rc1=$?
+          # shellcheck disable=SC2016  # the fix's function, passed literally to the container shell
+          shim='sudo() { case "$1" in -*) command sudo "$@" ;; *) "$@" ;; esac; }; '
+          rc2=0; out2=$(docker exec -u root "$c" /bin/sh -c "${shim}sudo dnf install -y file" 2>&1) || rc2=$?
+          docker rm -f "$c" >/dev/null
+          {
+            echo "### Control: root sudo on oraclelinux:9 (amd64)"
+            echo "- image: \`$digest\`"
+            echo "- \`dnf install -y sudo\`: exit $rc0"
+            echo "- unshimmed \`sudo dnf install -y file\`: exit $rc1 $(printf '%s\n' "$out1" | grep -m1 -i 'pam' || true)"
+            echo "- shimmed \`sudo dnf install -y file\`: exit $rc2 $(printf '%s\n' "$out2" | grep -m1 -i 'pam' || true)"
+          } | tee -a "$GITHUB_STEP_SUMMARY"
+
+  assert:
+    name: assert smoke summaries
+    needs: smoke
+    if: always()
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803  # v6.1.0
+        with: {fetch-depth: 0}
+      - name: This revision contains the fix commit
+        run: git merge-base --is-ancestor e6037b04bc5719cc322979c22b05f61b4e1495a1 "$GITHUB_SHA"
+      - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131  # v7.0.0
+        with:
+          pattern: pep-summary-rag-rpm-amd64-pg*-daily-oel9-amd64-certification-full-oel9-smoke-pg*-r${{ github.run_number }}-a${{ github.run_attempt }}
+          path: summaries
+      - name: Every summary is present, bound to this run and revision, and clean
+        env:
+          EXPECTED_SHA256: 85365ea0f62295435fb29c8cd49139e0cd3ab17c63767c53cd9772d6a4f5075d
+          EXPECTED_RPM: 2.0.0-test2_1.el9
+        run: |
+          python3 - <<'PY'
+          import json, os, sys
+          import xml.etree.ElementTree as ET
+          from pathlib import Path
+
+          env = os.environ
+          run_id, attempt, run_no = env["GITHUB_RUN_ID"], env["GITHUB_RUN_ATTEMPT"], env["GITHUB_RUN_NUMBER"]
+          sha, digest = env["GITHUB_SHA"], env["EXPECTED_SHA256"]
+          skips = {"test_rag_component_upgrade", "test_rag_component_version", "test_rag_binary_version"}
+          fixed = {"test_install_prerequisites", "test_verify_sbom", "test_rag_binary_stripped"}
+          problems, rows = [], []
+
+          def check(cond, what):
+              if not cond:
+                  problems.append(what)
+
+          root = Path("summaries")
+          found = sorted(p.name for p in root.iterdir()) if root.is_dir() else []
+          names = {pg: ("pep-summary-rag-rpm-amd64-pg%s-daily-oel9-amd64-certification-full-oel9-smoke-pg%s-r%s-a%s"
+                        % (pg, pg, run_no, attempt)) for pg in ("16", "17", "18")}
+          check(found == sorted(names.values()), "summary artifacts %s != expected %s" % (found, sorted(names.values())))
+
+          for pg, name in names.items():
+              d = root / name
+              if not (d / "summary.json").is_file():
+                  problems.append("PG%s: summary.json missing" % pg)
+                  continue
+              s = json.loads((d / "summary.json").read_text())
+              inst = json.loads((d / "install-evidence.json").read_text())
+              prov = s.get("provenance") or {}
+              c = s.get("counts") or {}
+              tag = "PG%s: " % pg
+              check(s.get("invocation_id") == "oel9-smoke-pg" + pg, tag + "invocation_id %r" % s.get("invocation_id"))
+              check(s.get("execution_status") == "completed", tag + "execution_status %r" % s.get("execution_status"))
+              check(s.get("test_verdict") == "pass", tag + "test_verdict %r" % s.get("test_verdict"))
+              check(s.get("enforcement_mode") == "observe", tag + "enforcement_mode %r" % s.get("enforcement_mode"))
+              check(c == {"tests": 12, "failures": 0, "errors": 0, "skipped": 3}, tag + "counts %r" % c)
+              check(s.get("identity_evidence") == {"l2a": "proven", "l2b": "not_attempted", "l1": "proven"},
+                    tag + "identity %r" % s.get("identity_evidence"))
+              check(prov == {"caller_repo": env["GITHUB_REPOSITORY"], "caller_sha": sha, "caller_ref": env["GITHUB_REF"],
+                             "caller_run_id": run_id, "caller_run_attempt": attempt,
+                             "pep_requested_ref": sha, "pep_resolved_sha": sha}, tag + "provenance %r" % prov)
+              check(s.get("installed_package_sha256") == digest, tag + "installed %r" % s.get("installed_package_sha256"))
+              check(inst.get("run_token") == "%s-%s" % (run_id, attempt) and inst.get("installed") is True
+                    and inst.get("install_kind") == "pinned" and inst.get("install_token") == env["EXPECTED_RPM"]
+                    and inst.get("installed_sha256") == digest, tag + "install evidence %r" % inst)
+              reports = json.loads((d / "current-run.json").read_text()).get("reports") or []
+              check(len(reports) == 1, tag + "reports %r" % reports)
+              cases = {}
+              for r in reports:
+                  for tc in ET.parse(d / Path(r).relative_to("test-logs")).getroot().iter("testcase"):
+                      state = next((k for k in ("failure", "error", "skipped") if tc.find(k) is not None), "passed")
+                      cases[tc.get("name").split("[", 1)[0]] = state
+              passed = sorted(k for k, v in cases.items() if v == "passed")
+              skipped = {k for k, v in cases.items() if v == "skipped"}
+              check(len(passed) == 9 and skipped == skips and len(cases) == 12, tag + "cases %r" % cases)
+              check(all(cases.get(k) == "passed" for k in fixed), tag + "previously failing cases %r"
+                    % {k: cases.get(k) for k in fixed})
+              rows.append("| %s | %s | %s | %d passed, %d skipped | `%s` |" % (pg, s.get("execution_status"),
+                          s.get("test_verdict"), len(passed), len(skipped), s.get("installed_package_sha256")))
+
+          with open(env["GITHUB_STEP_SUMMARY"], "a") as f:
+              f.write("### OEL9 native smoke: atomic summaries\n\n| PG | execution | verdict | cases | installed sha256 |\n"
+                      "|---|---|---|---|---|\n" + "\n".join(rows) + "\n\n")
+              f.write(("**FAILED**\n\n" + "\n".join("- " + p for p in problems)) if problems else
+                      "All three summaries are present, bound to this run and revision, completed/pass, "
+                      "9 passed + 3 skipped, and installed the original digest.\n")
+          print("\n".join(rows))
+          if problems:
+              print("\n".join(problems), file=sys.stderr)
+              sys.exit(1)
+          PY

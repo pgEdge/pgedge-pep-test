@@ -530,62 +530,103 @@ Product release pipelines call the release adapter through the `v1_STABLE` branc
 
 **Compatibility.** A promotion must keep existing callers working. Backward-compatible additions need no new channel: a new optional input or output with a default that keeps today's behaviour, new report content, tests, fixes, platforms and components. New platforms or components can change what a release is tested on, so the promotion PR lists them. Removing or renaming an input, output or secret, making an optional input required, changing what an existing input or output means, needing more caller permissions, changing the `[pep-cell:<cell_id>]` marker or package-artifact naming, or no longer accepting `pep-receipt/2` from pinned receipt steps needs a migration path, a compatibility layer or a new channel (`v2_STABLE`). The Self-Test tests that list the adapter's and certifier's declared inputs, outputs and secrets fail on any interface change, so it is reviewed on purpose.
 
-**Promotion.** One PR per promotion, for one `main` revision. The commands work in bash and zsh. Replace each quoted placeholder with a full value, and run steps 1 to 6 in one shell (or set `X` and `H` again from the PR description).
+**Promotion and rollback commands.** Paste these helper functions into a bash or zsh shell once. Each one stops at the first failed step: it prints `STOP` and returns non-zero before creating or pushing anything, and it only prints `OK` when every check passed. They use `return`, never `exit`, so a failure does not close your shell. They read and set the variables `X`, `RECORDED`, `H`, `G` and `R`. In a new shell, paste them again and set those variables from the PR description.
 
-1. Check the selected revision and that `v1_STABLE` still has the content recorded by its last promotion or rollback (after the first, normal advance of `v1_STABLE`, that is its revision's content). Stop on any `STOP`: an unexplained change on `v1_STABLE` must be resolved first.
+```sh
+# True only when $1 is a full SHA naming an existing object of kind $2 (commit or tree).
+pep_full_sha() {
+  [ -n "${1}" ] && [ "$(git rev-parse --verify --quiet "${1}^{${2}}")" = "${1}" ]
+}
+
+# Needs X and RECORDED. Sets H to the promotion head and pushes it to promote/v1/<first 12 of X>.
+pep_promote_head() {
+  H=
+  git fetch origin main v1_STABLE || { echo "STOP: fetch failed"; return 1; }
+  pep_full_sha "${X}" commit || { echo "STOP: X is not a full commit SHA"; return 1; }
+  git merge-base --is-ancestor "${X}" origin/main || { echo "STOP: X is not on main"; return 1; }
+  pep_full_sha "${RECORDED}" tree || { echo "STOP: RECORDED is not a full tree SHA"; return 1; }
+  [ "$(git rev-parse --verify "origin/v1_STABLE^{tree}")" = "${RECORDED}" ] ||
+    { echo "STOP: v1_STABLE changed since the last record"; return 1; }
+  H=$(git commit-tree "${X}^{tree}" -p origin/v1_STABLE -p "${X}" -m "Promote main ${X} to v1_STABLE") ||
+    { echo "STOP: commit-tree failed"; return 1; }
+  git push origin "${H}:refs/heads/promote/v1/${X:0:12}" || { echo "STOP: push failed"; return 1; }
+  echo "OK: X=${X} H=${H} content=$(git rev-parse "${X}^{tree}")"
+}
+
+# Needs G. Sets R to the rollback head and pushes it to rollback/v1/<first 12 of G>.
+pep_rollback_head() {
+  R=
+  git fetch origin v1_STABLE || { echo "STOP: fetch failed"; return 1; }
+  pep_full_sha "${G}" commit || { echo "STOP: G is not a full commit SHA"; return 1; }
+  git merge-base --is-ancestor "${G}" origin/v1_STABLE || { echo "STOP: G is not an earlier v1_STABLE state"; return 1; }
+  R=$(git commit-tree "${G}^{tree}" -p origin/v1_STABLE -m "Roll back v1_STABLE to ${G}") ||
+    { echo "STOP: commit-tree failed"; return 1; }
+  git push origin "${R}:refs/heads/rollback/v1/${G:0:12}" || { echo "STOP: push failed"; return 1; }
+  echo "OK: G=${G} R=${R} content=$(git rev-parse "${G}^{tree}")"
+}
+
+# pep_check_test_merge <PR number> <target SHA>: GitHub's test merge must have the target's content.
+pep_check_test_merge() {
+  pep_full_sha "${2}" commit || { echo "STOP: the target is not a full commit SHA"; return 1; }
+  git fetch origin "refs/pull/${1}/merge" || { echo "STOP: fetch of PR ${1}'s test merge failed"; return 1; }
+  [ "$(git rev-parse --verify "FETCH_HEAD^{tree}")" = "$(git rev-parse "${2}^{tree}")" ] ||
+    { echo "STOP: the test merge does not have ${2}'s content"; return 1; }
+  echo "OK: the test merge has ${2}'s content"
+}
+
+# pep_check_merged <target SHA> <PR head SHA>: after the merge, v1_STABLE has the target's content and
+# the PR head as its second parent (and a promotion head has the target as its own second parent).
+pep_check_merged() {
+  pep_full_sha "${1}" commit && pep_full_sha "${2}" commit ||
+    { echo "STOP: the target and PR head must be full commit SHAs"; return 1; }
+  git fetch origin v1_STABLE || { echo "STOP: fetch failed"; return 1; }
+  [ "$(git rev-parse --verify "origin/v1_STABLE^{tree}")" = "$(git rev-parse "${1}^{tree}")" ] ||
+    { echo "STOP: v1_STABLE does not have ${1}'s content"; return 1; }
+  [ "$(git rev-parse --verify --quiet "origin/v1_STABLE^2")" = "${2}" ] ||
+    { echo "STOP: v1_STABLE's second parent is not the PR head"; return 1; }
+  if git rev-parse --verify --quiet "${2}^2" >/dev/null; then
+    [ "$(git rev-parse "${2}^2")" = "${1}" ] || { echo "STOP: the PR head's second parent is not ${1}"; return 1; }
+  fi
+  echo "OK: record v1_STABLE=$(git rev-parse origin/v1_STABLE) content=$(git rev-parse "origin/v1_STABLE^{tree}")"
+}
+```
+
+**Promotion.** One PR per promotion, for one `main` revision. Replace each quoted placeholder with a full value.
+
+1. Choose the `main` revision `X` and look up the content recorded by the last promotion or rollback of `v1_STABLE` (after the first, normal advance of `v1_STABLE`, that is its revision's content). Build and push the promotion head; it has exactly `X`'s content on top of the current `v1_STABLE`. Any `STOP`, such as an unexplained change on `v1_STABLE`, must be resolved before going further.
    ```sh
    X='<full SHA of the selected main revision>'
    RECORDED='<content recorded by the last promotion or rollback>'
-   git fetch origin main v1_STABLE
-   git merge-base --is-ancestor "${X}" origin/main && echo "OK: X is on main" || echo "STOP: X is not on main"
-   test "$(git rev-parse "origin/v1_STABLE^{tree}")" = "${RECORDED}" && echo "OK: no unexplained change on v1_STABLE" || echo "STOP: v1_STABLE changed since the last record"
+   pep_promote_head
    ```
-2. Build the promotion head with exactly `X`'s content on top of the current `v1_STABLE`, and push it to a new branch (a normal push):
-   ```sh
-   H=$(git commit-tree "${X}^{tree}" -p origin/v1_STABLE -p "${X}" -m "Promote main ${X} to v1_STABLE")
-   git push origin "${H:?no promotion head}:refs/heads/promote/v1/${X:0:12}"
-   echo "selected main X=${X}  PR head H=${H}  expected content $(git rev-parse "${X}^{tree}")"
-   ```
-3. Open a PR from `promote/v1/<first 12 characters of X>` into `v1_STABLE`. Its description records `X`, `H`, the expected content, the changes (`git log --first-parent --oneline <previous X>..<X>`), the evidence, and whether the change is compatible. The PR diff is exactly `v1_STABLE` to `X`, so everything the promotion changes, including content a rollback removed, is shown for review.
-4. The nine PEP Self-Test checks must pass, and a code owner other than the person who pushed the branch approves.
-5. Before merging, confirm that GitHub's test merge has `X`'s content. If `v1_STABLE` moved after step 2, close the PR and start again from step 1; do not use **Update branch**.
+2. Open a PR from `promote/v1/<first 12 characters of X>` into `v1_STABLE`. Its description records `X`, `H`, the expected content, the changes (`git log --first-parent --oneline <previous X>..<X>`), the evidence, and whether the change is compatible. The PR diff is exactly `v1_STABLE` to `X`, so everything the promotion changes, including content a rollback removed, is shown for review.
+3. The nine PEP Self-Test checks must pass, and a code owner other than the person who pushed the branch approves.
+4. Before merging, confirm that GitHub's test merge has `X`'s content. If `v1_STABLE` moved after step 1, close the PR and start again; do not use **Update branch**.
    ```sh
    N='<PR number>'
-   git fetch origin "refs/pull/${N}/merge"
-   test "$(git rev-parse "FETCH_HEAD^{tree}")" = "$(git rev-parse "${X}^{tree}")" && echo "OK: test merge has X's content" || echo "STOP: test merge differs from X"
+   pep_check_test_merge "${N}" "${X}"
    ```
-6. Merge with **Create a merge commit**. Then fetch and check the result, record the new `v1_STABLE` commit and its content in the PR, and delete the promote branch.
+5. Merge with **Create a merge commit**. Then check the result; only if it passes, delete the promote branch and record the printed `v1_STABLE` commit and content in the PR.
    ```sh
-   git fetch origin v1_STABLE
-   test "$(git rev-parse "origin/v1_STABLE^{tree}")" = "$(git rev-parse "${X}^{tree}")" && echo "OK: v1_STABLE has X's content" || echo "STOP: v1_STABLE content differs from X"
-   test "$(git rev-parse "origin/v1_STABLE^2")" = "${H}" && test "$(git rev-parse "${H}^2")" = "${X}" && echo "OK: v1_STABLE^2 is H and H^2 is X" || echo "STOP: unexpected parents"
-   git rev-parse origin/v1_STABLE "origin/v1_STABLE^{tree}"
+   pep_check_merged "${X}" "${H}" && git push origin --delete "promote/v1/${X:0:12}"
    ```
 
-**Rollback.** To undo a promotion, return `v1_STABLE` to an earlier state `G` (normally the first parent of the promotion's merge commit) with a corrective commit. Nothing is force-pushed:
+**Rollback.** To undo a promotion, return `v1_STABLE` to an earlier state `G` (normally the first parent of the promotion's merge commit) with a corrective commit. Nothing is force-pushed.
 
 ```sh
 G='<full SHA of the v1_STABLE state to return to>'
-git fetch origin v1_STABLE
-git merge-base --is-ancestor "${G}" origin/v1_STABLE && echo "OK: G is an earlier v1_STABLE state" || echo "STOP: G is not on v1_STABLE"
-R=$(git commit-tree "${G}^{tree}" -p origin/v1_STABLE -m "Roll back v1_STABLE to ${G}")
-git push origin "${R:?no rollback head}:refs/heads/rollback/v1/${G:0:12}"
-echo "rollback target G=${G}  PR head R=${R}  expected content $(git rev-parse "${G}^{tree}")"
+pep_rollback_head
 ```
 
-Open a PR from `rollback/v1/<first 12 characters of G>` into `v1_STABLE` that records `G`, `R`, the expected content and the reason. It needs the same checks and approval. Before merging, check the test merge; after merging with a merge commit, fetch and check the result:
+Open a PR from `rollback/v1/<first 12 characters of G>` into `v1_STABLE` that records `G`, `R`, the expected content and the reason. It needs the same checks and approval. Before merging, check the test merge; after merging with a merge commit, check the result and only then delete the branch:
 
 ```sh
 N='<PR number>'
-git fetch origin "refs/pull/${N}/merge"
-test "$(git rev-parse "FETCH_HEAD^{tree}")" = "$(git rev-parse "${G}^{tree}")" && echo "OK: test merge has G's content" || echo "STOP: test merge differs from G"
+pep_check_test_merge "${N}" "${G}"
 ```
 
 ```sh
-git fetch origin v1_STABLE
-test "$(git rev-parse "origin/v1_STABLE^{tree}")" = "$(git rev-parse "${G}^{tree}")" && echo "OK: v1_STABLE has G's content" || echo "STOP: v1_STABLE content differs from G"
-test "$(git rev-parse "origin/v1_STABLE^2")" = "${R}" && echo "OK: v1_STABLE^2 is R" || echo "STOP: unexpected parent"
-git rev-parse origin/v1_STABLE "origin/v1_STABLE^{tree}"
+pep_check_merged "${G}" "${R}" && git push origin --delete "rollback/v1/${G:0:12}"
 ```
 
 Callers change nothing: their next runs use the rolled-back content, and the recorded SHA shows it. The fix then lands on `main` and is promoted with the steps above; that PR's diff shows the re-applied content.

@@ -305,6 +305,23 @@ def test_strict_parse_accepts_epoch_int_and_null():
     assert C.strict_parse_receipt(_raw(r0))["members"][0]["epoch"] is None
 
 
+# Pinned-action compatibility. Product release pipelines keep their receipt step pinned while
+# v1_STABLE moves (docs/CI.md, "Stable channel"), so capture must keep accepting what that pinned
+# action wrote. This fixture is a real receipt.json, byte for byte, written by
+# pgEdge/pgedge-pep-test/.github/actions/pep-package-receipt@52cd787341f719191e817d3f1c134fc210fbcc53
+# in pgEdge/pgedge-rag-server Release run 38242831031 (tag v2.0.0-test2, commit 2f69f9a): artifact
+# pep-receipt-pepcell.v1.rpm.el-9.amd64.pkg, id 11744381252, archive
+# sha256:10a5a27fb92960be3fc582c3f0c255d335e60b972d4acb3d7d6049333a40f2ef.
+PINNED_RECEIPT = HERE / "receipt_fixtures" / "pep-receipt-52cd787-rpm-el-9-amd64.json"
+PINNED_RECEIPT_SHA256 = "665edfa4426e8377cb2ebe65df2cf647574da12708984da2ab579e90ff0ef01c"
+
+
+def test_strict_parse_accepts_the_pinned_52cd787_receipt_unchanged():
+    raw = PINNED_RECEIPT.read_bytes()
+    assert hashlib.sha256(raw).hexdigest() == PINNED_RECEIPT_SHA256   # still the original bytes
+    assert C.strict_parse_receipt(raw) == json.loads(raw)
+
+
 # --------------------------------------------------------------------------- #
 # B. digest normalization: API (prefix-normalized) vs receipt (canonical only)
 # --------------------------------------------------------------------------- #

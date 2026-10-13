@@ -1,0 +1,5 @@
+# PEP maintainers. The v*_STABLE ruleset requires a code owner's approval for every promotion
+# or rollback of the stable channel (docs/CI.md, "Stable channel"). GitHub also requests these
+# owners' review automatically on other PRs, including PRs to main; main itself does not
+# require code-owner approval.
+* @hayee-bhatti @zaidshabbir25

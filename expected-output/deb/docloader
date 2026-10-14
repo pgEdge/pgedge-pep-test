@@ -1,4 +1,4 @@
-/etc/pgedge-docloader/config.yml
+/etc/pgedge/docloader/config.yml
 /usr/bin/pgedge-docloader
 /usr/share/doc/pgedge-docloader/changelog.Debian.gz
 /usr/share/pgedge-docloader

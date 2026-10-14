@@ -2,5 +2,5 @@
 /usr/share/doc/pgedge-ai-kb-ollama-nomic-embed-text/README.md
 /usr/share/doc/pgedge-ai-kb-ollama-nomic-embed-text/VERSION
 /usr/share/pgedge-ai-kb-ollama-nomic-embed-text-sbom.json
-/usr/share/pgedge-ai-kb-ollama-nomic-embed-text-sbom.json.asc
-/usr/share/pgedge/pgedge-ai-kb/kb-ollama-nomic-embed-text.db
+/usr/share/pgedge-ai-kb-gemini-gemini-embedding-001/sboms/pgedge-ai-kb-gemini-gemini-embedding-001-sbom.json
+/usr/share/pgedge-ai-kb-gemini-gemini-embedding-001/sboms/pgedge-ai-kb-gemini-gemini-embedding-001-sbom.json.asc

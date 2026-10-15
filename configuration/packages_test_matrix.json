@@ -28,7 +28,7 @@
     {"category": "tool",      "name": "etcd",                "description": "Distributed key-value store",          "enabled": false,  "rhel": "pgedge-etcd",                    "deb": "pgedge-etcd"},
     {"category": "tool",      "name": "ace",                 "description": "ACE platform component",               "enabled": false,  "rhel": "pgedge-ace",                     "deb": "pgedge-ace"},
     {"category": "tool",      "name": "radar",               "description": "Radar monitoring component",           "enabled": false,  "rhel": "pgedge-radar",                   "deb": "pgedge-radar"},
-    {"category": "tool",      "name": "control-plane",       "description": "Control Plane management service",     "enabled": false,  "rhel": "pgedge-control-plane",           "deb": "pgedge-control-plane"},
+    {"category": "tool",      "name": "control-plane",       "description": "Control Plane management service",     "enabled": true,  "rhel": "pgedge-control-plane",           "deb": "pgedge-control-plane"},
 
     {"category": "extension", "name": "coldfront",           "description": "Coldfront cold-storage tiering extension", "enabled": false, "rhel": "pgedge-coldfront_{PG}",          "deb": "pgedge-postgresql-{PG}-coldfront"},
     {"category": "extension", "name": "pg-duckdb",           "description": "DuckDB execution engine extension",    "enabled": false,  "rhel": "pgedge-pg-duckdb_{PG}",          "deb": "pgedge-postgresql-{PG}-pg-duckdb"},

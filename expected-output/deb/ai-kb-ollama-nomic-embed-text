@@ -4,5 +4,5 @@
 /usr/share/doc/pgedge-ai-kb-ollama-nomic-embed-text/VERSION
 /usr/share/doc/pgedge-ai-kb-ollama-nomic-embed-text/changelog.Debian.gz
 /usr/share/pgedge/pgedge-ai-kb/kb-ollama-nomic-embed-text.db
-/usr/share/pgedge-ai-kb-ollama-nomic-embed-text-sbom.json
-/usr/share/pgedge-ai-kb-ollama-nomic-embed-text-sbom.json.asc
+/usr/share/pgedge-ai-kb-ollama-nomic-embed-text/sboms/pgedge-ai-kb-ollama-nomic-embed-text-sbom.json
+/usr/share/pgedge-ai-kb-ollama-nomic-embed-text/sboms/pgedge-ai-kb-ollama-nomic-embed-text-sbom.json.asc

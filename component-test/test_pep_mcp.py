@@ -324,8 +324,30 @@ def test_verify_sbom(container_name, container_type):
     assert container.status == "running"
 
     mcp_sbom_package = "pgedge-postgres-mcp"
-    sbom_dir = f"{decoupled_sbom_path}/{mcp_sbom_package}"
-    sbom_name = mcp_sbom_package.removeprefix("pgedge-")
+
+    # The SBOM basename is not uniform across builds/platforms: it ships either
+    # with the full package name (pgedge-postgres-mcp-sbom.json) or with the
+    # vendor prefix stripped (postgres-mcp-sbom.json), and it may sit directly
+    # under {decoupled_sbom_path} or in a per-package subdir. Locate it instead
+    # of hardcoding the name and directory.
+    _candidates = [
+        f"{mcp_sbom_package}-sbom.json",
+        f"{mcp_sbom_package.removeprefix('pgedge-')}-sbom.json",
+    ]
+    _find_expr = " -o ".join(f"-name '{c}'" for c in _candidates)
+    _rc_find, _found = container.exec_run(
+        ["bash", "-c",
+         f"find {decoupled_sbom_path} -maxdepth 3 \\( {_find_expr} \\) 2>/dev/null | head -1"],
+        user="root",
+    )
+    found_path = _found.decode().strip()
+    assert found_path, (
+        f"SBOM file (tried {', '.join(_candidates)}) not found anywhere under "
+        f"{decoupled_sbom_path} (is {mcp_sbom_package} installed?)"
+    )
+    sbom_dir = os.path.dirname(found_path)
+    sbom_file = os.path.basename(found_path)
+    print(f"Located SBOM: {found_path}")
 
     if container_type == "rhel":
         print(f"\n--- Verifying SBOM on {container_name} (RHEL) in {sbom_dir} ---")
@@ -341,9 +363,9 @@ def test_verify_sbom(container_name, container_type):
         # Verify SBOM signature
         exit_code, output = container.exec_run(
             f"sh -c 'cd {sbom_dir} && sq verify "
-            f"--signature-file {sbom_name}-sbom.json.asc "
+            f"--signature-file {sbom_file}.asc "
             f"--signer-file pgedge-rsa.pub "
-            f"{sbom_name}-sbom.json'",
+            f"{sbom_file}'",
             user="root",
         )
         output_str = output.decode().replace('\xa0', ' ')
@@ -365,8 +387,8 @@ def test_verify_sbom(container_name, container_type):
         exit_code, output = container.exec_run(
             f"sh -c 'cd {sbom_dir} && sq verify "
             f"{_sq_signer_flag} /etc/apt/keyrings/pgedge-rsa.gpg "
-            f"{_sq_sig_flag} {sbom_name}-sbom.json.asc "
-            f"{sbom_name}-sbom.json'",
+            f"{_sq_sig_flag} {sbom_file}.asc "
+            f"{sbom_file}'",
             user="root",
         )
         output_str = output.decode().replace('\xa0', ' ')

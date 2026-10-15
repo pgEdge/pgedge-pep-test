@@ -46,7 +46,7 @@ _default_components = ",".join([
 ai_kb_packages = [c.strip() for c in os.getenv("AI_KB_COMPONENTS", _default_components).split(",") if c.strip()]
 
 # Version shared across all packages
-ai_kb_version = os.getenv("PGEDGE_AI_KB_VERSION", "1.0.0")
+ai_kb_version = os.getenv("PGEDGE_POSTGRES_MCP_KB_VERSION", "1.0.2")
 ai_kb_version_map = {pkg: ai_kb_version for pkg in ai_kb_packages}
 
 # Decoupled components SBOM location — SBOM files live flat under this directory

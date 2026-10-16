@@ -9,8 +9,9 @@
 #      (release_intent, publication_results, execution_mode, enforcement) with
 #      pipeline/pep_release_inputs.py; preview is selected only by simulated=true;
 #   2. calls pep-certify.yml at this workflow's own commit (relative path), so the
-#      caller's single `uses: ...pep-release-certify.yml@<SHA>` pin selects the
-#      adapter, the certifier and everything the certifier runs;
+#      caller's single `uses: ...pep-release-certify.yml@<ref>` reference (v1_STABLE
+#      or a full commit SHA) selects the adapter, the certifier and everything the
+#      certifier runs; the commit it resolves to is recorded for each run;
 #   3. always writes one summary of the actual publication results and the
 #      certification result, including when the inputs are rejected or certify fails.
 # It adds no certification logic: pep-certify.yml's inputs, outputs and decisions
@@ -20,7 +21,8 @@
 #   * call it after the publication jobs (needs them, with always()), granting
 #     contents: read and actions: read;
 #   * each package job keeps its [pep-cell:<cell_id>] name marker and its
-#     pep-package-receipt step, so evidence is recorded where the package is built;
+#     pep-package-receipt step (pinned to a full commit SHA), so evidence is
+#     recorded where the package is built;
 #   * <family>_publication is that family's publication job result
 #     (success|failure|cancelled|skipped); it may be omitted only when the detector
 #     matrix has no cells for that family;

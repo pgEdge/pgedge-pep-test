@@ -1,0 +1,29 @@
+{
+  "schema": "pep-receipt/2",
+  "cell_id": "pepcell.v1.rpm.el-9.amd64.pkg",
+  "artifact_id": 11743592021,
+  "artifact_name": "rpm__el-9__amd64",
+  "archive_digest": "be69fa534cbb1a66656e6918490112899557890274d48b9dea77f2b22bec33a3",
+  "members": [
+    {
+      "package_name": "pgedge-rag-server2",
+      "epoch": null,
+      "version": "2.0.0",
+      "release": "test2_1.el9",
+      "native_arch": "x86_64",
+      "package_class": "source",
+      "sha256": "7228cc935a253f2326472bf42fff097b2d4278c9c8ddbc766a763d946dc852a8",
+      "artifact_member_path": "pgedge-rag-server2-2.0.0-test2_1.el9.src.rpm"
+    },
+    {
+      "package_name": "pgedge-rag-server2",
+      "epoch": null,
+      "version": "2.0.0",
+      "release": "test2_1.el9",
+      "native_arch": "x86_64",
+      "package_class": "runtime",
+      "sha256": "85365ea0f62295435fb29c8cd49139e0cd3ab17c63767c53cd9772d6a4f5075d",
+      "artifact_member_path": "pgedge-rag-server2-2.0.0-test2_1.el9.x86_64.rpm"
+    }
+  ]
+}

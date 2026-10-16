@@ -2,9 +2,10 @@
 #
 #   capture -> plan -> run (parallel matrix) -> aggregate -> enforce
 #
-# ONE reusable-workflow boundary for RAG and later projects. The consumer pins this
-# reusable workflow by immutable SHA (that pin is the PEP implementation revision) and
-# passes only release EVIDENCE (detector matrices, release intent, publication results)
+# ONE reusable-workflow boundary for RAG and later projects. The consumer references this
+# reusable workflow by the stable branch (v1_STABLE) or a full commit SHA; the commit that
+# reference resolves to for a run is the PEP implementation revision, recorded in its
+# evidence. The consumer passes only release EVIDENCE (detector matrices, release intent, publication results)
 # plus the enforcement/execution modes; PEP owns the platform/PostgreSQL/component
 # universe (catalog-driven, never a caller input). Supported targets are derived by
 # capture + the invocation planner from containers_list.json + pep_exec_catalog.json.
@@ -23,7 +24,7 @@ on:
     inputs:
       # NOTE: there is deliberately NO pep_implementation_ref input. The implementation revision is
       # THIS reusable workflow's own commit (job.workflow_sha), resolved by the `identity` job below,
-      # so the consumer's `uses: ...@<SHA>` pin is the single source of truth and cannot diverge.
+      # so the consumer's `uses:` reference is the single source of truth and cannot diverge.
       rpm_matrix:             {required: true,  type: string}   # detector rpm_matrix JSON (evidence)
       deb_matrix:             {required: true,  type: string}   # detector deb_matrix JSON (evidence)
       release_intent:         {required: true,  type: string}   # release evidence JSON
@@ -49,8 +50,9 @@ permissions: {}
 
 jobs:
   # --- 0. identity: the implementation revision IS this workflow's own commit ---
-  # The consumer pins pep-certify.yml@<SHA> in `uses:` -- that pin is the SINGLE source of the PEP
-  # implementation revision. There is no separate caller ref to keep in sync, so workflow YAML and the
+  # The consumer's `uses:` reference (v1_STABLE or a full commit SHA) is the SINGLE source of the PEP
+  # implementation revision: the commit it resolves to is read once below and recorded. There is no
+  # separate caller ref to keep in sync, so workflow YAML and the
   # scripts it checks out can never diverge. `job.workflow_sha` is GitHub's purpose-built identity: the
   # commit SHA of the reusable workflow that DEFINES the current job (the docs' example uses it to check
   # out that workflow's own repository). We read it via an env var, require a full 40-hex SHA, and expose

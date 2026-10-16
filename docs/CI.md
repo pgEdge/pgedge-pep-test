@@ -345,7 +345,7 @@ Framework-level findings — the kinds of issues regression testing surfaces (OS
 
 `.github/workflows/pep-integration.yml` is a `workflow_call` reusable workflow. A build/release pipeline in another repo (e.g. a component that just published a package) calls it to install **one** already-published target and report a truthful, per-rung identity result — without failing the caller's release (in the default `observe` mode). It is single-target: one component / family / arch / PG major / container per call.
 
-Because `pgedge-pep-test` is public, cross-repo callers need **no read token** — the workflow checks itself out with the built-in `GITHUB_TOKEN`. Pin the implementation you call with an **immutable commit SHA** via `pep_implementation_ref`.
+Because `pgedge-pep-test` is public, cross-repo callers need **no read token** — the workflow checks itself out with the built-in `GITHUB_TOKEN`. Pin the implementation you call with an **immutable commit SHA** via `pep_implementation_ref`. (A release pipeline calls the [release certification adapter](#release-certification-adapter-pep-release-certifyyml) instead, normally through the [stable channel](#stable-channel-v1_stable).)
 
 ### Minimal cross-repo caller
 
@@ -472,7 +472,7 @@ A release pipeline that builds and publishes packages calls `.github/workflows/p
     needs: [detect-matrix, determine-repo-type, build, package-rpm, package-deb, push-dnf, push-apt]
     if: always() && needs.determine-repo-type.result == 'success'
     permissions: {contents: read, actions: read}
-    uses: pgEdge/pgedge-pep-test/.github/workflows/pep-release-certify.yml@<PEP_COMMIT_SHA>
+    uses: pgEdge/pgedge-pep-test/.github/workflows/pep-release-certify.yml@v1_STABLE
     with:
       rpm_matrix:      ${{ needs.detect-matrix.outputs.rpm_matrix }}
       deb_matrix:      ${{ needs.detect-matrix.outputs.deb_matrix }}
@@ -489,7 +489,7 @@ A release pipeline that builds and publishes packages calls `.github/workflows/p
       DOCKERHUB_TOKEN:    ${{ needs.determine-repo-type.outputs.simulated == 'false' && secrets.DOCKERHUB_TOKEN || '' }}
 ```
 
-Each package job also keeps its `[pep-cell:<cell_id>]` name marker and its `pep-package-receipt` step, pinned to the same commit, so evidence is recorded where each package is built.
+Each package job also keeps its `[pep-cell:<cell_id>]` name marker and its `pep-package-receipt` step, pinned to a full commit SHA, so evidence is recorded where each package is built. The receipt pin does not have to match the commit `v1_STABLE` points to (see [Stable channel](#stable-channel-v1_stable)).
 
 **Package evidence.** Capture (`pep-capture.yml`) checks each cell's receipt against GitHub's record of the uploaded package and re-inspects the package itself. One shared table, `CLASS_BY_CODE` in `pipeline/pep_evidence_class.py`, puts every outcome in one class:
 - **Accepted:** the package is planned for testing.
@@ -504,7 +504,7 @@ The adapter validates the facts before anything runs (`pipeline/pep_release_inpu
 - `simulated` must be exactly `true` or `false`. Only `true` selects preview (a dry run); `false` selects full certification.
 - The identity values must be nonblank, without surrounding whitespace or control characters. `enforcement` is `observe` (default) or `gate`.
 
-The adapter calls `pep-certify.yml` through a relative path, so it runs at the adapter's own commit: the caller's one pin selects the adapter, the certifier and everything they run. Only the Docker Hub secrets are accepted. They are forwarded explicitly, and only for full certification. The adapter passes through all of `pep-certify.yml`'s outputs.
+The adapter calls `pep-certify.yml` through a relative path, so it runs at the adapter's own commit: the caller's one reference selects the adapter, the certifier and everything they run, and the commit it resolves to is recorded for the run. Only the Docker Hub secrets are accepted. They are forwarded explicitly, and only for full certification. The adapter passes through all of `pep-certify.yml`'s outputs.
 
 **Failure behavior.** Certification runs after publication and never changes it. A rejected input fails the adapter's input job, so the certify job is skipped. An infrastructure or incomplete result, a package-digest problem, or package evidence that capture rejected as invalid fails the certify job. Either way the caller's run fails, even under `observe`. Product test failures and coverage gaps, including a missing receipt, are reported under `observe` without failing it. In every case, including rejected inputs, the summary job writes the actual per-family publication results as passed in, and the certification outcome.
 
@@ -513,3 +513,122 @@ The adapter calls `pep-certify.yml` through a relative path, so it runs at the a
 **Finding the results.** Each test run is a job named for its platform/architecture, PG version and package, followed by what it does, for example `debian12-amd64 · PG16 · pgedge-rag-server2 / preview (no install, no product tests)` or `rocky9-arm64 · PG17 · pgedge-rag-server2 / full test (install and product tests)`. Its log ends with one `PEP test-run result:` line read from its own `summary.json`. The result is shown only when the reducer's checks accept the summary and it binds to this job's workflow run, attempt and PEP checkout; a summary that is missing, malformed, from another run or attempt, or for the other execution mode reads as UNAVAILABLE or UNVERIFIED, never as zero tests passed or as a preview. The line is one test run's result, not the package certification decision. The aggregate job writes the run's job summary: the certification state, a platform by PG table per package family built from the same evidence and decision checks as `consolidated-report.html`, failed test runs with their first failure, coverage gaps, and a download link to the `pep-certification-r<N>-a<M>` artifact. The link is written only from the upload's artifact id; otherwise the summary says the download link is unavailable. The release adapter's summary links the same artifact. A preview installs nothing and runs no product tests, and a green `observe` run with coverage gaps is not a complete certification; both summaries say so. All of this is reporting only: the JSON evidence, outputs, artifact names, test-run ids and policy are unchanged.
 
 **Code layout.** The integration and certification steps live in `pipeline/`: the request resolver and run summaries that `run_pep_tf.sh` and `pep-integration.yml` call, and package inspection, capture, the certification and invocation plans, results, the gate, the report and the adapter inputs. The shared integration helpers live in `aspects/pipeline/`, following the framework's aspects layer: the request contract (`pep_request.py`, `pep_request_env.py`), install verification and identity evidence (`pep_verify.py`, `pep_identity.py`, `pep_evidence.py`, `pep_version_normalize.py`) and the one component policy (`pep_capture_policy.json`). `container_resolver.py` and `ci_consolidated_report.py` stay in `utillities/` because the standalone regression also uses them. Dependencies run one way: `pipeline/` uses `aspects/pipeline/` and `utillities/`, `aspects/pipeline/` uses `utillities/`, and nothing in `aspects/` or `utillities/` imports from `pipeline/`. Unit tests sit beside the code they test, in `aspects/pipeline/tests/` and `pipeline/tests/`; tests whose subject is the shell runner or a workflow (`test_pep_bridge`, `test_pep_integration_auth_contract`, `test_pep_selftest_artifacts`) sit in `pipeline/tests/` with the other workflow-contract tests. The workflows and the receipt action stay under `.github/`, where callers pin them.
+
+## Stable channel (`v1_STABLE`)
+
+Product release pipelines call the release adapter through the `v1_STABLE` branch, so they do not have to change their workflows whenever PEP changes:
+
+```yaml
+    uses: pgEdge/pgedge-pep-test/.github/workflows/pep-release-certify.yml@v1_STABLE
+```
+
+**`main` and `v1_STABLE`.** Reviewed PEP changes land on `main`, which moves often. `v1_STABLE` moves only when a PEP maintainer promotes one specific, tested `main` revision to it, or rolls it back. Products receive fixes, tests, report changes, platforms and components through promotions, without editing their workflows. A full commit SHA still works for a caller that needs a fixed revision.
+
+**What stays pinned.** Each package job's `pep-package-receipt` step stays pinned to a full commit SHA, because it runs inside the build job. Its output, `pep-receipt/2`, is what PEP keeps accepting, so the receipt pin does not need to change when `v1_STABLE` moves. Direct callers of `pep-integration.yml` keep using one full SHA for both `uses:` and `pep_implementation_ref`.
+
+**Which PEP ran.** In each run, `pep-certify.yml` reads the commit it is running from (`job.workflow_sha`) once, and checks out and passes exactly that commit to every nested workflow and checkout; the adapter's jobs read theirs the same way. That commit is recorded as the `PEP revision` row of the adapter summary, `pep_implementation_ref` and `pep_resolved_sha` in the capture evidence, `pep_requested_ref` and `pep_resolved_sha` in each test run's `summary.json` and `provenance.json`, and `provenance.pep_resolved_sha` in `cert-result.json`. Moving `v1_STABLE` later never changes what an earlier run recorded.
+
+**Compatibility.** A promotion must keep existing callers working. Backward-compatible additions need no new channel: a new optional input or output with a default that keeps today's behaviour, new report content, tests, fixes, platforms and components. New platforms or components can change what a release is tested on, so the promotion PR lists them. Removing or renaming an input, output or secret, making an optional input required, changing what an existing input or output means, needing more caller permissions, changing the `[pep-cell:<cell_id>]` marker or package-artifact naming, or no longer accepting `pep-receipt/2` from pinned receipt steps needs a migration path, a compatibility layer or a new channel (`v2_STABLE`). The Self-Test tests that list the adapter's and certifier's declared inputs, outputs and secrets fail on any interface change, so it is reviewed on purpose.
+
+**Promotion and rollback commands.** Paste these helper functions into a bash or zsh shell once. Each one stops at the first failed step: it prints `STOP` and returns non-zero before creating or pushing anything, and it only prints `OK` when every check passed. They use `return`, never `exit`, so a failure does not close your shell. They read and set the variables `X`, `RECORDED`, `H`, `G` and `R`. In a new shell, paste them again and set those variables from the PR description.
+
+```sh
+# True only when $1 is a full SHA naming an existing object of kind $2 (commit or tree).
+pep_full_sha() {
+  [ -n "${1}" ] && [ "$(git rev-parse --verify --quiet "${1}^{${2}}")" = "${1}" ]
+}
+
+# Needs X and RECORDED. Sets H to the promotion head and pushes it to promote/v1/<first 12 of X>.
+pep_promote_head() {
+  H=
+  git fetch origin main v1_STABLE || { echo "STOP: fetch failed"; return 1; }
+  pep_full_sha "${X}" commit || { echo "STOP: X is not a full commit SHA"; return 1; }
+  git merge-base --is-ancestor "${X}" origin/main || { echo "STOP: X is not on main"; return 1; }
+  pep_full_sha "${RECORDED}" tree || { echo "STOP: RECORDED is not a full tree SHA"; return 1; }
+  [ "$(git rev-parse --verify "origin/v1_STABLE^{tree}")" = "${RECORDED}" ] ||
+    { echo "STOP: v1_STABLE changed since the last record"; return 1; }
+  H=$(git commit-tree "${X}^{tree}" -p origin/v1_STABLE -p "${X}" -m "Promote main ${X} to v1_STABLE") ||
+    { echo "STOP: commit-tree failed"; return 1; }
+  git push origin "${H}:refs/heads/promote/v1/${X:0:12}" || { echo "STOP: push failed"; return 1; }
+  echo "OK: X=${X} H=${H} content=$(git rev-parse "${X}^{tree}")"
+}
+
+# Needs G. Sets R to the rollback head and pushes it to rollback/v1/<first 12 of G>.
+pep_rollback_head() {
+  R=
+  git fetch origin v1_STABLE || { echo "STOP: fetch failed"; return 1; }
+  pep_full_sha "${G}" commit || { echo "STOP: G is not a full commit SHA"; return 1; }
+  git merge-base --is-ancestor "${G}" origin/v1_STABLE || { echo "STOP: G is not an earlier v1_STABLE state"; return 1; }
+  R=$(git commit-tree "${G}^{tree}" -p origin/v1_STABLE -m "Roll back v1_STABLE to ${G}") ||
+    { echo "STOP: commit-tree failed"; return 1; }
+  git push origin "${R}:refs/heads/rollback/v1/${G:0:12}" || { echo "STOP: push failed"; return 1; }
+  echo "OK: G=${G} R=${R} content=$(git rev-parse "${G}^{tree}")"
+}
+
+# pep_check_test_merge <PR number> <target SHA>: GitHub's test merge must have the target's content.
+pep_check_test_merge() {
+  pep_full_sha "${2}" commit || { echo "STOP: the target is not a full commit SHA"; return 1; }
+  git fetch origin "refs/pull/${1}/merge" || { echo "STOP: fetch of PR ${1}'s test merge failed"; return 1; }
+  [ "$(git rev-parse --verify "FETCH_HEAD^{tree}")" = "$(git rev-parse "${2}^{tree}")" ] ||
+    { echo "STOP: the test merge does not have ${2}'s content"; return 1; }
+  echo "OK: the test merge has ${2}'s content"
+}
+
+# pep_check_merged <target SHA> <PR head SHA>: after the merge, v1_STABLE has the target's content and
+# the PR head as its second parent (and a promotion head has the target as its own second parent).
+pep_check_merged() {
+  pep_full_sha "${1}" commit && pep_full_sha "${2}" commit ||
+    { echo "STOP: the target and PR head must be full commit SHAs"; return 1; }
+  git fetch origin v1_STABLE || { echo "STOP: fetch failed"; return 1; }
+  [ "$(git rev-parse --verify "origin/v1_STABLE^{tree}")" = "$(git rev-parse "${1}^{tree}")" ] ||
+    { echo "STOP: v1_STABLE does not have ${1}'s content"; return 1; }
+  [ "$(git rev-parse --verify --quiet "origin/v1_STABLE^2")" = "${2}" ] ||
+    { echo "STOP: v1_STABLE's second parent is not the PR head"; return 1; }
+  if git rev-parse --verify --quiet "${2}^2" >/dev/null; then
+    [ "$(git rev-parse "${2}^2")" = "${1}" ] || { echo "STOP: the PR head's second parent is not ${1}"; return 1; }
+  fi
+  echo "OK: record v1_STABLE=$(git rev-parse origin/v1_STABLE) content=$(git rev-parse "origin/v1_STABLE^{tree}")"
+}
+```
+
+**Promotion.** One PR per promotion, for one `main` revision. Replace each quoted placeholder with a full value.
+
+1. Choose the `main` revision `X` and look up the content recorded by the last promotion or rollback of `v1_STABLE` (after the first, normal advance of `v1_STABLE`, that is its revision's content). Build and push the promotion head; it has exactly `X`'s content on top of the current `v1_STABLE`. Any `STOP`, such as an unexplained change on `v1_STABLE`, must be resolved before going further.
+   ```sh
+   X='<full SHA of the selected main revision>'
+   RECORDED='<content recorded by the last promotion or rollback>'
+   pep_promote_head
+   ```
+2. Open a PR from `promote/v1/<first 12 characters of X>` into `v1_STABLE`. Its description records `X`, `H`, the expected content, the changes (`git log --first-parent --oneline <previous X>..<X>`), the evidence, and whether the change is compatible. The PR diff is exactly `v1_STABLE` to `X`, so everything the promotion changes, including content a rollback removed, is shown for review.
+3. The nine PEP Self-Test checks must pass, and a code owner other than the person who pushed the branch approves.
+4. Before merging, confirm that GitHub's test merge has `X`'s content. If `v1_STABLE` moved after step 1, close the PR and start again; do not use **Update branch**.
+   ```sh
+   N='<PR number>'
+   pep_check_test_merge "${N}" "${X}"
+   ```
+5. Merge with **Create a merge commit**. Then check the result; only if it passes, delete the promote branch and record the printed `v1_STABLE` commit and content in the PR.
+   ```sh
+   pep_check_merged "${X}" "${H}" && git push origin --delete "promote/v1/${X:0:12}"
+   ```
+
+**Rollback.** To undo a promotion, return `v1_STABLE` to an earlier state `G` (normally the first parent of the promotion's merge commit) with a corrective commit. Nothing is force-pushed.
+
+```sh
+G='<full SHA of the v1_STABLE state to return to>'
+pep_rollback_head
+```
+
+Open a PR from `rollback/v1/<first 12 characters of G>` into `v1_STABLE` that records `G`, `R`, the expected content and the reason. It needs the same checks and approval. Before merging, check the test merge; after merging with a merge commit, check the result and only then delete the branch:
+
+```sh
+N='<PR number>'
+pep_check_test_merge "${N}" "${G}"
+```
+
+```sh
+pep_check_merged "${G}" "${R}" && git push origin --delete "rollback/v1/${G:0:12}"
+```
+
+Callers change nothing: their next runs use the rolled-back content, and the recorded SHA shows it. The fix then lands on `main` and is promoted with the steps above; that PR's diff shows the re-applied content.
+
+**Protection.** On `v*_STABLE` branches, an organization rule blocks force pushes and deletion. A repository rule requires a PR with one code-owner approval (not from the last pusher), merge commits only, an up-to-date branch, and these nine Self-Test checks from GitHub Actions: `unit`, `preview-call / preview (no install, no product tests)`, `validation-call / preview (no install, no product tests)`, `bad-execmode-call / rejected (invalid execution mode)`, `bad-mode-call / preview (no install, no product tests)`, `assert-preview`, `assert-validation`, `assert-bad-execmode` and `assert-bad-mode`. The check names come from Self-Test job names, so renaming one of those jobs needs the rule updated in the same change. A tag rule blocks `v*_STABLE` tags, because GitHub resolves a tag before a branch of the same name. Code owners are listed in `.github/CODEOWNERS`.

@@ -327,11 +327,15 @@ def main(argv=None):
     # Guard the optional side files: a missing/unreadable/malformed/wrong-shape
     # identity or provenance file is a plumbing fault -> infra_failure, never a
     # crash. The summary JSON is still written below so the outcome is recorded.
+    # Provenance is loaded FIRST so a fault in any other side file keeps it: the
+    # reducer can then bind the infra_failure to this run and keep every other run's
+    # result. A provenance file that fails to load is never carried (fail closed).
+    provenance = None
     try:
+        provenance = _load_optional_json_object(args.provenance_json, "provenance")
         identity = _load_optional_json_object(args.identity_json, "identity-evidence")
         if identity is not None:
             _validate_identity_evidence(identity)
-        provenance = _load_optional_json_object(args.provenance_json, "provenance")
         installed_sha256 = _installed_package_sha256(
             _load_optional_json_object(args.install_json, "install-evidence"))
         summary, exit_code = build_summary(
@@ -342,9 +346,11 @@ def main(argv=None):
             invocation_id=args.invocation_id, installed_package_sha256=installed_sha256,
         )
     except SideFileError as e:
-        # Even a side-file plumbing fault yields a self-identifying result.
+        # Even a side-file plumbing fault yields a self-identifying result, bound to
+        # its run when the provenance file loaded.
         summary, exit_code = build_summary(mode=args.mode, infra_error=str(e),
-                                           invocation_id=args.invocation_id)
+                                           invocation_id=args.invocation_id,
+                                           provenance=provenance)
 
     Path(args.out).write_text(json.dumps(summary, indent=2))
     print(f"[pep-summary] execution={summary['execution_status']} "

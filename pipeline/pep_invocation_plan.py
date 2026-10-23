@@ -118,6 +118,9 @@ CERT_PLAN_SCHEMA = "cert-plan/1"
 FAMILIES = ("rpm", "deb")
 ARCHES = ("amd64", "arm64")
 EXECUTION_MODES = ("preview", "full")   # coordinator execution intent, bound into the plan
+# GitHub expands one matrix into at most 256 jobs. A larger plan fails closed here, with a
+# reason, instead of failing later when GitHub expands the run job's matrix.
+GITHUB_MATRIX_LIMIT = 256
 
 # The reusable workflow (pep-integration.yml preflight) accepts an invocation_id only if it
 # matches this charset/length; the planner is the producer, so it enforces the SAME rule.
@@ -808,6 +811,16 @@ def build_invocation_plan(cert_plan, exec_catalog, enabled_platforms, *,
         return _unresolved(["duplicate invocation identity: %s" % s for s in sorted(dups)],
                            release=release, provenance=provenance, supported_pgs=supported_pgs,
                            execution_mode=execution_mode)
+    if len(invocations) > GITHUB_MATRIX_LIMIT:
+        platforms = {inv["container_alias"] for inv in invocations}
+        packages = sorted({inv["package_name"] for inv in invocations})
+        return _unresolved(
+            ["%d test runs exceed GitHub's limit of %d jobs per matrix (%d targets on %d platforms, "
+             "PG majors %s, packages %s); certify fewer platforms, packages or PG majors per call"
+             % (len(invocations), GITHUB_MATRIX_LIMIT, covered_n, len(platforms),
+                ",".join(supported_pgs), ",".join(packages))],
+            release=release, provenance=provenance, supported_pgs=supported_pgs,
+            execution_mode=execution_mode)
 
     invocations.sort(key=lambda x: x["invocation_id"])
     gaps.sort(key=lambda g: (str(g.get("cell_id") or ""), str(g.get("target_id") or ""),
@@ -927,6 +940,16 @@ def to_json(plan):
     return json.dumps(plan, sort_keys=True, indent=2, ensure_ascii=False) + "\n"
 
 
+def workflow_error_annotations(errors):
+    """One GitHub ``::error::`` line per error. ``%``, CR and LF are escaped as workflow
+    commands require, so a message can never end its line early and start another command."""
+    lines = []
+    for err in errors:
+        msg = str(err).replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A")
+        lines.append("::error::PEP invocation plan not resolved: " + msg)
+    return lines
+
+
 def main(argv=None):
     import argparse
     ap = argparse.ArgumentParser(description="Derive the PEP test-invocation matrix from a resolved cert-plan/1")
@@ -936,7 +959,11 @@ def main(argv=None):
     ap.add_argument("--execution-mode", default="full", choices=list(EXECUTION_MODES),
                     help="coordinator execution intent; must match the cert-plan's stamp (default: full)")
     ap.add_argument("--out", default=None, help="write the invocation plan here (default: stdout)")
+    ap.add_argument("--annotate-errors", action="store_true",
+                    help="print an unresolved plan's errors as GitHub ::error:: lines (needs --out)")
     args = ap.parse_args(argv)
+    if args.annotate_errors and not args.out:
+        ap.error("--annotate-errors needs --out (the plan would share stdout with the annotations)")
     try:
         with open(args.cert_plan, "r", encoding="utf-8") as fh:
             cert_plan = json.load(fh)
@@ -952,6 +979,9 @@ def main(argv=None):
     else:
         import sys
         sys.stdout.write(text)
+    if args.annotate_errors and not plan.get("plan_resolved"):
+        for line in workflow_error_annotations(plan.get("errors") or []):
+            print(line)
     return 0 if plan.get("plan_resolved") else 1
 
 

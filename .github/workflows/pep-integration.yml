@@ -57,6 +57,10 @@ jobs:
     # carries the platform, PG version and package.
     name: ${{ inputs.execution_mode == 'full' && 'full test (install and product tests)' || (inputs.execution_mode == 'preview' && 'preview (no install, no product tests)' || 'rejected (invalid execution mode)') }}
     runs-on: ${{ inputs.arch == 'arm64' && 'ubuntu-24.04-arm' || 'ubuntu-24.04' }}
+    # Backstop only: the framework step has its own 45-minute limit (FRAMEWORK_LIMIT_SECONDS),
+    # which leaves time for Summarize, Upload and Report. If this job limit is ever hit,
+    # those always() steps run on a best-effort basis only.
+    timeout-minutes: 60
     outputs:
       execution_status:  ${{ steps.emit.outputs.execution_status }}
       test_verdict:      ${{ steps.emit.outputs.test_verdict }}
@@ -238,6 +242,7 @@ jobs:
           IN_SCENARIO: ${{ inputs.scenario }}
           IN_MODE: ${{ inputs.execution_mode }}
           IN_ENFORCE_MODE: ${{ inputs.mode }}   # enforcement mode -> must reach the request (finding 4)
+          FRAMEWORK_LIMIT_SECONDS: 2700         # 45 minutes; the job's 60-minute limit is the backstop
         run: |
           set -o pipefail
           args=( --integration
@@ -262,8 +267,11 @@ jobs:
           # $PEP_RC_VALIDATION == 3) from an unexpected failure (any other nonzero)
           # from success/clean-dry-run (0). `continue-on-error` keeps the job alive;
           # `outcome` alone would collapse 3 and 1 into "failure".
+          # The time-limit wrapper runs the framework in its own process group, stops the
+          # group at the limit, and appends timed_out=true|false to $GITHUB_OUTPUT, so a
+          # timeout is never inferred from an exit code.
           set +e
-          ./run_pep_tf.sh "${args[@]}"
+          python3 pipeline/pep_time_limit.py --limit-seconds "$FRAMEWORK_LIMIT_SECONDS" --grace-seconds 120 --outcome-file "$GITHUB_OUTPUT" -- ./run_pep_tf.sh "${args[@]}"
           rc=$?
           set -e
           echo "exit_code=$rc" >> "$GITHUB_OUTPUT"
@@ -282,6 +290,7 @@ jobs:
           # the summarizer so the atomic result self-identifies; NEVER the raw input.
           IN_INVOCATION_ID_VALID: ${{ steps.preflight.outputs.invocation_id }}
           FW_CODE: ${{ steps.fw.outputs.exit_code }}   # real script exit code (issue #10/#12)
+          FW_TIMED_OUT: ${{ steps.fw.outputs.timed_out }}   # "true" only when the time limit ended the framework
           DOCKER_OUTCOME: ${{ steps.docker.outcome }}
           SETUP_OUTCOME: ${{ steps.setup_python.outcome }}
           PIP_OUTCOME: ${{ steps.pip.outcome }}
@@ -355,6 +364,11 @@ jobs:
             args+=( --infra-error "dockerhub login failed (setup)" )
           elif [ "$DOCKER_OUTCOME" = "failure" ]; then
             args+=( --infra-error "docker preflight failed (setup)" )
+          elif [ "$FW_TIMED_OUT" = "true" ]; then
+            # The time limit, not a test, ended the framework -> infra, BOTH modes.
+            # Only the wrapper's explicit flag means "timed out"; any other exit
+            # (including 137 from an out-of-memory kill) takes the branches below.
+            args+=( --infra-error "test run exceeded its 45-minute limit (timeout)" )
           elif [ "$FW_CODE" = "3" ]; then
             # EXPECTED request/policy rejection (bad channel, scenario=upgrade, a
             # pre-flight RequestError) -> validation failure, NEVER infra, NEVER green.

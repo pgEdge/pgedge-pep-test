@@ -38,7 +38,38 @@ jobs:
         # aspects/pipeline/tests/ the shared integration-helper suites and
         # pipeline/tests/ the integration and release-certification suites; whole
         # directories run, so later suites there are picked up automatically too.
-        run: pytest utillities/test_container_resolver.py utillities/test_ci_consolidated_report.py aspects/tests/ aspects/pipeline/tests/ pipeline/tests/ -v
+        #
+        # DIAGNOSTIC ONLY (throwaway branch diag/pr28-unit-hang, never merged): the same selection,
+        # with fault-handler stack dumps (any test over 90 s, and every thread when the independent
+        # 5-minute limit sends SIGABRT, then a forced kill 30 s later), slow-test durations, runtime
+        # facts and the process tree. As a diagnostic precaution pytest writes to a file that is
+        # printed afterwards, so its children never inherit this step's log pipe. That cannot
+        # guarantee the runner finishes the step or saves the log.
+        env:
+          PYTHONUNBUFFERED: "1"
+          PYTHONFAULTHANDLER: "1"
+        run: |
+          echo "== runtime (diagnostic)"
+          echo "commit: $(git rev-parse HEAD)  parent: $(git rev-parse HEAD^)"
+          python -c 'import platform, sys; print("python", sys.version.split()[0], sys.executable); print(platform.platform())'
+          python -m pytest --version
+          echo "kernel: $(uname -srm)  cpus: $(nproc)  user: $(id -un)  pid 1: $(ps -o comm= -p 1)"
+          echo "step shell: pid=$$ pgid=$(ps -o pgid= -p $$ | tr -d ' ') sid=$(ps -o sid= -p $$ | tr -d ' ')"
+          echo "step fds: stdin=$(readlink /proc/$$/fd/0) stdout=$(readlink /proc/$$/fd/1) stderr=$(readlink /proc/$$/fd/2)"
+          ulimit -c 0                      # no core files from the SIGABRT stack dump
+          set +e
+          start=$(date +%s)
+          # --verbose makes timeout itself report any signal it sends (on this step's log, since
+          # only pytest's own output goes to the file). Any other kill shows no such line.
+          timeout --verbose --signal=ABRT --kill-after=30s 300s \
+            bash -c 'exec pytest utillities/test_container_resolver.py utillities/test_ci_consolidated_report.py aspects/tests/ aspects/pipeline/tests/ pipeline/tests/ -v -o faulthandler_timeout=90 --durations=25 --durations-min=0.5 > unit-diag.log 2>&1'
+          rc=$?
+          echo "== pytest exit status: $rc after $(( $(date +%s) - start )) s (see any 'timeout: sending signal' line above)"
+          echo "== pytest output"
+          cat unit-diag.log
+          echo "== process tree after pytest"
+          ps -eo pid,ppid,pgid,sid,stat,etime,args --forest
+          exit "$rc"
         # Phase 2a: test_pep_{identity,request,result_summary,version_normalize,
         # version_normalize_characterization,resolve,request_env,bridge}.py plus the
         # two regression suites above. Phase 2b adds test_pep_{verify,install_pinned}.py.

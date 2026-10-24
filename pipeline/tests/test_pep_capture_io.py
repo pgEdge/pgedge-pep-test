@@ -971,7 +971,8 @@ def test_an_interrupted_body_read_is_part_of_the_same_attempt_budget(monkeypatch
     assert read() == {"ok": 1} and len(calls) == 3
 
 
-@pytest.mark.parametrize("body", [b"{not json", b"x" * (IO._JSON_CAP + 5)])
+@pytest.mark.parametrize("body", [b"{not json", b"x" * (IO._JSON_CAP + 5)],
+                         ids=["malformed-json", "over-cap"])
 def test_malformed_or_oversized_responses_are_not_retried(monkeypatch, _no_real_sleep, body):
     calls, read = _get_json(monkeypatch, [("body", body)])
     with pytest.raises(IO.CaptureIOError):

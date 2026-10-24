@@ -1,202 +1,83 @@
-name: PEP Self-Test
-on: {pull_request: {}, workflow_dispatch: {}}
-# Least privilege: this self-test only checks out and runs unit/lint layers.
-# Read-only contents is all the GITHUB_TOKEN needs; safe for a public repo where
-# forks trigger PRs. The reusable workflow is public and self-checks-out without a
-# token, so the caller jobs below pass no secrets.
+name: PEP Self-Test (diagnostic isolation, throwaway branch)
+# DIAGNOSTIC ONLY on the throwaway branch diag/pr28-unit-hang; never merged. It replaces this
+# branch's copy of the Self-Test workflow because GitHub dispatches only a workflow file that also
+# exists on the default branch. Manual only, and it runs none of Self-Test's preview jobs.
+#
+# Three independent jobs isolate the unit-step hang seen on PR #28 (three runs on three runners,
+# each with the test step never reported complete and no log saved):
+#   baseline         main a117063, its exact Self-Test unit selection;
+#   pr-no-time-limit PR head 27fdca0, the same selection without pipeline/tests/test_pep_time_limit.py
+#                    (excluded from collection only; the file is not changed);
+#   pr-time-limit    PR head 27fdca0, pipeline/tests/test_pep_time_limit.py alone.
+# Each pytest run has an independent 3-minute limit (coreutils timeout: SIGABRT, which makes the
+# fault handler dump every thread, then SIGKILL 30 s later), and each job an 8-minute backstop.
+# The output is also kept in a file uploaded as an artifact, when the runner still finishes the
+# job; neither the log nor the artifact can survive a runner that stops reporting.
+on: {workflow_dispatch: {}}
 permissions:
   contents: read
 jobs:
-  unit:
+  isolate:
+    name: ${{ matrix.case }}
     runs-on: ubuntu-24.04
-    timeout-minutes: 20
+    timeout-minutes: 8
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - case: baseline
+            ref: a11706375e3411bf17968513c2017e6890a726b4
+            pytest_args: utillities/test_container_resolver.py utillities/test_ci_consolidated_report.py aspects/tests/ aspects/pipeline/tests/ pipeline/tests/
+          - case: pr-no-time-limit
+            ref: 27fdca02d018d214c1a4bdd4a6dfacdabf01a5d2
+            pytest_args: utillities/test_container_resolver.py utillities/test_ci_consolidated_report.py aspects/tests/ aspects/pipeline/tests/ pipeline/tests/ --ignore=pipeline/tests/test_pep_time_limit.py
+          - case: pr-time-limit
+            ref: 27fdca02d018d214c1a4bdd4a6dfacdabf01a5d2
+            pytest_args: pipeline/tests/test_pep_time_limit.py
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803  # v6.1.0
+        with:
+          ref: ${{ matrix.ref }}
       - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1  # v6.3.0
         with: {python-version: "3.11"}
       - run: pip install -r requirements.txt
-      - name: Lint workflows (before anything relies on them)
-        # Container image pinned by immutable DIGEST (not a mutable tag): rhysd/actionlint:1.7.7.
-        # Scoped to the PEP workflows this self-test introduces/depends on (integration, the
-        # reusable capture workflow, the capture smoke, and selftest) rather than the whole
-        # .github/workflows/ dir, so this self-test isn't coupled to the unrelated pre-existing
-        # pep-regression.yml breaking independently.
-        #
-        # The single `-ignore` suppresses ONLY actionlint's false positive for `job.workflow_sha` (a
-        # 2026 job-context property this pinned actionlint does not yet model; pep-certify.yml's identity
-        # job uses it as GitHub's purpose-built reusable-workflow SHA). The regex is anchored to that
-        # exact diagnostic + the job-context object type, so every other expression diagnostic still fails
-        # the lint. It is NOT a broad `-ignore` of expression errors.
-        run: docker run --rm -v "$PWD:/repo" -w /repo rhysd/actionlint@sha256:887a259a5a534f3c4f36cb02dca341673c6089431057242cdc931e9f133147e9 -color -ignore 'property "workflow_sha" is not defined in object type \{container' .github/workflows/pep-integration.yml .github/workflows/pep-capture.yml .github/workflows/pep-capture-smoke.yml .github/workflows/pep-selftest.yml .github/workflows/pep-certify.yml .github/workflows/pep-release-certify.yml
-      - name: Unit layer (globs so later modules are picked up automatically)
-        # Finding 5: also run the pre-existing container-resolver and
-        # consolidated-report regression suites. The bridge (run_pep_tf.sh) shells
-        # out to container_resolver.py, so a regression there would break the
-        # integration path without any test_pep_*.py failing — these two named
-        # suites stay in utillities/ and must be run too.
-        # aspects/tests/ holds the shared aspect suites (e.g. prerequisite setup),
-        # aspects/pipeline/tests/ the shared integration-helper suites and
-        # pipeline/tests/ the integration and release-certification suites; whole
-        # directories run, so later suites there are picked up automatically too.
-        #
-        # DIAGNOSTIC ONLY (throwaway branch diag/pr28-unit-hang, never merged): the same selection,
-        # with fault-handler stack dumps (any test over 90 s, and every thread when the independent
-        # 5-minute limit sends SIGABRT, then a forced kill 30 s later), slow-test durations, runtime
-        # facts and the process tree. As a diagnostic precaution pytest writes to a file that is
-        # printed afterwards, so its children never inherit this step's log pipe. That cannot
-        # guarantee the runner finishes the step or saves the log.
+      - name: Record checkout, runtime and memory
         env:
-          PYTHONUNBUFFERED: "1"
-          PYTHONFAULTHANDLER: "1"
+          CASE: ${{ matrix.case }}
+          EXPECTED_REF: ${{ matrix.ref }}
         run: |
-          echo "== runtime (diagnostic)"
-          echo "commit: $(git rev-parse HEAD)  parent: $(git rev-parse HEAD^)"
+          echo "case: $CASE"
+          echo "checkout: $(git rev-parse HEAD)"
+          test "$(git rev-parse HEAD)" = "$EXPECTED_REF" || { echo "unexpected checkout"; exit 1; }
           python -c 'import platform, sys; print("python", sys.version.split()[0], sys.executable); print(platform.platform())'
           python -m pytest --version
           echo "kernel: $(uname -srm)  cpus: $(nproc)  user: $(id -un)  pid 1: $(ps -o comm= -p 1)"
+          free -m
+          grep -E '^(MemTotal|MemAvailable|SwapTotal|SwapFree):' /proc/meminfo
           echo "step shell: pid=$$ pgid=$(ps -o pgid= -p $$ | tr -d ' ') sid=$(ps -o sid= -p $$ | tr -d ' ')"
           echo "step fds: stdin=$(readlink /proc/$$/fd/0) stdout=$(readlink /proc/$$/fd/1) stderr=$(readlink /proc/$$/fd/2)"
+      - name: pytest (independent 3-minute diagnostic limit)
+        env:
+          PYTHONUNBUFFERED: "1"
+          PYTHONFAULTHANDLER: "1"
+          PYTEST_ARGS: ${{ matrix.pytest_args }}
+        run: |
+          read -ra args <<< "$PYTEST_ARGS"
           ulimit -c 0                      # no core files from the SIGABRT stack dump
           set +e
           start=$(date +%s)
-          # --verbose makes timeout itself report any signal it sends (on this step's log, since
-          # only pytest's own output goes to the file). Any other kill shows no such line.
-          timeout --verbose --signal=ABRT --kill-after=30s 300s \
-            bash -c 'exec pytest utillities/test_container_resolver.py utillities/test_ci_consolidated_report.py aspects/tests/ aspects/pipeline/tests/ pipeline/tests/ -v -o faulthandler_timeout=90 --durations=25 --durations-min=0.5 > unit-diag.log 2>&1'
-          rc=$?
+          # --verbose makes timeout itself report any signal it sends; any other kill shows no such line.
+          timeout --verbose --signal=ABRT --kill-after=30s 180s \
+            pytest "${args[@]}" -v -o faulthandler_timeout=60 2>&1 | tee pytest-output.log
+          rc=${PIPESTATUS[0]}
           echo "== pytest exit status: $rc after $(( $(date +%s) - start )) s (see any 'timeout: sending signal' line above)"
-          echo "== pytest output"
-          cat unit-diag.log
           echo "== process tree after pytest"
           ps -eo pid,ppid,pgid,sid,stat,etime,args --forest
           exit "$rc"
-        # Phase 2a: test_pep_{identity,request,result_summary,version_normalize,
-        # version_normalize_characterization,resolve,request_env,bridge}.py plus the
-        # two regression suites above. Phase 2b adds test_pep_{verify,install_pinned}.py.
-        # Docker/CLI-dependent tests (e.g. test_pep_bridge) skip cleanly when
-        # preconditions are absent (but the dry-run bridge test does NOT skip on
-        # Docker absence — Task 3 Step 6).
-
-  preview-call:                     # caller job — no steps allowed
-    uses: ./.github/workflows/pep-integration.yml
-    with:
-      component: rag
-      package_name: pgedge-rag-server
-      channel: daily
-      expected_version: "0.0.0-selftest"
-      container_alias: rocky9-amd64
-      pg_major: "17"
-      family: rpm
-      arch: amd64
-      execution_mode: preview
-      invocation_id: preview          # item 1: unique per call so artifact names can't collide
-      pep_implementation_ref: ${{ github.sha }}
-
-  assert-preview:                   # SEPARATE downstream job reads the outputs
-    needs: preview-call
-    runs-on: ubuntu-24.04
-    steps:
-      - run: |
-          test "${{ needs.preview-call.outputs.execution_status }}" = "preview" \
-            || { echo "expected preview, got '${{ needs.preview-call.outputs.execution_status }}'"; exit 1; }
-          test "${{ needs.preview-call.outputs.test_verdict }}" = "not_run" || exit 1
-
-  # issue #12: prove an EXPECTED request/policy rejection is classified as VALIDATION
-  # (incomplete/not_run) — NOT preview, NOT infra_failure. scenario=upgrade is rejected
-  # by the bridge (exit 3) before dry-run, so this exercises the FW_CODE==3 branch.
-  validation-call:                  # caller job — scenario=upgrade in preview/observe
-    uses: ./.github/workflows/pep-integration.yml
-    with:
-      component: rag
-      package_name: pgedge-rag-server
-      channel: daily
-      expected_version: "0.0.0-selftest"
-      container_alias: rocky9-amd64
-      pg_major: "17"
-      family: rpm
-      arch: amd64
-      execution_mode: preview
-      mode: observe                 # observe -> summarizer exit 0, job still succeeds
-      scenario: upgrade             # unsupported in the POC -> expected rejection
-      invocation_id: validation-upgrade   # item 1: unique per call
-      pep_implementation_ref: ${{ github.sha }}
-
-  assert-validation:                # SEPARATE downstream job asserts the classification
-    needs: validation-call
-    runs-on: ubuntu-24.04
-    steps:
-      - run: |
-          st="${{ needs.validation-call.outputs.execution_status }}"
-          tv="${{ needs.validation-call.outputs.test_verdict }}"
-          test "$st" = "incomplete" \
-            || { echo "expected incomplete (validation), got '$st'"; exit 1; }
-          test "$tv" = "not_run" || { echo "expected not_run, got '$tv'"; exit 1; }
-          # explicit negative assertions: rejection must NOT masquerade as preview or infra
-          test "$st" != "preview"      || { echo "validation wrongly reported as preview"; exit 1; }
-          test "$st" != "infra_failure" || { echo "validation wrongly reported as infra_failure"; exit 1; }
-
-  # Finding 2 (negative workflow case): an unknown execution_mode must be
-  # classified as a VALIDATION rejection (incomplete/not_run) — never a
-  # false-green preview. mode=observe keeps the summarizer exit 0 so the caller
-  # job succeeds and this downstream job can read+assert the classification.
-  bad-execmode-call:
-    uses: ./.github/workflows/pep-integration.yml
-    with:
-      component: rag
-      package_name: pgedge-rag-server
-      channel: daily
-      expected_version: "0.0.0-selftest"
-      container_alias: rocky9-amd64
-      pg_major: "17"
-      family: rpm
-      arch: amd64
-      execution_mode: bogus         # invalid -> must be rejected, not treated as preview
-      mode: observe
-      invocation_id: bad-execmode    # item 1: unique per call
-      pep_implementation_ref: ${{ github.sha }}
-
-  assert-bad-execmode:
-    needs: bad-execmode-call
-    runs-on: ubuntu-24.04
-    steps:
-      - run: |
-          st="${{ needs.bad-execmode-call.outputs.execution_status }}"
-          tv="${{ needs.bad-execmode-call.outputs.test_verdict }}"
-          test "$st" = "incomplete" \
-            || { echo "expected incomplete (validation) for bad execution_mode, got '$st'"; exit 1; }
-          test "$tv" = "not_run" || { echo "expected not_run, got '$tv'"; exit 1; }
-          test "$st" != "preview" || { echo "invalid execution_mode wrongly reported as preview"; exit 1; }
-
-  # Finding 4 (negative workflow case, mode reaches the request): an invalid
-  # enforcement mode must be rejected on the REAL CI path — the workflow forwards
-  # inputs.mode to the bridge (--mode), which rejects it via normalize_request
-  # (exit 3 -> FW_CODE==3 -> validation). Proves the wiring, not just the unit
-  # test. execution_mode=preview is valid so the preflight passes and the fw step
-  # actually runs the bridge; mode=observe would be the normal path, so we send a
-  # bogus mode and assert it is classified as a validation rejection.
-  bad-mode-call:
-    uses: ./.github/workflows/pep-integration.yml
-    with:
-      component: rag
-      package_name: pgedge-rag-server
-      channel: daily
-      expected_version: "0.0.0-selftest"
-      container_alias: rocky9-amd64
-      pg_major: "17"
-      family: rpm
-      arch: amd64
-      execution_mode: preview       # valid -> fw runs the bridge
-      mode: bogus                   # invalid enforcement mode -> must be rejected
-      invocation_id: bad-mode        # item 1: unique per call (else collides with preview-call)
-      pep_implementation_ref: ${{ github.sha }}
-
-  assert-bad-mode:
-    needs: bad-mode-call
-    runs-on: ubuntu-24.04
-    steps:
-      - run: |
-          st="${{ needs.bad-mode-call.outputs.execution_status }}"
-          test "$st" = "incomplete" \
-            || { echo "expected incomplete (validation) for bad enforcement mode, got '$st'"; exit 1; }
-          test "$st" != "preview"      || { echo "bad mode wrongly reported as preview"; exit 1; }
-          test "$st" != "infra_failure" || { echo "bad mode wrongly reported as infra_failure (summarizer crash?)"; exit 1; }
+      - name: Keep the pytest output (when the runner still finishes the job)
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
+        with:
+          name: isolation-${{ matrix.case }}
+          path: pytest-output.log
+          if-no-files-found: warn

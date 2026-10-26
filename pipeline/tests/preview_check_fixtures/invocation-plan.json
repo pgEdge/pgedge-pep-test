@@ -1,0 +1,199 @@
+{
+  "counts": {
+    "coverage_gaps": 0,
+    "covered_targets": 2,
+    "eligible_targets": 2,
+    "gaps_by_scope": {
+      "cell": 0,
+      "member": 0,
+      "target": 0
+    },
+    "invocations": 6,
+    "planned_cells": 2,
+    "selected_targets": 2
+  },
+  "coverage_gaps": [],
+  "errors": [],
+  "execution_mode": "preview",
+  "matrix": {
+    "include": [
+      {
+        "arch": "amd64",
+        "channel": "daily",
+        "component": "pgedge-capture-smoke",
+        "container_alias": "debian12-amd64",
+        "effective_tag": "v1.0.0",
+        "expected_binary": "",
+        "expected_buildnum": "1",
+        "expected_deb": "1.0.0-1.bookworm",
+        "expected_rpm": "",
+        "expected_version": "1.0.0",
+        "family": "deb",
+        "invocation_id": "pgedge-capture-smoke-debian12-amd64-pg16-6838799015f9dc6f",
+        "package": {
+          "name": "pgedge-capture-smoke",
+          "native_arch": "amd64",
+          "release": "1.bookworm",
+          "sha256": "42fda962f2cc5dbc69095dadd17fe4b7b32d7f678f0dae6aebc8e6bd47e28959",
+          "version": "1.0.0"
+        },
+        "package_name": "pgedge-capture-smoke",
+        "pg_major": "16",
+        "producer_repo": "pgEdge/pgedge-pep-test",
+        "source_cell_id": "certpreview-deb-bookworm-amd64",
+        "source_target_id": "certpreview-deb-bookworm-amd64::pgedge-capture-smoke"
+      },
+      {
+        "arch": "amd64",
+        "channel": "daily",
+        "component": "pgedge-capture-smoke",
+        "container_alias": "debian12-amd64",
+        "effective_tag": "v1.0.0",
+        "expected_binary": "",
+        "expected_buildnum": "1",
+        "expected_deb": "1.0.0-1.bookworm",
+        "expected_rpm": "",
+        "expected_version": "1.0.0",
+        "family": "deb",
+        "invocation_id": "pgedge-capture-smoke-debian12-amd64-pg17-62563d316feae70f",
+        "package": {
+          "name": "pgedge-capture-smoke",
+          "native_arch": "amd64",
+          "release": "1.bookworm",
+          "sha256": "42fda962f2cc5dbc69095dadd17fe4b7b32d7f678f0dae6aebc8e6bd47e28959",
+          "version": "1.0.0"
+        },
+        "package_name": "pgedge-capture-smoke",
+        "pg_major": "17",
+        "producer_repo": "pgEdge/pgedge-pep-test",
+        "source_cell_id": "certpreview-deb-bookworm-amd64",
+        "source_target_id": "certpreview-deb-bookworm-amd64::pgedge-capture-smoke"
+      },
+      {
+        "arch": "amd64",
+        "channel": "daily",
+        "component": "pgedge-capture-smoke",
+        "container_alias": "debian12-amd64",
+        "effective_tag": "v1.0.0",
+        "expected_binary": "",
+        "expected_buildnum": "1",
+        "expected_deb": "1.0.0-1.bookworm",
+        "expected_rpm": "",
+        "expected_version": "1.0.0",
+        "family": "deb",
+        "invocation_id": "pgedge-capture-smoke-debian12-amd64-pg18-4c06dd1ac8b2675a",
+        "package": {
+          "name": "pgedge-capture-smoke",
+          "native_arch": "amd64",
+          "release": "1.bookworm",
+          "sha256": "42fda962f2cc5dbc69095dadd17fe4b7b32d7f678f0dae6aebc8e6bd47e28959",
+          "version": "1.0.0"
+        },
+        "package_name": "pgedge-capture-smoke",
+        "pg_major": "18",
+        "producer_repo": "pgEdge/pgedge-pep-test",
+        "source_cell_id": "certpreview-deb-bookworm-amd64",
+        "source_target_id": "certpreview-deb-bookworm-amd64::pgedge-capture-smoke"
+      },
+      {
+        "arch": "amd64",
+        "channel": "daily",
+        "component": "pgedge-capture-smoke",
+        "container_alias": "oel9-amd64",
+        "effective_tag": "v1.0.0",
+        "expected_binary": "",
+        "expected_buildnum": "1",
+        "expected_deb": "",
+        "expected_rpm": "1.0.0-1.el9",
+        "expected_version": "1.0.0",
+        "family": "rpm",
+        "invocation_id": "pgedge-capture-smoke-oel9-amd64-pg16-97c7ed8d69886816",
+        "package": {
+          "name": "pgedge-capture-smoke",
+          "native_arch": "noarch",
+          "release": "1.el9",
+          "sha256": "929f4ccadcd27c6652f6bac99abba21f165bbb025a1186bfeaeabd268b7b8b25",
+          "version": "1.0.0"
+        },
+        "package_name": "pgedge-capture-smoke",
+        "pg_major": "16",
+        "producer_repo": "pgEdge/pgedge-pep-test",
+        "source_cell_id": "certpreview-rpm-el9-amd64",
+        "source_target_id": "certpreview-rpm-el9-amd64::pgedge-capture-smoke"
+      },
+      {
+        "arch": "amd64",
+        "channel": "daily",
+        "component": "pgedge-capture-smoke",
+        "container_alias": "oel9-amd64",
+        "effective_tag": "v1.0.0",
+        "expected_binary": "",
+        "expected_buildnum": "1",
+        "expected_deb": "",
+        "expected_rpm": "1.0.0-1.el9",
+        "expected_version": "1.0.0",
+        "family": "rpm",
+        "invocation_id": "pgedge-capture-smoke-oel9-amd64-pg17-3dbcc4810c3f76b2",
+        "package": {
+          "name": "pgedge-capture-smoke",
+          "native_arch": "noarch",
+          "release": "1.el9",
+          "sha256": "929f4ccadcd27c6652f6bac99abba21f165bbb025a1186bfeaeabd268b7b8b25",
+          "version": "1.0.0"
+        },
+        "package_name": "pgedge-capture-smoke",
+        "pg_major": "17",
+        "producer_repo": "pgEdge/pgedge-pep-test",
+        "source_cell_id": "certpreview-rpm-el9-amd64",
+        "source_target_id": "certpreview-rpm-el9-amd64::pgedge-capture-smoke"
+      },
+      {
+        "arch": "amd64",
+        "channel": "daily",
+        "component": "pgedge-capture-smoke",
+        "container_alias": "oel9-amd64",
+        "effective_tag": "v1.0.0",
+        "expected_binary": "",
+        "expected_buildnum": "1",
+        "expected_deb": "",
+        "expected_rpm": "1.0.0-1.el9",
+        "expected_version": "1.0.0",
+        "family": "rpm",
+        "invocation_id": "pgedge-capture-smoke-oel9-amd64-pg18-c19a875f172342bb",
+        "package": {
+          "name": "pgedge-capture-smoke",
+          "native_arch": "noarch",
+          "release": "1.el9",
+          "sha256": "929f4ccadcd27c6652f6bac99abba21f165bbb025a1186bfeaeabd268b7b8b25",
+          "version": "1.0.0"
+        },
+        "package_name": "pgedge-capture-smoke",
+        "pg_major": "18",
+        "producer_repo": "pgEdge/pgedge-pep-test",
+        "source_cell_id": "certpreview-rpm-el9-amd64",
+        "source_target_id": "certpreview-rpm-el9-amd64::pgedge-capture-smoke"
+      }
+    ]
+  },
+  "plan_resolved": true,
+  "provenance": {
+    "ref": "refs/pull/99/merge",
+    "repository": "pgEdge/pgedge-pep-test",
+    "run_attempt": "1",
+    "run_id": "9100000001",
+    "sha": "1f0ecccccccccccccccccccccccccccccccccccc"
+  },
+  "release": {
+    "channel": "daily",
+    "effective_tag": "v1.0.0",
+    "intended_buildnum": "1",
+    "intended_version": "1.0.0",
+    "logical_component": "pgedge-capture-smoke"
+  },
+  "schema": "pep-invocation-plan/1",
+  "supported_pg_majors": [
+    "16",
+    "17",
+    "18"
+  ]
+}

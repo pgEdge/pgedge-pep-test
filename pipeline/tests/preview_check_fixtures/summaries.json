@@ -1,0 +1,170 @@
+{
+  "pep-summary-pgedge-capture-smoke-deb-amd64-pg16-daily-debian12-amd64-certification-preview-pgedge-capture-smoke-debian12-amd64-pg16-6838799015f9dc6f-r77-a1": {
+    "counts": {
+      "errors": 0,
+      "failures": 0,
+      "skipped": 0,
+      "tests": 0
+    },
+    "enforcement_mode": "observe",
+    "execution_status": "preview",
+    "identity_evidence": {
+      "l1": "not_attempted",
+      "l2a": "not_attempted",
+      "l2b": "not_attempted"
+    },
+    "installed_package_sha256": null,
+    "invocation_id": "pgedge-capture-smoke-debian12-amd64-pg16-6838799015f9dc6f",
+    "provenance": {
+      "caller_ref": "refs/pull/99/merge",
+      "caller_repo": "pgEdge/pgedge-pep-test",
+      "caller_run_attempt": "1",
+      "caller_run_id": "9100000001",
+      "caller_sha": "1f0ecccccccccccccccccccccccccccccccccccc",
+      "pep_requested_ref": "1f0ecccccccccccccccccccccccccccccccccccc",
+      "pep_resolved_sha": "1f0ecccccccccccccccccccccccccccccccccccc"
+    },
+    "reason": "preview mode (no install)",
+    "test_verdict": "not_run"
+  },
+  "pep-summary-pgedge-capture-smoke-deb-amd64-pg17-daily-debian12-amd64-certification-preview-pgedge-capture-smoke-debian12-amd64-pg17-62563d316feae70f-r77-a1": {
+    "counts": {
+      "errors": 0,
+      "failures": 0,
+      "skipped": 0,
+      "tests": 0
+    },
+    "enforcement_mode": "observe",
+    "execution_status": "preview",
+    "identity_evidence": {
+      "l1": "not_attempted",
+      "l2a": "not_attempted",
+      "l2b": "not_attempted"
+    },
+    "installed_package_sha256": null,
+    "invocation_id": "pgedge-capture-smoke-debian12-amd64-pg17-62563d316feae70f",
+    "provenance": {
+      "caller_ref": "refs/pull/99/merge",
+      "caller_repo": "pgEdge/pgedge-pep-test",
+      "caller_run_attempt": "1",
+      "caller_run_id": "9100000001",
+      "caller_sha": "1f0ecccccccccccccccccccccccccccccccccccc",
+      "pep_requested_ref": "1f0ecccccccccccccccccccccccccccccccccccc",
+      "pep_resolved_sha": "1f0ecccccccccccccccccccccccccccccccccccc"
+    },
+    "reason": "preview mode (no install)",
+    "test_verdict": "not_run"
+  },
+  "pep-summary-pgedge-capture-smoke-deb-amd64-pg18-daily-debian12-amd64-certification-preview-pgedge-capture-smoke-debian12-amd64-pg18-4c06dd1ac8b2675a-r77-a1": {
+    "counts": {
+      "errors": 0,
+      "failures": 0,
+      "skipped": 0,
+      "tests": 0
+    },
+    "enforcement_mode": "observe",
+    "execution_status": "preview",
+    "identity_evidence": {
+      "l1": "not_attempted",
+      "l2a": "not_attempted",
+      "l2b": "not_attempted"
+    },
+    "installed_package_sha256": null,
+    "invocation_id": "pgedge-capture-smoke-debian12-amd64-pg18-4c06dd1ac8b2675a",
+    "provenance": {
+      "caller_ref": "refs/pull/99/merge",
+      "caller_repo": "pgEdge/pgedge-pep-test",
+      "caller_run_attempt": "1",
+      "caller_run_id": "9100000001",
+      "caller_sha": "1f0ecccccccccccccccccccccccccccccccccccc",
+      "pep_requested_ref": "1f0ecccccccccccccccccccccccccccccccccccc",
+      "pep_resolved_sha": "1f0ecccccccccccccccccccccccccccccccccccc"
+    },
+    "reason": "preview mode (no install)",
+    "test_verdict": "not_run"
+  },
+  "pep-summary-pgedge-capture-smoke-rpm-amd64-pg16-daily-oel9-amd64-certification-preview-pgedge-capture-smoke-oel9-amd64-pg16-97c7ed8d69886816-r77-a1": {
+    "counts": {
+      "errors": 0,
+      "failures": 0,
+      "skipped": 0,
+      "tests": 0
+    },
+    "enforcement_mode": "observe",
+    "execution_status": "preview",
+    "identity_evidence": {
+      "l1": "not_attempted",
+      "l2a": "not_attempted",
+      "l2b": "not_attempted"
+    },
+    "installed_package_sha256": null,
+    "invocation_id": "pgedge-capture-smoke-oel9-amd64-pg16-97c7ed8d69886816",
+    "provenance": {
+      "caller_ref": "refs/pull/99/merge",
+      "caller_repo": "pgEdge/pgedge-pep-test",
+      "caller_run_attempt": "1",
+      "caller_run_id": "9100000001",
+      "caller_sha": "1f0ecccccccccccccccccccccccccccccccccccc",
+      "pep_requested_ref": "1f0ecccccccccccccccccccccccccccccccccccc",
+      "pep_resolved_sha": "1f0ecccccccccccccccccccccccccccccccccccc"
+    },
+    "reason": "preview mode (no install)",
+    "test_verdict": "not_run"
+  },
+  "pep-summary-pgedge-capture-smoke-rpm-amd64-pg17-daily-oel9-amd64-certification-preview-pgedge-capture-smoke-oel9-amd64-pg17-3dbcc4810c3f76b2-r77-a1": {
+    "counts": {
+      "errors": 0,
+      "failures": 0,
+      "skipped": 0,
+      "tests": 0
+    },
+    "enforcement_mode": "observe",
+    "execution_status": "preview",
+    "identity_evidence": {
+      "l1": "not_attempted",
+      "l2a": "not_attempted",
+      "l2b": "not_attempted"
+    },
+    "installed_package_sha256": null,
+    "invocation_id": "pgedge-capture-smoke-oel9-amd64-pg17-3dbcc4810c3f76b2",
+    "provenance": {
+      "caller_ref": "refs/pull/99/merge",
+      "caller_repo": "pgEdge/pgedge-pep-test",
+      "caller_run_attempt": "1",
+      "caller_run_id": "9100000001",
+      "caller_sha": "1f0ecccccccccccccccccccccccccccccccccccc",
+      "pep_requested_ref": "1f0ecccccccccccccccccccccccccccccccccccc",
+      "pep_resolved_sha": "1f0ecccccccccccccccccccccccccccccccccccc"
+    },
+    "reason": "preview mode (no install)",
+    "test_verdict": "not_run"
+  },
+  "pep-summary-pgedge-capture-smoke-rpm-amd64-pg18-daily-oel9-amd64-certification-preview-pgedge-capture-smoke-oel9-amd64-pg18-c19a875f172342bb-r77-a1": {
+    "counts": {
+      "errors": 0,
+      "failures": 0,
+      "skipped": 0,
+      "tests": 0
+    },
+    "enforcement_mode": "observe",
+    "execution_status": "preview",
+    "identity_evidence": {
+      "l1": "not_attempted",
+      "l2a": "not_attempted",
+      "l2b": "not_attempted"
+    },
+    "installed_package_sha256": null,
+    "invocation_id": "pgedge-capture-smoke-oel9-amd64-pg18-c19a875f172342bb",
+    "provenance": {
+      "caller_ref": "refs/pull/99/merge",
+      "caller_repo": "pgEdge/pgedge-pep-test",
+      "caller_run_attempt": "1",
+      "caller_run_id": "9100000001",
+      "caller_sha": "1f0ecccccccccccccccccccccccccccccccccccc",
+      "pep_requested_ref": "1f0ecccccccccccccccccccccccccccccccccccc",
+      "pep_resolved_sha": "1f0ecccccccccccccccccccccccccccccccccccc"
+    },
+    "reason": "preview mode (no install)",
+    "test_verdict": "not_run"
+  }
+}

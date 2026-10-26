@@ -58,6 +58,7 @@ import json
 import os
 import re
 import shutil
+import ssl
 import sys
 import time
 import urllib.error
@@ -80,6 +81,13 @@ MAX_REDIRECTS = 5
 PER_PAGE = 100                   # <=100 per the REST API; never create >100 artifacts just to page
 _CHUNK = 1024 * 1024
 _JSON_CAP = 16 * 1024 * 1024     # a jobs/artifacts page is small; cap defensively
+# Bounded retries for TRANSIENT read failures only (rate limit, 5xx, network faults, an
+# interrupted body). RETRY_ATTEMPTS counts every attempt of one logical read, the first
+# included; the transport is the only layer that retries, so budgets never multiply.
+RETRY_ATTEMPTS = 3
+_RETRY_WAITS = (2, 5)            # seconds before the 2nd and the 3rd attempt
+_RETRY_AFTER_CAP = 30            # an honoured Retry-After never waits longer than this
+_TRANSIENT_HTTP = frozenset({429, 500, 502, 503, 504})
 _GITHUB_ONLY_HEADERS = ("authorization", "accept", "x-github-api-version")
 _RECEIPT_PREFIX = C.RECEIPT_ARTIFACT_PREFIX
 # Token shapes masked in any diagnostic: GitHub fine-grained PATs (github_pat_...) and the classic
@@ -108,6 +116,50 @@ class CaptureIOError(Exception):
 
 class _NotFound(Exception):
     """Internal: a 404/410 from the API (artifact/endpoint gone)."""
+
+
+class _TransientError(CaptureIOError):
+    """Internal: a read failure worth another attempt (HTTP 429/5xx, a network or timeout
+    fault, an interrupted body). ``retry_after`` is the server's Retry-After in seconds."""
+
+    def __init__(self, message, retry_after=None):
+        super().__init__(message)
+        self.retry_after = retry_after
+
+
+def _sleep(seconds):
+    """The single wait seam (tests patch this)."""
+    time.sleep(seconds)
+
+
+def _retry_after_seconds(headers):
+    """An integer Retry-After header in seconds, or None (absent or an HTTP date)."""
+    value = headers.get("Retry-After") if headers is not None else None
+    try:
+        seconds = int(str(value).strip())
+    except (TypeError, ValueError):
+        return None
+    return seconds if seconds >= 0 else None
+
+
+def _is_transient_fault(exc):
+    """A connection/timeout/protocol fault that may succeed on another attempt. A failed
+    certificate check is an integrity failure, never retried."""
+    if isinstance(exc, (ssl.SSLCertVerificationError, ssl.CertificateError)):
+        return False
+    return isinstance(exc, (TimeoutError, http.client.HTTPException, OSError))
+
+
+def _declared_bytes_missing(resp):
+    """Bytes the response's own framing still expects once its body has ended, or 0.
+    http.client's read(n) returns b"" at end of stream WITHOUT raising when fewer bytes than
+    the Content-Length arrived; its ``length`` then still counts the missing bytes. A chunked
+    body that ends early raises IncompleteRead instead, and a body read until the connection
+    closes declares no length, so neither gives (or needs) this evidence."""
+    remaining = getattr(resp, "length", None)
+    if isinstance(remaining, int) and not isinstance(remaining, bool) and remaining > 0:
+        return remaining
+    return 0
 
 
 # --- redaction --------------------------------------------------------------
@@ -185,8 +237,9 @@ def _initial_headers(token):
 def _safe_fetch(url, token, timeout):
     """Fetch ``url`` with the token, following bounded redirects safely: the token
     reaches ONLY the api.github.com origin; a cross-origin hop drops it; a downgrade
-    is refused. Returns the final open response. Raises ``_NotFound`` on 404/410 and
-    ``CaptureIOError`` (redacted) otherwise."""
+    is refused. Returns the final open response. Raises ``_NotFound`` on 404/410,
+    ``_TransientError`` on HTTP 429/5xx or a network/timeout fault, and
+    ``CaptureIOError`` (redacted) otherwise. It never retries: the transport decides."""
     if not _is_github_api_url(url):
         raise CaptureIOError("refusing to send credentials to a non-GitHub URL")
     headers = _initial_headers(token)
@@ -203,32 +256,68 @@ def _safe_fetch(url, token, timeout):
                 continue
             if e.code in (404, 410):
                 raise _NotFound()
+            if e.code in _TRANSIENT_HTTP:
+                raise _TransientError("GitHub API request failed (HTTP %d)" % e.code,
+                                      retry_after=_retry_after_seconds(e.headers))
             raise CaptureIOError("GitHub API request failed (HTTP %d)" % e.code)
         except urllib.error.URLError as e:
-            raise CaptureIOError("GitHub API request failed: %s" % redact(str(e.reason)))
+            msg = "GitHub API request failed: %s" % redact(str(e.reason))
+            if _is_transient_fault(e.reason):
+                raise _TransientError(msg)
+            raise CaptureIOError(msg)
         except (TimeoutError, http.client.HTTPException, OSError) as e:
-            # connect timeouts / transport errors not surfaced as URLError -> systemic.
-            raise CaptureIOError("GitHub API request failed: %s" % redact(str(e)))
+            # connect timeouts / transport errors not surfaced as URLError.
+            msg = "GitHub API request failed: %s" % redact(str(e))
+            if _is_transient_fault(e):
+                raise _TransientError(msg)
+            raise CaptureIOError(msg)
     raise CaptureIOError("too many redirects during capture fetch")
 
 
 # --- transport (network vs offline fake) ------------------------------------
 class UrllibTransport:
     """Production transport: authenticated GitHub API reads and safe streaming
-    artifact downloads."""
+    artifact downloads.
+
+    ``get_json`` and ``download`` are each ONE logical read: an attempt covers the request,
+    its redirects and the whole body, and a transient failure starts the read again from the
+    original URL with the original headers (so the credential-origin rules apply to every
+    attempt). At most RETRY_ATTEMPTS attempts are made in total. 404/410, any other HTTP
+    status, a refused redirect, a malformed or oversized response and a local file error
+    are never retried."""
 
     def __init__(self, token, timeout=60):
         self._token = token
         self._timeout = timeout
 
+    def _with_retries(self, attempt):
+        for n in range(1, RETRY_ATTEMPTS + 1):
+            try:
+                return attempt()
+            except _TransientError as e:
+                if n == RETRY_ATTEMPTS:
+                    raise CaptureIOError("%s (after %d attempts)" % (e, n))
+                wait = _RETRY_WAITS[n - 1]
+                if e.retry_after is not None:
+                    wait = min(max(wait, e.retry_after), _RETRY_AFTER_CAP)
+                print("pep-capture: %s; retrying in %d s (attempt %d of %d)"
+                      % (e, wait, n + 1, RETRY_ATTEMPTS), file=sys.stderr)
+                _sleep(wait)
+
     def get_json(self, url):
+        return self._with_retries(lambda: self._get_json_once(url))
+
+    def _get_json_once(self, url):
         with _safe_fetch(url, self._token, self._timeout) as resp:
             try:
-                data = resp.read(_JSON_CAP + 1)
+                data = resp.read(_JSON_CAP + 1)     # the whole body, unless it ends early
             except (TimeoutError, http.client.HTTPException, OSError) as e:
-                raise CaptureIOError("reading GitHub API response failed: %s" % redact(str(e)))
+                raise _TransientError("reading GitHub API response failed: %s" % redact(str(e)))
+            missing = _declared_bytes_missing(resp)
         if len(data) > _JSON_CAP:
             raise CaptureIOError("GitHub API response exceeds size cap")
+        if missing:
+            raise _TransientError("GitHub API response ended %d bytes early" % missing)
         try:
             return json.loads(data.decode("utf-8"))
         except (ValueError, UnicodeDecodeError):
@@ -239,7 +328,11 @@ class UrllibTransport:
         response into memory). Raises ``_NotFound`` if gone. An expected transport
         (read), or destination (open/write) failure becomes a redacted
         ``CaptureIOError`` and the partially written file is removed (no half-download
-        is ever handed to the verifier)."""
+        is ever handed to the verifier). A transient read failure retries the whole
+        download from the start; a destination failure is never retried."""
+        return self._with_retries(lambda: self._download_once(url, dest_path))
+
+    def _download_once(self, url, dest_path):
         resp = _safe_fetch(url, self._token, max(self._timeout, 120))
         try:
             with resp:
@@ -252,13 +345,16 @@ class UrllibTransport:
                         try:
                             chunk = resp.read(_CHUNK)
                         except (TimeoutError, http.client.HTTPException, OSError) as e:
-                            raise CaptureIOError("reading artifact download failed: %s" % redact(str(e)))
+                            raise _TransientError("reading artifact download failed: %s" % redact(str(e)))
                         if not chunk:
                             break
                         try:
                             out.write(chunk)
                         except OSError as e:
                             raise CaptureIOError("writing artifact download failed: %s" % redact(str(e)))
+                    missing = _declared_bytes_missing(resp)
+                    if missing:
+                        raise _TransientError("artifact download ended %d bytes early" % missing)
                 finally:
                     out.close()
         except BaseException:

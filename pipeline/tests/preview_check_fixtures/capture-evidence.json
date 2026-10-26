@@ -1,0 +1,75 @@
+{
+  "cells": [
+    {
+      "cell_id": "certpreview-deb-bookworm-amd64",
+      "code": null,
+      "detail": "",
+      "package_artifact_id": 1004,
+      "receipt_artifact_id": 1005,
+      "verdict": "accepted"
+    },
+    {
+      "cell_id": "certpreview-rpm-el9-amd64",
+      "code": null,
+      "detail": "",
+      "package_artifact_id": 1001,
+      "receipt_artifact_id": 1002,
+      "verdict": "accepted"
+    }
+  ],
+  "counts": {
+    "absent_receipt_cells": 0,
+    "accepted_receipt_cells": 2,
+    "ambiguous_receipt_cells": 0,
+    "planned_cells": 2,
+    "receipt_candidates": 2,
+    "rejected_receipt_cells": 0,
+    "verified_members": 2,
+    "verified_package_artifacts": 2
+  },
+  "live_inventory": [
+    {
+      "created_at": "2026-10-26T10:00:41Z",
+      "digest": "8b8463d515c2c8d49d2a6c88035ecf5c093ebc5e47e5933f36dcd7308e0ebf09",
+      "expired": false,
+      "id": 1001,
+      "name": "certpreview-pkg-rpm-9100000001-1",
+      "size_in_bytes": 1038
+    },
+    {
+      "created_at": "2026-10-26T10:00:42Z",
+      "digest": "3dfedf37352cc6d1b6155a0cd5de654351e6fe996c867a9cd04b7cf6f9946271",
+      "expired": false,
+      "id": 1002,
+      "name": "pep-receipt-certpreview-rpm-el9-amd64",
+      "size_in_bytes": 464
+    },
+    {
+      "created_at": "2026-10-26T10:00:44Z",
+      "digest": "63b119d9e4be840f3f8d6e9bff9418aff59400b8f74c4caefabe5a6e0635f4ff",
+      "expired": false,
+      "id": 1004,
+      "name": "certpreview-pkg-deb-9100000001-1",
+      "size_in_bytes": 619
+    },
+    {
+      "created_at": "2026-10-26T10:00:45Z",
+      "digest": "05c175d112a24da356267640b06b86b7e354eb9c156f689aee4aa2a9bd756e24",
+      "expired": false,
+      "id": 1005,
+      "name": "pep-receipt-certpreview-deb-bookworm-amd64",
+      "size_in_bytes": 466
+    }
+  ],
+  "provenance": {
+    "captured_at": "2026-10-26T10:06:11Z",
+    "pep_implementation_ref": "1f0ecccccccccccccccccccccccccccccccccccc",
+    "pep_resolved_sha": "1f0ecccccccccccccccccccccccccccccccccccc",
+    "ref": "refs/pull/99/merge",
+    "repository": "pgEdge/pgedge-pep-test",
+    "run_attempt": "1",
+    "run_id": "9100000001",
+    "sha": "1f0ecccccccccccccccccccccccccccccccccccc"
+  },
+  "schema": "capture-evidence/1"
+}

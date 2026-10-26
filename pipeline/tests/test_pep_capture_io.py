@@ -837,3 +837,339 @@ def test_fail_masks_labelled_authorization_values_in_every_output(tmp_path, caps
                      "Authorization: Bearer <redacted> Authorization: Bearer <redacted> "
                      "Authorization: token <redacted>")
     assert len(error) <= len(IO.redact("x" * 10000))                         # the existing length bound
+
+
+# --------------------------------------------------------------------------- #
+# L. bounded retries for transient reads: 3 attempts in total per logical read
+#    (request, redirects and body), only for rate limits, 5xx and network faults
+# --------------------------------------------------------------------------- #
+import ssl  # noqa: E402
+
+
+@pytest.fixture(autouse=True)
+def _no_real_sleep(monkeypatch):
+    """Record retry waits instead of sleeping (every test in this module)."""
+    waits = []
+    monkeypatch.setattr(IO, "_sleep", waits.append, raising=False)
+    return waits
+
+
+def _http_status(code, headers=None):
+    hdrs = email.message.Message()
+    for k, v in (headers or {}).items():
+        hdrs[k] = v
+    return urllib.error.HTTPError("https://api.github.com/x?sig=SECRET", code, "msg", hdrs, None)
+
+
+class _ReadFails(_FakeResp):
+    def __init__(self, exc):
+        super().__init__(b"")
+        self._exc = exc
+
+    def read(self, n=-1):
+        raise self._exc
+
+
+def make_sequence_urlopen(plan, calls):
+    """plan: url -> list of outcomes, consumed in order (the last one repeats):
+    ('body', bytes) | ('raise', exc) | ('redirect', location) | ('badread', exc)."""
+    def fake(req, timeout):
+        calls.append({"url": req.full_url, "headers": dict(req.headers)})
+        seq = plan[req.full_url]
+        kind, arg = seq.pop(0) if len(seq) > 1 else seq[0]
+        if kind == "body":
+            return _FakeResp(arg)
+        if kind == "redirect":
+            raise _http_error(302, arg)
+        if kind == "badread":
+            return _ReadFails(arg)
+        raise arg
+    return fake
+
+
+_API = "https://api.github.com/repos/o/r/actions/runs/1/artifacts?per_page=100&page=1"
+
+
+def _get_json(monkeypatch, outcomes, url=_API):
+    calls = []
+    monkeypatch.setattr(IO, "_urlopen", make_sequence_urlopen({url: list(outcomes)}, calls))
+    return calls, (lambda: IO.UrllibTransport("TKN").get_json(url))
+
+
+def test_retry_policy_constants():
+    assert IO.RETRY_ATTEMPTS == 3
+    assert IO._RETRY_WAITS == (2, 5) and IO._RETRY_AFTER_CAP == 30
+    assert IO._TRANSIENT_HTTP == frozenset({429, 500, 502, 503, 504})
+
+
+@pytest.mark.parametrize("code", [429, 500, 502, 503, 504])
+def test_transient_status_is_retried_until_success(monkeypatch, _no_real_sleep, code):
+    calls, read = _get_json(monkeypatch, [("raise", _http_status(code)), ("raise", _http_status(code)),
+                                          ("body", b'{"ok": 1}')])
+    assert read() == {"ok": 1}
+    assert len(calls) == 3 and _no_real_sleep == [2, 5]
+
+
+def test_transient_status_stops_after_three_attempts_with_a_redacted_error(monkeypatch, _no_real_sleep):
+    calls, read = _get_json(monkeypatch, [("raise", _http_status(503))])
+    with pytest.raises(IO.CaptureIOError) as ei:
+        read()
+    assert len(calls) == 3 and _no_real_sleep == [2, 5]
+    msg = str(ei.value)
+    assert "HTTP 503" in msg and "after 3 attempts" in msg and "SECRET" not in msg
+    assert not isinstance(ei.value, IO._TransientError)            # the budget is spent; no caller retries
+
+
+@pytest.mark.parametrize("retry_after,wait", [("10", 10), ("120", 30), ("1", 2), ("soon", 2)])
+def test_retry_after_is_honoured_up_to_the_cap(monkeypatch, _no_real_sleep, retry_after, wait):
+    _, read = _get_json(monkeypatch, [("raise", _http_status(429, {"Retry-After": retry_after})),
+                                      ("body", b"{}")])
+    assert read() == {} and _no_real_sleep == [wait]
+
+
+def test_not_found_is_never_retried(monkeypatch, _no_real_sleep):
+    calls, read = _get_json(monkeypatch, [("raise", _http_status(404))])
+    with pytest.raises(IO._NotFound):
+        read()
+    assert len(calls) == 1 and _no_real_sleep == []
+
+
+@pytest.mark.parametrize("code", [400, 401, 403, 409, 422])
+def test_authorization_and_client_errors_are_not_retried(monkeypatch, _no_real_sleep, code):
+    calls, read = _get_json(monkeypatch, [("raise", _http_status(code))])
+    with pytest.raises(IO.CaptureIOError) as ei:
+        read()
+    assert len(calls) == 1 and _no_real_sleep == [] and "HTTP %d" % code in str(ei.value)
+
+
+@pytest.mark.parametrize("exc", [
+    urllib.error.URLError(ConnectionResetError("reset by peer")),
+    urllib.error.URLError(TimeoutError("timed out")),
+    TimeoutError("connect timed out"),
+    ConnectionRefusedError("refused"),
+])
+def test_network_faults_are_retried(monkeypatch, _no_real_sleep, exc):
+    calls, read = _get_json(monkeypatch, [("raise", exc), ("body", b'{"ok": 1}')])
+    assert read() == {"ok": 1} and len(calls) == 2 and _no_real_sleep == [2]
+
+
+@pytest.mark.parametrize("exc", [
+    urllib.error.URLError("unknown url type: x"),                                # not a network fault
+    urllib.error.URLError(ssl.SSLCertVerificationError("certificate verify failed")),   # integrity
+])
+def test_non_transient_url_errors_are_not_retried(monkeypatch, _no_real_sleep, exc):
+    calls, read = _get_json(monkeypatch, [("raise", exc)])
+    with pytest.raises(IO.CaptureIOError):
+        read()
+    assert len(calls) == 1 and _no_real_sleep == []
+
+
+def test_an_interrupted_body_read_is_part_of_the_same_attempt_budget(monkeypatch, _no_real_sleep):
+    calls, read = _get_json(monkeypatch, [("badread", OSError("connection reset")),
+                                          ("badread", TimeoutError("read timed out")),
+                                          ("body", b'{"ok": 1}')])
+    assert read() == {"ok": 1} and len(calls) == 3
+
+
+@pytest.mark.parametrize("body", [b"{not json", b"x" * (IO._JSON_CAP + 5)],
+                         ids=["malformed-json", "over-cap"])
+def test_malformed_or_oversized_responses_are_not_retried(monkeypatch, _no_real_sleep, body):
+    calls, read = _get_json(monkeypatch, [("body", body)])
+    with pytest.raises(IO.CaptureIOError):
+        read()
+    assert len(calls) == 1
+
+
+def test_list_pages_spends_a_separate_budget_per_page(monkeypatch, _no_real_sleep):
+    page1, page2 = IO._artifacts_url("o/r", "1", 1), IO._artifacts_url("o/r", "1", 2)
+    full = json.dumps({"artifacts": [{"id": i} for i in range(1, 101)]}).encode()
+    calls = []
+    monkeypatch.setattr(IO, "_urlopen", make_sequence_urlopen({
+        page1: [("raise", _http_status(502)), ("body", full)],
+        page2: [("raise", _http_status(502)), ("raise", _http_status(502)), ("body", b'{"artifacts": []}')],
+    }, calls))
+    pages = IO._list_pages(IO.UrllibTransport("TKN"), lambda p: IO._artifacts_url("o/r", "1", p), "artifacts")
+    assert len(pages) == 2 and [c["url"] for c in calls] == [page1] * 2 + [page2] * 3
+    assert _no_real_sleep == [2, 2, 5]
+
+
+_ZIP_API = "https://api.github.com/repos/o/r/actions/artifacts/5/zip"
+_BLOB = "https://blob.example.net/5.zip?sig=SECRET"
+
+
+def test_download_retries_from_the_start_and_keeps_credentials_on_the_api_origin(tmp_path, monkeypatch,
+                                                                                 _no_real_sleep):
+    calls = []
+    monkeypatch.setattr(IO, "_urlopen", make_sequence_urlopen({
+        _ZIP_API: [("redirect", _BLOB)],
+        _BLOB: [("badread", OSError("connection reset")), ("body", b"PAYLOAD")],
+    }, calls))
+    dest = tmp_path / "a.zip"
+    IO.UrllibTransport("TKN").download(_ZIP_API, str(dest))
+    assert dest.read_bytes() == b"PAYLOAD"                          # no bytes from the failed attempt
+    assert [c["url"] for c in calls] == [_ZIP_API, _BLOB, _ZIP_API, _BLOB]
+    for c in calls:                                                 # token only ever sent to the API origin
+        has_auth = any(k.lower() == "authorization" for k in c["headers"])
+        assert has_auth == (c["url"] == _ZIP_API)
+
+
+def test_download_that_keeps_failing_removes_the_partial_file(tmp_path, monkeypatch, _no_real_sleep):
+    calls = []
+    monkeypatch.setattr(IO, "_urlopen", make_sequence_urlopen(
+        {_ZIP_API: [("badread", TimeoutError("read timed out"))]}, calls))
+    dest = tmp_path / "a.zip"
+    with pytest.raises(IO.CaptureIOError) as ei:
+        IO.UrllibTransport("TKN").download(_ZIP_API, str(dest))
+    assert len(calls) == 3 and not dest.exists() and "after 3 attempts" in str(ei.value)
+
+
+def test_download_local_write_failure_is_not_retried(tmp_path, monkeypatch, _no_real_sleep):
+    class _NoSpace:
+        def write(self, _):
+            raise OSError(28, "No space left on device")
+
+        def close(self):
+            pass
+    calls = []
+    monkeypatch.setattr(IO, "_urlopen", make_sequence_urlopen({_ZIP_API: [("body", b"DATA")]}, calls))
+    monkeypatch.setattr(IO, "open", lambda *a, **k: _NoSpace(), raising=False)
+    with pytest.raises(IO.CaptureIOError) as ei:
+        IO.UrllibTransport("TKN").download(_ZIP_API, str(tmp_path / "a.zip"))
+    assert len(calls) == 1 and _no_real_sleep == [] and "writing artifact download failed" in str(ei.value)
+
+
+def test_download_downgrade_and_foreign_urls_are_not_retried(tmp_path, monkeypatch, _no_real_sleep):
+    calls = []
+    monkeypatch.setattr(IO, "_urlopen", make_sequence_urlopen(
+        {_ZIP_API: [("redirect", "http://blob.example.net/5.zip")]}, calls))
+    with pytest.raises(IO.CaptureIOError):
+        IO.UrllibTransport("TKN").download(_ZIP_API, str(tmp_path / "a.zip"))
+    with pytest.raises(IO.CaptureIOError):
+        IO.UrllibTransport("TKN").download("https://evil.example.com/x", str(tmp_path / "b.zip"))
+    assert len(calls) == 1 and _no_real_sleep == []
+
+
+def test_artifact_download_does_not_multiply_the_retry_budget(tmp_path, monkeypatch, _no_real_sleep):
+    calls = []
+    monkeypatch.setattr(IO, "_urlopen", make_sequence_urlopen({_ZIP_API: [("raise", _http_status(503))]}, calls))
+    with pytest.raises(IO.CaptureIOError):
+        IO._download_artifact(IO.UrllibTransport("TKN"), "o/r", {"id": 5}, str(tmp_path))
+    assert len(calls) == 3
+
+
+# --------------------------------------------------------------------------- #
+# M. a body that ends before its declared Content-Length, parsed by the REAL
+#    http.client.HTTPResponse (no network): read(n) then returns b"" without
+#    raising, so the framing itself must be checked
+# --------------------------------------------------------------------------- #
+import http.client  # noqa: E402
+
+
+class _RawSock:
+    """Just enough socket for http.client.HTTPResponse to parse ``raw`` bytes."""
+
+    def __init__(self, raw):
+        self._raw = raw
+
+    def makefile(self, mode, *a, **k):
+        return io.BytesIO(self._raw)
+
+
+def _real_response(raw):
+    resp = http.client.HTTPResponse(_RawSock(raw), method="GET")
+    resp.begin()
+    return resp
+
+
+def _with_length(body, declared=None):
+    n = len(body) if declared is None else declared
+    return b"HTTP/1.1 200 OK\r\nContent-Length: %d\r\n\r\n" % n + body
+
+
+def _chunked(body, *, finished=True):
+    raw = b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n%x\r\n" % len(body) + body + b"\r\n"
+    return raw + (b"0\r\n\r\n" if finished else b"")
+
+
+def _until_closed(body):
+    return b"HTTP/1.1 200 OK\r\nConnection: close\r\n\r\n" + body
+
+
+def _serve_raw(monkeypatch, plan):
+    """url -> list of raw HTTP responses, consumed in order (the last one repeats)."""
+    calls = []
+
+    def fake(req, timeout):
+        calls.append(req.full_url)
+        seq = plan[req.full_url]
+        return _real_response(seq.pop(0) if len(seq) > 1 else seq[0])
+    monkeypatch.setattr(IO, "_urlopen", fake)
+    return calls
+
+
+_GOOD_JSON = b'{"artifacts": []}'
+
+
+def test_truncated_json_body_is_retried_and_recovers(monkeypatch, _no_real_sleep):
+    calls = _serve_raw(monkeypatch, {_API: [_with_length(b'{"artifa', declared=100), _with_length(_GOOD_JSON)]})
+    assert IO.UrllibTransport("TKN").get_json(_API) == {"artifacts": []}
+    assert len(calls) == 2 and _no_real_sleep == [2]
+
+
+def test_truncated_json_body_stops_after_three_attempts(monkeypatch, _no_real_sleep):
+    calls = _serve_raw(monkeypatch, {_API: [_with_length(b'{"artifa', declared=100)]})
+    with pytest.raises(IO.CaptureIOError) as ei:
+        IO.UrllibTransport("TKN").get_json(_API)
+    assert len(calls) == 3 and _no_real_sleep == [2, 5]
+    assert "ended 92 bytes early" in str(ei.value) and "after 3 attempts" in str(ei.value)
+
+
+def test_complete_but_malformed_json_is_one_attempt(monkeypatch, _no_real_sleep):
+    calls = _serve_raw(monkeypatch, {_API: [_with_length(b'{"artifa')]})          # framing satisfied
+    with pytest.raises(IO.CaptureIOError) as ei:
+        IO.UrllibTransport("TKN").get_json(_API)
+    assert len(calls) == 1 and _no_real_sleep == [] and "malformed JSON" in str(ei.value)
+
+
+def test_json_without_a_declared_length_is_read_to_the_end(monkeypatch, _no_real_sleep):
+    # No Content-Length is required: chunked and read-until-close bodies parse as before.
+    for raw in (_chunked(_GOOD_JSON), _until_closed(_GOOD_JSON)):
+        calls = _serve_raw(monkeypatch, {_API: [raw]})
+        assert IO.UrllibTransport("TKN").get_json(_API) == {"artifacts": []} and len(calls) == 1
+    # Without a declared length there is no evidence of truncation: a cut body is malformed JSON.
+    calls = _serve_raw(monkeypatch, {_API: [_until_closed(b'{"artifa')]})
+    with pytest.raises(IO.CaptureIOError) as ei:
+        IO.UrllibTransport("TKN").get_json(_API)
+    assert len(calls) == 1 and "malformed JSON" in str(ei.value)
+
+
+def test_unfinished_chunked_json_is_retried(monkeypatch, _no_real_sleep):
+    calls = _serve_raw(monkeypatch, {_API: [_chunked(b'{"artifa', finished=False), _chunked(_GOOD_JSON)]})
+    assert IO.UrllibTransport("TKN").get_json(_API) == {"artifacts": []} and len(calls) == 2
+
+
+_FULL_ZIP = b"Z" * 100
+
+
+def test_truncated_download_is_retried_from_the_start(tmp_path, monkeypatch, _no_real_sleep):
+    calls = _serve_raw(monkeypatch, {_ZIP_API: [_with_length(b"PARTIAL", declared=100), _with_length(_FULL_ZIP)]})
+    dest = tmp_path / "a.zip"
+    IO.UrllibTransport("TKN").download(_ZIP_API, str(dest))
+    assert dest.read_bytes() == _FULL_ZIP and len(calls) == 2 and _no_real_sleep == [2]
+
+
+def test_truncated_download_stops_after_three_attempts_and_leaves_no_file(tmp_path, monkeypatch, _no_real_sleep):
+    calls = _serve_raw(monkeypatch, {_ZIP_API: [_with_length(b"PARTIAL", declared=100)]})
+    dest = tmp_path / "a.zip"
+    with pytest.raises(IO.CaptureIOError) as ei:
+        IO.UrllibTransport("TKN").download(_ZIP_API, str(dest))
+    assert len(calls) == 3 and not dest.exists()
+    assert "ended 93 bytes early" in str(ei.value) and "after 3 attempts" in str(ei.value)
+
+
+def test_downloads_without_a_declared_length_are_kept_whole(tmp_path, monkeypatch, _no_real_sleep):
+    for i, raw in enumerate((_chunked(_FULL_ZIP), _until_closed(_FULL_ZIP))):
+        calls = _serve_raw(monkeypatch, {_ZIP_API: [raw]})
+        dest = tmp_path / ("%d.zip" % i)
+        IO.UrllibTransport("TKN").download(_ZIP_API, str(dest))
+        assert dest.read_bytes() == _FULL_ZIP and len(calls) == 1

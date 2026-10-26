@@ -451,6 +451,20 @@ The gate also refuses a completed result whose test runs do not all carry a matc
 
 `DOCKERHUB_USERNAME` / `DOCKERHUB_TOKEN` are optional secrets. Pass them **explicitly** (as above) — not `secrets: inherit` — to authenticate base-image pulls in `full` mode and avoid anonymous rate limits. Omit them to rely on anonymous pulls. No read token of any kind is required.
 
+### Time limit, retries and plan size
+
+- **Time limit.** Each test run's framework step runs under a 45-minute limit (`pipeline/pep_time_limit.py`), with the job's 60-minute `timeout-minutes` as a backstop.
+  - Reaching the limit stops the framework's whole process group and records an infrastructure failure, "test run exceeded its 45-minute limit (timeout)", in both modes.
+  - Only the wrapper's explicit flag counts as a timeout. Any other exit, including 137 from an out-of-memory kill, is reported as an unexpected framework failure.
+  - If the 60-minute job limit itself is hit, Summarize, Upload and Report run on a best-effort basis only, and a missing summary counts as a missing result.
+- **Retries.** Capture's GitHub API reads and downloads, and the aggregate's artifact listing, retry transient failures.
+  - Retried: HTTP 429/500/502/503/504, network faults and timeouts, and a response body that stops part-way.
+  - Each read gets 3 attempts in total, waiting 2 s and then 5 s. A `Retry-After` header is honoured up to 30 s.
+  - Never retried: 404/410 (absence and expiry are handled as before), other HTTP statuses such as 401/403/422, a refused redirect, a certificate failure, a malformed or oversized response, and a local file error.
+  - Every attempt starts again from the original URL, so the credential-origin rules apply to each one.
+- **Plan size.** A plan with more than 256 test runs, GitHub's limit for one matrix, is unresolved. It has a named reason and an empty matrix, the plan job shows the reason as an annotation, and certification fails closed.
+- **Side-file faults.** If one test run's identity or install evidence is unreadable, the run keeps its provenance. It counts as that run's infrastructure failure, and the other runs keep their results. An unreadable provenance file still fails the whole result closed.
+
 ### Current limitations (POC)
 
 - **`certification` is the only wired scenario.** It is a no-replacement run: certification forces the effective upgrade off, resolved once as `upgrade={value:"false", source:"scenario_policy"}` and read back by the runtime, so no package replacement or channel switch happens around the identity being certified.
@@ -513,6 +527,26 @@ The adapter calls `pep-certify.yml` through a relative path, so it runs at the a
 **Finding the results.** Each test run is a job named for its platform/architecture, PG version and package, followed by what it does, for example `debian12-amd64 · PG16 · pgedge-rag-server2 / preview (no install, no product tests)` or `rocky9-arm64 · PG17 · pgedge-rag-server2 / full test (install and product tests)`. Its log ends with one `PEP test-run result:` line read from its own `summary.json`. The result is shown only when the reducer's checks accept the summary and it binds to this job's workflow run, attempt and PEP checkout; a summary that is missing, malformed, from another run or attempt, or for the other execution mode reads as UNAVAILABLE or UNVERIFIED, never as zero tests passed or as a preview. The line is one test run's result, not the package certification decision. The aggregate job writes the run's job summary: the certification state, a platform by PG table per package family built from the same evidence and decision checks as `consolidated-report.html`, failed test runs with their first failure, coverage gaps, and a download link to the `pep-certification-r<N>-a<M>` artifact. The link is written only from the upload's artifact id; otherwise the summary says the download link is unavailable. The release adapter's summary links the same artifact. A preview installs nothing and runs no product tests, and a green `observe` run with coverage gaps is not a complete certification; both summaries say so. All of this is reporting only: the JSON evidence, outputs, artifact names, test-run ids and policy are unchanged.
 
 **Code layout.** The integration and certification steps live in `pipeline/`: the request resolver and run summaries that `run_pep_tf.sh` and `pep-integration.yml` call, and package inspection, capture, the certification and invocation plans, results, the gate, the report and the adapter inputs. The shared integration helpers live in `aspects/pipeline/`, following the framework's aspects layer: the request contract (`pep_request.py`, `pep_request_env.py`), install verification and identity evidence (`pep_verify.py`, `pep_identity.py`, `pep_evidence.py`, `pep_version_normalize.py`) and the one component policy (`pep_capture_policy.json`). `container_resolver.py` and `ci_consolidated_report.py` stay in `utillities/` because the standalone regression also uses them. Dependencies run one way: `pipeline/` uses `aspects/pipeline/` and `utillities/`, `aspects/pipeline/` uses `utillities/`, and nothing in `aspects/` or `utillities/` imports from `pipeline/`. Unit tests sit beside the code they test, in `aspects/pipeline/tests/` and `pipeline/tests/`; tests whose subject is the shell runner or a workflow (`test_pep_bridge`, `test_pep_integration_auth_contract`, `test_pep_selftest_artifacts`) sit in `pipeline/tests/` with the other workflow-contract tests. The workflows and the receipt action stay under `.github/`, where callers pin them.
+
+## Certification preview check (`pep-certification-preview.yml`)
+
+`PEP Certification Preview` runs the whole certification path on every pull request, in its own Actions run (it has no path filter, and it is separate from `PEP Self-Test`). Manual dispatch works once the workflow is on `main`.
+
+- **Fixture.** Two `build [pep-cell:<cell_id>]` jobs build one tiny RPM (`el-9`, amd64) and one tiny DEB (`bookworm`, amd64) of the internal fixture component `pgedge-capture-smoke`, upload each package and record its `pep-receipt/2` with the local receipt action, as a release pipeline does. The cells are test fixtures; they define no supported platform, PG version or component.
+- **Coordinator.** The `certify` job calls `pep-certify.yml` by relative path, so the coordinator and everything it checks out run at the revision under test. It is a simulated release: `simulated: true`, both publication results `skipped`, `execution_mode: preview` and `enforcement: observe`. Nothing is published, and no secrets are passed.
+- **Assertion.** The `assert certification preview` job runs even when the coordinator fails and checks the run with `pipeline/pep_preview_check.py`. It reads the coordinator's outputs first, then downloads the combined evidence by the id the coordinator reported, and this attempt's capture evidence and cert-plan by the ids listed for their exact attempt-specific names. It passes only when:
+  - the coordinator succeeded with a `preview` / `report` / `success` decision and a positive evidence artifact id;
+  - both receipts were accepted, and the cert-plan records a simulated release with both publications skipped: each target is strictly ineligible (never claimed as published) and preview-eligible;
+  - `cert-result.json` holds exactly six unique preview runs, both fixture targets on PG 16, 17 and 18, each bound to the captured package, with no planning gap, no missing, unexpected or historical result, no product test, and no installed-package or identity proof claimed;
+  - every document names this repository, run and attempt and the revision under test (`github.workflow_sha`);
+  - `cert-decision.json` equals the decision `pep_cert_gate` derives from `cert-result.json` and matches the coordinator's outputs; the collection ledger ingested exactly the run's six `pep-summary-*` artifacts with no anomaly; the run has no capture error artifact; and `consolidated-report.html` shows the verified preview decision, one preview row per run and no gap, issue or fallback section;
+  - no persisted document contains a URL or credential text.
+
+The six-run expectation is the check's own: PEP's catalogs decide what the coordinator plans, so a catalog change that alters the fixture's platforms or PG majors fails this check until the expectation is updated in the same change. The checker's tests rebuild the result, ledger, decision and report from the inputs in `pipeline/tests/preview_check_fixtures/` with the real collector, gate and report code.
+
+**Retrying.** Each run uses 14 jobs: the two builds, the coordinator's identity, capture, plan, six preview runs, aggregate and enforce, and the assertion. Do not re-run its jobs, including **Re-run all jobs**: the receipt artifact names are fixed per cell, and summaries kept from an earlier attempt can invalidate the re-run. To check again, start a fresh workflow run (push a new commit, or close and reopen the pull request; once the workflow is on `main`, dispatch it).
+
+This is not a required check yet. The `v1_STABLE` rules still require only the nine Self-Test checks (see **Protection** below); the first promotion that includes this workflow must also confirm that its run passed (promotion step 3).
 
 ## Stable channel (`v1_STABLE`)
 
@@ -600,7 +634,7 @@ pep_check_merged() {
    pep_promote_head
    ```
 2. Open a PR from `promote/v1/<first 12 characters of X>` into `v1_STABLE`. Its description records `X`, `H`, the expected content, the changes (`git log --first-parent --oneline <previous X>..<X>`), the evidence, and whether the change is compatible. The PR diff is exactly `v1_STABLE` to `X`, so everything the promotion changes, including content a rollback removed, is shown for review.
-3. The nine PEP Self-Test checks must pass, and a code owner other than the person who pushed the branch approves.
+3. The nine PEP Self-Test checks must pass, and a code owner other than the person who pushed the branch approves. On the first promotion that includes `pep-certification-preview.yml`, the PR's `PEP Certification Preview` run must also pass, including its `assert certification preview` job; record that run in the PR description. It is not a required check yet, so the rules do not enforce this.
 4. Before merging, confirm that GitHub's test merge has `X`'s content. If `v1_STABLE` moved after step 1, close the PR and start again; do not use **Update branch**.
    ```sh
    N='<PR number>'

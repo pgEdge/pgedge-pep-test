@@ -566,3 +566,80 @@ def test_missing_or_unreadable_install_json_is_infra_failure(tmp_path, body):
 def test_digest_is_stamped_on_every_branch(tmp_path, kw):
     summary, _ = prs.build_summary(tmp_path, mode="observe", installed_package_sha256=_DIGEST, **kw)
     assert summary["installed_package_sha256"] == _DIGEST
+
+
+# --- A side-file fault keeps the run's provenance when the provenance file is valid ---
+# Provenance binds a result to its release run. If a fault in ANOTHER side file dropped it,
+# the certification reducer could not bind the infra_failure result and would reject the
+# whole certification instead of counting one failed test run.
+
+_PROVENANCE = {
+    "caller_repo": "pgEdge/pgedge-rag-server", "caller_sha": "a" * 40,
+    "caller_ref": "refs/tags/v2.0.0", "caller_run_id": "123", "caller_run_attempt": "1",
+    "pep_requested_ref": "b" * 40, "pep_resolved_sha": "b" * 40,
+}
+
+
+def _sidefile_main(tmp_path, *, identity=None, install=None, provenance=_PROVENANCE, mode="observe"):
+    """Run main() with a passing report and the given side files. A side file given as
+    None is not passed; a str is written verbatim; anything else is written as JSON."""
+    _dir_with(tmp_path, "report-rpm-rag-17.xml", _PASS_XML)
+    args = ["--xml-dir", str(tmp_path), "--out", str(tmp_path / "summary.json"),
+            "--mode", mode, "--invocation-id", "rag-oel9-amd64-pg17-0123abcd"]
+    for flag, name, body in (("--identity-json", "identity.json", identity),
+                             ("--install-json", "install.json", install),
+                             ("--provenance-json", "provenance.json", provenance)):
+        if body is None:
+            continue
+        path = tmp_path / name
+        path.write_text(body if isinstance(body, str) else json.dumps(body))
+        args += [flag, str(path)]
+    code = prs.main(args)
+    return json.loads((tmp_path / "summary.json").read_text()), code
+
+
+@pytest.mark.parametrize("identity,install,fault", [
+    ("{not json", None, "identity-evidence"),                         # read before provenance used to be
+    ({"l2a": "proven"}, None, "identity-evidence"),                   # fails semantic validation
+    (None, "{not json", "install-evidence"),
+    (None, {"installed_sha256": "AB" * 32}, "installed_sha256"),
+])
+def test_sidefile_fault_keeps_valid_provenance(tmp_path, identity, install, fault):
+    data, code = _sidefile_main(tmp_path, identity=identity, install=install)
+    assert (data["execution_status"], data["test_verdict"], code) == ("infra_failure", "not_run", 0)
+    assert fault in data["reason"]
+    assert data["provenance"] == _PROVENANCE
+    assert data["invocation_id"] == "rag-oel9-amd64-pg17-0123abcd"
+
+
+def test_sidefile_fault_keeps_valid_provenance_in_gate_mode_and_still_fails(tmp_path):
+    data, code = _sidefile_main(tmp_path, identity="{not json", mode="gate")
+    assert data["execution_status"] == "infra_failure" and code == 1
+    assert data["provenance"] == _PROVENANCE
+
+
+@pytest.mark.parametrize("provenance", ["{not json", "[1, 2]"])
+def test_unreadable_provenance_is_infra_failure_without_provenance(tmp_path, provenance):
+    # Fail closed: nothing that failed to load is carried, so the result cannot bind.
+    data, code = _sidefile_main(tmp_path, identity="{not json", provenance=provenance)
+    assert (data["execution_status"], code) == ("infra_failure", 0)
+    assert "provenance" in data["reason"]
+    assert data["provenance"] == {}
+
+
+def test_missing_provenance_file_is_infra_failure_without_provenance(tmp_path):
+    _dir_with(tmp_path, "report-rpm-rag-17.xml", _PASS_XML)
+    out = tmp_path / "summary.json"
+    prs.main(["--xml-dir", str(tmp_path), "--out", str(out), "--mode", "observe",
+              "--provenance-json", str(tmp_path / "absent.json")])
+    data = json.loads(out.read_text())
+    assert data["execution_status"] == "infra_failure" and data["provenance"] == {}
+    assert "provenance" in data["reason"]
+
+
+def test_valid_side_files_keep_the_unchanged_completed_result(tmp_path):
+    data, code = _sidefile_main(
+        tmp_path, identity={"l2a": "proven", "l2b": "not_attempted", "l1": "proven"},
+        install={"installed_sha256": _DIGEST})
+    assert (data["execution_status"], data["test_verdict"], code) == ("completed", "pass", 0)
+    assert data["provenance"] == _PROVENANCE and data["installed_package_sha256"] == _DIGEST

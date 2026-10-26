@@ -408,19 +408,14 @@ def _list_pages(transport, url_for, items_key):
 
 # --- component policy (PEP-owned; resolved by component, never caller-supplied) -
 def _validate_policy_entry(policy, component):
-    """Validate the SELECTED component's policy entry shape. Raises CaptureIOError."""
+    """Validate the SELECTED component's policy entry shape with the shared rules
+    (``pep_package_policy.validate_entry``, the ones request validation applies), so capture and
+    requests accept exactly the same entries. Raises CaptureIOError."""
     if not isinstance(policy, dict):
         raise CaptureIOError("PEP capture policy entry for %r is not an object" % (component,))
-    names = policy.get("allowed_runtime_package_names")
-    if not (isinstance(names, list) and names
-            and all(isinstance(x, str) and x.strip() != "" for x in names)):
-        raise CaptureIOError(
-            "PEP capture policy entry for %r needs a nonempty allowed_runtime_package_names "
-            "list of nonblank strings" % (component,))
-    ebv = policy.get("expected_binary_version")
-    if not (ebv is None or isinstance(ebv, str)):
-        raise CaptureIOError(
-            "PEP capture policy entry for %r: expected_binary_version must be a string" % (component,))
+    errs = R.PP.validate_entry(policy)
+    if errs:
+        raise CaptureIOError("PEP capture policy entry for %r: %s" % (component, errs[0]))
 
 
 def resolve_component_policy(policy_path, component):

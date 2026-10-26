@@ -87,6 +87,9 @@ from ci_consolidated_report import (  # noqa: E402
 )
 # The pure policy, used only to verify the decision/result pairing (never displayed).
 import pep_cert_gate  # noqa: E402
+# The reducer's own check for a "not certified by policy" record, so the report flags exactly the
+# records the reducer would reject (never displayed as a verdict).
+import pep_cert_result  # noqa: E402
 # Safe Markdown text for the job-summary rendering of this same report.
 import pep_result_presentation as presentation  # noqa: E402
 
@@ -1265,6 +1268,70 @@ def _gaps_table(gaps: list) -> str:
             'not listed.</p><div class="scroll"><table>%s%s</table></div>' % (header, rows))
 
 
+_UNCERTIFIED_TEXT = ("in this release's build artifacts, but the certification deliberately does not "
+                     "install or test them")
+
+
+def _uncertified_entries(result: dict):
+    """(entries, field_malformed): each entry is (record, problems). A record the reducer would
+    reject is kept with its problems so it is shown as malformed, never silently dropped."""
+    value = result.get("uncertified_runtime_packages", [])
+    if not isinstance(value, list):
+        return [], True
+    return [(r, pep_cert_result.uncertified_record_problems(r)) for r in value], False
+
+
+def _uncertified_table(result: dict) -> str:
+    """Runtime companions the component policy names as not certified (e.g. a JIT bitcode
+    package). They are noted so the report never implies every runtime package was certified,
+    but they are not coverage gaps. The wording claims only what the evidence shows (the package
+    is in the build artifacts), never publication: previews and failed publications list them too."""
+    entries, field_malformed = _uncertified_entries(result)
+    if not entries and not field_malformed:
+        return ""
+    rows = []
+    for rec, problems in entries:
+        if problems:
+            raw = json.dumps(rec, sort_keys=True, ensure_ascii=False)
+            rows.append('<tr><td colspan="5">%s</td><td>%s</td></tr>' % (
+                _pill("MALFORMED RECORD", "issue"),
+                _esc("malformed record (%s): %s" % ("; ".join(problems), raw[:200]))))
+        else:
+            rows.append("<tr><td><code>%s</code></td><td><code>%s</code></td><td>%s</td><td>%s</td><td>%s</td>"
+                        "<td>%s</td></tr>" % (
+                            _esc(_dash(rec.get("physical_package"))), _esc(_dash(rec.get("cell_id"))),
+                            _esc(_dash(rec.get("family"))), _esc(_dash(rec.get("os"))),
+                            _esc(_dash(rec.get("arch"))), _esc(_dash(rec.get("reason")))))
+    if field_malformed:
+        rows.append('<tr><td colspan="5">%s</td><td>%s</td></tr>' % (
+            _pill("MALFORMED RECORD", "issue"),
+            _esc("malformed record list: uncertified_runtime_packages is not a list")))
+    return ('<h2 id="uncertified">Runtime packages not certified by policy (%d)</h2>'
+            '<p class="sub">These runtime packages are %s. They are listed so the result never '
+            'implies every runtime package was certified, and they are not counted as coverage '
+            'gaps.</p><div class="scroll"><table><tr><th>Package</th><th>Cell</th>'
+            '<th>Family</th><th>OS</th><th>Arch</th><th>Reason</th></tr>%s</table></div>'
+            % (len(entries), _UNCERTIFIED_TEXT, "".join(rows)))
+
+
+def _md_uncertified(result: dict) -> list:
+    entries, field_malformed = _uncertified_entries(result)
+    good = [r for r, problems in entries if not problems]
+    bad = len(entries) - len(good) + (1 if field_malformed else 0)
+    out = []
+    if good:
+        names = sorted({_txt(r.get("physical_package")) for r in good})
+        out += ["", "**Not certified by policy:** %s %s %s (%s); not counted as coverage gaps." % (
+            ", ".join(presentation.md_code(n) for n in names),
+            "is" if len(names) == 1 else "are",
+            _UNCERTIFIED_TEXT.replace("them", "it" if len(names) == 1 else "them"),
+            presentation.md_text(_txt(good[0].get("reason")), 160))]
+    if bad:
+        out += ["", "⚠ Not certified by policy: %s could not be read; see the report." % (
+            _plural(bad, "malformed record"))]
+    return out
+
+
 def _issues_table(views: list) -> str:
     rows = [(v, "; ".join(v["issues"])) for v in views if v["issues"]]
     if not rows:
@@ -1505,6 +1572,7 @@ def render_markdown(result: dict, decision, views: list, layout: dict, st: dict,
                     ", with its test-case counts" if st["tests"] else "")]
     out += _md_failures(views)
     out += _md_gaps(gaps)
+    out += _md_uncertified(result)
 
     issues = st.get("report_issues", st["issues"])
     if issues:
@@ -1589,7 +1657,7 @@ def render_report(result: dict, decision, index: dict, out_dir: Path, markdown_p
            + _matrix(layout) + "\n"
            + (_controls() if layout["families"] else "") + "\n"
            + "\n".join(_section(f, layout["multi"]) for f in layout["families"]) + "\n"
-           + _gaps_table(gaps) + _issues_table(views)
+           + _gaps_table(gaps) + _uncertified_table(result) + _issues_table(views)
            + _axes_table(result, decision, mismatch) + _audit_section(result)
            + _FOOTER + "\n" + _render_scripts() + "\n" + _cert_script()
            + "\n</body></html>")

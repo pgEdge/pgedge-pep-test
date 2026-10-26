@@ -1,6 +1,8 @@
+import json
 import os
 import sys
 import time
+import importlib.util as _ilu
 from pathlib import Path
 
 import pytest
@@ -11,8 +13,31 @@ from dotenv import load_dotenv
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 from aspects import configure_repository, package_management, pg_server_management, machine_prereq_setup, file_management, container_management
 
+
+def _load_util(name):
+    """Load a shared integration helper from aspects/pipeline/ by path (no package
+    __init__ there), so these imports work however this file is loaded."""
+    spec = _ilu.spec_from_file_location(
+        name, os.path.join(os.path.dirname(__file__), '..', 'aspects', 'pipeline', name + '.py'))
+    mod = _ilu.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+# The shared integration-mode install/identity steps, and through them the request contract and
+# the shared package-matching rules (the same ones request validation and planning use).
+pep_integration_mode = _load_util('pep_integration_mode')
+pep_request_env = pep_integration_mode.pep_request_env
+_pr = pep_request_env._pr
+_pp = _pr._pp
+
 load_dotenv()
 client = docker.from_env()
+
+# Integration request built from the PEP_* env contract (validated by normalize_request, which
+# already binds the spock package to its family, PG major and series). None in standalone mode,
+# which keeps every legacy code path below unchanged.
+INTEGRATION_REQUEST = pep_request_env.build_request_from_env()
 
 # ============================================================================
 # CONFIGURATION SECTION
@@ -25,8 +50,10 @@ deb_containers = [c.strip() for c in os.getenv("DEB_CONTAINERS", "").split(",") 
 # Combine all containers with their type
 all_containers = [(c, "rhel") for c in rhel_containers] + [(c, "deb") for c in deb_containers]
 
-# Filter containers based on platform filter (if set)
-platform_filter = os.getenv("PLATFORM_FILTER", "").lower()
+# Filter containers based on platform filter (if set). In integration mode the request family is
+# authoritative and overrides any configured PLATFORM_FILTER.
+platform_filter = (INTEGRATION_REQUEST["family"] if INTEGRATION_REQUEST is not None
+                   else os.getenv("PLATFORM_FILTER", "").lower())
 if platform_filter == "rpm":
     all_containers = [(c, t) for c, t in all_containers if t == "rhel"]
 elif platform_filter == "deb":
@@ -51,9 +78,32 @@ rhel_pg_path = os.getenv("RHEL_PG_PATH", f"/usr/pgsql-{pg_major_version}")
 deb_pgbin = os.getenv("DEB_PG_BIN_PATH", f"/usr/lib/postgresql/{pg_major_version}/bin")
 deb_pg_path = os.getenv("DEB_PG_PATH", f"/usr/lib/postgresql/{pg_major_version}")
 
+def _integration_series(request, pg_major_env):
+    """``(series, problem)`` for an integration request. The series ("50", "60", ...) comes from
+    the VALIDATED request through the shared spock rules -- never from SPOCK_MAJOR. ``problem``
+    explains why the request cannot be served here (checked again before anything is installed)."""
+    if request is None:
+        return None, None
+    policy = _pr.COMPONENT_POLICY.get(request["component"])
+    if request["component"] != "spock" or not _pp.is_coupled(policy):
+        return None, f"component {request['component']!r} is not the PG-coupled spock component"
+    if str(request["pg_major"]) != str(pg_major_env):
+        return None, (f"request PG{request['pg_major']} disagrees with "
+                      f"PG_MAJOR_VERSION={pg_major_env}")
+    why = _pp.classify(policy, request["package_name"], request["family"], request["pg_major"],
+                       request["expected_version"])
+    if why is not None:
+        return None, (f"package {request['package_name']!r} is not spock for {request['family']} "
+                      f"PG{request['pg_major']} version {request['expected_version']!r} ({why})")
+    return _pp.series_for_version(policy, request["expected_version"]), None
+
+
+INTEGRATION_SERIES, INTEGRATION_PROBLEM = _integration_series(INTEGRATION_REQUEST, pg_major_version)
+
 # Spock major version (e.g. "50" or "60"). spock50 and spock60 are separate
 # major versions that coexist in the repo; select with SPOCK_MAJOR (default 50).
-spock_major = os.getenv("SPOCK_MAJOR", "50")
+# In integration mode the series comes from the request (never this default).
+spock_major = (INTEGRATION_SERIES or "") if INTEGRATION_REQUEST is not None else os.getenv("SPOCK_MAJOR", "50")
 
 # Cross-wiring utility (replaces the zodan SQL/py cross-wiring used elsewhere)
 crosswire_script = (Path(__file__).parent.parent / "utillities" / "spock utils" / "2node_crosswire.py").resolve()
@@ -92,10 +142,102 @@ def get_spock_packages(container_type):
 
 
 def get_spock_pkg_name(container_type):
-    """Name of the spock package itself, for version / bundled-file verification."""
+    """Name of the spock package itself, for version / bundled-file verification. In integration
+    mode it is exactly the requested (validated) package."""
+    if INTEGRATION_REQUEST is not None:
+        return INTEGRATION_REQUEST["package_name"]
     if container_type == "rhel":
         return f"pgedge-spock{spock_major}_{pg_major_version}"
     return f"pgedge-postgresql-{pg_major_version}-spock{spock_major}"
+
+
+def _psql_value(container, port, pguser, sql):
+    exit_code, output = container.exec_run(
+        ["psql", "-h", "localhost", "-p", str(port), "-U", pguser, "-d", "postgres",
+         "-t", "-A", "-c", sql],
+        user="root")
+    return exit_code, output.decode().strip()
+
+
+def verify_nodes_use_requested_spock(container, container_type, config):
+    """Integration mode: every node runs the requested PostgreSQL major with the requested spock
+    release, and the loaded spock library file belongs to the requested package. Spock's extension
+    version is SPOCK_VERSION from include/spock.h, which the release workflow checks against the
+    tag, so it must equal the request's release version exactly."""
+    req = INTEGRATION_REQUEST
+    expected = req["expected_version"]
+    pguser = config["pguser"]
+    # The running server's own library directory (the pg_config SQL view, not a client binary
+    # that may be absent from the installed packages).
+    ec, libdir = _psql_value(container, base_port, pguser,
+                             "SELECT setting FROM pg_config WHERE name = 'PKGLIBDIR';")
+    assert ec == 0 and libdir.startswith("/"), f"PKGLIBDIR query failed on n1: {libdir}"
+    library = f"{libdir}/spock.so"
+    owner_cmd = (["rpm", "-qf", "--queryformat", "%{NAME}", library] if container_type == "rhel"
+                 else ["dpkg-query", "-S", library])
+    exit_code, owner = container.exec_run(owner_cmd, user="root")
+    owner = owner.decode().strip()
+    owner_name = owner if container_type == "rhel" else owner.split(":", 1)[0]
+    assert exit_code == 0 and owner_name == req["package_name"], (
+        f"{library} belongs to {owner!r}, not the requested {req['package_name']!r}")
+    print(f"✅ {library} belongs to {owner_name}")
+    for node_num in range(1, no_of_nodes + 1):
+        node_name, node_port = f"n{node_num}", base_port + node_num - 1
+        ec, num = _psql_value(container, node_port, pguser, "SHOW server_version_num;")
+        assert ec == 0 and num.isdigit(), f"server_version_num query failed on {node_name}: {num}"
+        assert int(num) // 10000 == int(pg_major_version), (
+            f"{node_name} runs PostgreSQL {num}, not the requested PG{pg_major_version}")
+        ec, ver = _psql_value(container, node_port, pguser,
+                              "SELECT extversion FROM pg_extension WHERE extname = 'spock';")
+        assert ec == 0, f"Failed to query the spock extension version on {node_name}: {ver}"
+        assert ver == expected, (
+            f"{node_name}: spock extension version is {ver!r}, expected exactly {expected!r}")
+        print(f"✅ {node_name}: PostgreSQL {num}, spock {ver}")
+
+
+def get_spock_companions(container_type):
+    """Integration mode: the PostgreSQL packages the spock package needs (the requested PG major,
+    from the same channel, no minor-version pin), installed BEFORE the pinned spock package so
+    that installing them can never replace it. The RPM server is named explicitly so a missing
+    server is reported as a prerequisite failure, not as a failed spock install."""
+    if container_type == "rhel":
+        return [f"pgedge-postgresql{pg_major_version}-server", f"pgedge-postgresql{pg_major_version}-contrib"]
+    return [f"pgedge-postgresql-{pg_major_version}"]
+
+
+def record_prerequisite_versions(container, container_type):
+    """Integration mode, audit only: the installed versions of the PostgreSQL companions and of
+    the requested spock package, printed and written to PEP_PREREQ_OUT. Never part of the verdict."""
+    names = get_spock_companions(container_type) + [INTEGRATION_REQUEST["package_name"]]
+    versions = {n: package_management.query_installed_version(container, n) for n in names}
+    out = os.getenv("PEP_PREREQ_OUT", "test-logs/prerequisite-versions.json")
+    Path(out).parent.mkdir(parents=True, exist_ok=True)
+    Path(out).write_text(json.dumps({"channel": repo, "pg_major": pg_major_version,
+                                     "requested_package": INTEGRATION_REQUEST["package_name"],
+                                     "installed_versions": versions}, indent=2, sort_keys=True) + "\n")
+    for n, v in versions.items():
+        print(f"   installed {n} = {v}")
+    return versions
+
+
+def installed_spock_packages(container, container_type):
+    """Installed packages that are ANY spock runtime package (any family, PG major or series),
+    read from the package manager. Returns None if the query fails."""
+    if container_type == "rhel":
+        cmd = ["rpm", "-qa", "--queryformat", "%{NAME}\\n"]
+    else:
+        cmd = ["dpkg-query", "-W", "-f=${Package} ${Status}\\n"]
+    exit_code, output = container.exec_run(cmd, user="root")
+    if exit_code != 0:
+        return None
+    names = []
+    for line in output.decode().splitlines():
+        parts = line.split()
+        if not parts or (container_type != "rhel" and "installed" not in parts[-1:]):
+            continue
+        names.append(parts[0])
+    policy = _pr.COMPONENT_POLICY.get("spock")
+    return sorted(n for n in names if _pp.is_component_runtime_package(policy, n))
 
 
 # ============================================================================
@@ -162,6 +304,37 @@ def test_install_spock_packages(container_name, container_type):
 
     assert container.status == "running"
 
+    if INTEGRATION_REQUEST is not None:
+        # Execution-side backstop: never install for a request the shared spock rules reject.
+        assert INTEGRATION_PROBLEM is None, f"integration request cannot be served: {INTEGRATION_PROBLEM}"
+        requested = INTEGRATION_REQUEST["package_name"]
+        companions = get_spock_companions(container_type)
+        print(f"\n--- Installing PostgreSQL {pg_major_version} companions on {container_name}: "
+              f"{', '.join(companions)} ---")
+        try:
+            success, platform, message = package_management.install_package(
+                container=container,
+                package_name=companions,
+                pg_major_version=pg_major_version,
+                install_pg_server=False
+            )
+        except Exception as e:
+            success, message = False, str(e)
+        if not success:
+            pytest.fail(f"PostgreSQL {pg_major_version} prerequisite unavailable from the {repo!r} "
+                        f"channel ({', '.join(companions)}); spock was not installed: {message}")
+        # The requested spock package last, exactly as the request decides (pinned + checksum
+        # evidence), so no later install can replace it.
+        print(f"\n--- Installing requested {requested} (spock{spock_major}) on {container_name} ---")
+        pep_integration_mode.install_for_request(container, INTEGRATION_REQUEST)
+        record_prerequisite_versions(container, container_type)
+        present = installed_spock_packages(container, container_type)
+        assert present == [requested], (
+            f"expected exactly the requested spock package {requested!r} to be installed, "
+            f"found {present!r}")
+        print(f"✅ Only {requested} is installed among spock packages")
+        return
+
     packages = get_spock_packages(container_type)
     print(f"\n--- Installing spock{spock_major} package set on {container_name} ---")
     print(f"   Packages: {', '.join(packages)}")
@@ -192,6 +365,9 @@ def test_verify_spock_pkg_version(container_name, container_type):
 
     assert container.status == "running"
 
+    if INTEGRATION_REQUEST is not None:
+        pytest.skip("integration mode: test_spock_identity checks the exact requested version")
+
     spock_version_var = f"PGEDGE_SPOCK{spock_major}_{pg_major_version}_VERSION"
     expected_version = os.getenv(spock_version_var, "")
     if not expected_version:
@@ -207,6 +383,33 @@ def test_verify_spock_pkg_version(container_name, container_type):
 
     assert success, f"Version verification failed: {message}"
     print(f"Version verified: {spock_package} {installed_version} on {platform}")
+
+
+@pytest.mark.parametrize("container_name,container_type", all_containers)
+def test_spock_identity(container_name, container_type):
+    """Integration mode: one consolidated identity verdict for the requested spock package
+    (install-before-identity, then the exact package-manager version; spock has no binary to
+    probe). The evidence is persisted before any failure. Skipped in standalone mode."""
+    req = INTEGRATION_REQUEST
+    if req is None:
+        pytest.skip("integration mode only")
+
+    container_name = container_name.strip()
+    if not container_name:
+        pytest.skip("Invalid container")
+
+    try:
+        container = client.containers.get(container_name)
+    except docker.errors.NotFound:
+        pytest.skip(f"Container {container_name} not found or not running.")
+
+    assert container.status == "running"
+
+    ev, problems = pep_integration_mode.record_identity(container, req)
+    if ev is None:
+        pytest.fail("; ".join(problems))
+    print(f"identity evidence ({req['package_name']}): {ev}")
+    assert not problems, "; ".join(problems)
 
 
 @pytest.mark.parametrize("container_name,container_type", all_containers)
@@ -489,6 +692,10 @@ def test_verify_spock_extension_version(container_name, container_type):
 
     config = get_container_config(container_type)
     pguser = config["pguser"]
+
+    if INTEGRATION_REQUEST is not None:
+        verify_nodes_use_requested_spock(container, container_type, config)
+        return
 
     spock_version_var = f"PGEDGE_SPOCK{spock_major}_{pg_major_version}_VERSION"
     expected_version = os.getenv(spock_version_var, "")

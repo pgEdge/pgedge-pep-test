@@ -25,6 +25,7 @@ on:
       - 'pipeline/pep_evidence_class.py'
       - 'pipeline/pep_pkg_inspect.py'
       - 'aspects/pipeline/pep_capture_policy.json'
+      - 'aspects/pipeline/pep_package_policy.py'
 
 # actions:read is granted at the caller so the reusable capture job (capped by the
 # caller token) can list + download this run's jobs and artifacts.

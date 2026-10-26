@@ -126,6 +126,13 @@ def test_plan_downloads_cert_plan_by_immutable_id():
     assert "invocation_plan_artifact_id: ${{ steps.up_plan.outputs.artifact-id }}" in b
 
 
+def test_plan_annotates_an_unresolved_plans_errors():
+    # The planner itself escapes the errors (see test_pep_invocation_plan.py); the plan job
+    # only has to ask for them, alongside --out so the annotations never mix with the plan JSON.
+    call = _step_block(_job_block("plan"), "Derive the invocation plan")
+    assert re.search(r'--out "\$out" \\\n\s+--annotate-errors\n', call)
+
+
 # --------------------------------------------------------------------------- #
 # run: dynamic matrix guard, fail-fast:false, per-leg mode, secret forwarding
 # --------------------------------------------------------------------------- #
@@ -164,15 +171,23 @@ def test_aggregate_runs_even_when_a_leg_failed():
     assert re.search(r"if:\s*\$\{\{\s*!cancelled\(\)\s*\}\}", _job_block("aggregate"))
 
 
-def test_aggregate_paginates_and_normalizes_listing():
-    b = _job_block("aggregate")
-    assert "per_page=100&page=" in b
-    assert re.search(r"\{id,\s*name,\s*expired,\s*size_in_bytes\}", b)   # normalized allowlist
+def test_aggregate_lists_artifacts_through_the_capture_transport():
+    # Pagination, the {id, name, expired, size_in_bytes} allowlist and the retry classes are
+    # unit-tested in test_pep_artifact_listing.py / test_pep_capture_io.py; the step must use
+    # that module (never a raw `gh api` loop) and stay continue-on-error so a failed listing
+    # leaves the collector to fail closed.
+    step = _step_block(_job_block("aggregate"), "List this run's artifacts")
+    assert "id: collect" in step and "continue-on-error: true" in step
+    assert ('python3 pipeline/pep_artifact_listing.py --repo "$REPO" --run-id "$RUN_ID" \\\n'
+            '            --name-prefix "$NAME_PREFIX" --listing listing.json --github-output "$GITHUB_OUTPUT"') in step
+    assert "NAME_PREFIX: pep-summary-" in step
+    assert "gh api" not in _TEXT
 
 
 def test_aggregate_excludes_expired_and_downloads_by_immutable_id():
     b = _job_block("aggregate")
-    assert "select(.expired != true)" in b                       # expired excluded from download ids
+    # Expired and non-summary ids are excluded by pep_artifact_listing.download_ids
+    # (test_pep_artifact_listing.py); the workflow downloads only what it lists.
     assert re.search(r"if:\s*\$\{\{\s*steps\.collect\.outputs\.download_ids\s*!=\s*''\s*\}\}", b)  # skip when none
     assert "artifact-ids: ${{ steps.collect.outputs.download_ids }}" in b
     assert "artifact-ids: ${{ needs.plan.outputs.invocation_plan_artifact_id }}" in b

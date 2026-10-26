@@ -451,6 +451,20 @@ The gate also refuses a completed result whose test runs do not all carry a matc
 
 `DOCKERHUB_USERNAME` / `DOCKERHUB_TOKEN` are optional secrets. Pass them **explicitly** (as above) — not `secrets: inherit` — to authenticate base-image pulls in `full` mode and avoid anonymous rate limits. Omit them to rely on anonymous pulls. No read token of any kind is required.
 
+### Time limit, retries and plan size
+
+- **Time limit.** Each test run's framework step runs under a 45-minute limit (`pipeline/pep_time_limit.py`), with the job's 60-minute `timeout-minutes` as a backstop.
+  - Reaching the limit stops the framework's whole process group and records an infrastructure failure, "test run exceeded its 45-minute limit (timeout)", in both modes.
+  - Only the wrapper's explicit flag counts as a timeout. Any other exit, including 137 from an out-of-memory kill, is reported as an unexpected framework failure.
+  - If the 60-minute job limit itself is hit, Summarize, Upload and Report run on a best-effort basis only, and a missing summary counts as a missing result.
+- **Retries.** Capture's GitHub API reads and downloads, and the aggregate's artifact listing, retry transient failures.
+  - Retried: HTTP 429/500/502/503/504, network faults and timeouts, and a response body that stops part-way.
+  - Each read gets 3 attempts in total, waiting 2 s and then 5 s. A `Retry-After` header is honoured up to 30 s.
+  - Never retried: 404/410 (absence and expiry are handled as before), other HTTP statuses such as 401/403/422, a refused redirect, a certificate failure, a malformed or oversized response, and a local file error.
+  - Every attempt starts again from the original URL, so the credential-origin rules apply to each one.
+- **Plan size.** A plan with more than 256 test runs, GitHub's limit for one matrix, is unresolved. It has a named reason and an empty matrix, the plan job shows the reason as an annotation, and certification fails closed.
+- **Side-file faults.** If one test run's identity or install evidence is unreadable, the run keeps its provenance. It counts as that run's infrastructure failure, and the other runs keep their results. An unreadable provenance file still fails the whole result closed.
+
 ### Current limitations (POC)
 
 - **`certification` is the only wired scenario.** It is a no-replacement run: certification forces the effective upgrade off, resolved once as `upgrade={value:"false", source:"scenario_policy"}` and read back by the runtime, so no package replacement or channel switch happens around the identity being certified.

@@ -1518,3 +1518,48 @@ def test_oversized_caller_run_attempt_is_a_malformed_record():
                  [_summary("rag-a-pg17-aaaa", provenance=_caller_prov(caller_run_attempt=_OVERSIZED))])
     _assert_failed_safe(res)
     assert [u["kind"] for u in res["unexpected_results"]] == ["malformed"]
+
+
+# --------------------------------------------------------------------------- #
+# A side-file fault in one test run, end to end through the real summarizer:
+# with valid provenance it is that run's infra failure and every other run keeps
+# its result; with unreadable provenance it cannot bind and the result fails closed.
+# --------------------------------------------------------------------------- #
+_prs_spec = importlib.util.spec_from_file_location(
+    "pep_result_summary", str(Path(__file__).resolve().parents[1] / "pep_result_summary.py"))
+prs = importlib.util.module_from_spec(_prs_spec)
+sys.modules.setdefault("pep_result_summary", prs)
+_prs_spec.loader.exec_module(prs)
+
+
+def _sidefile_fault_summary(tmp_path, iid, provenance_text):
+    (tmp_path / "report.xml").write_text(
+        '<testsuite name="s" tests="1" failures="0" errors="0" skipped="0"><testcase name="a"/></testsuite>')
+    (tmp_path / "identity.json").write_text("{truncated")             # the side-file fault
+    (tmp_path / "provenance.json").write_text(provenance_text)
+    out = tmp_path / "summary.json"
+    prs.main(["--xml-dir", str(tmp_path), "--out", str(out), "--mode", "observe",
+              "--invocation-id", iid, "--identity-json", str(tmp_path / "identity.json"),
+              "--provenance-json", str(tmp_path / "provenance.json")])
+    return json.loads(out.read_text())
+
+
+def test_sidefile_fault_with_valid_provenance_fails_only_its_own_run(tmp_path):
+    plan = _plan([_inv("rag-a-pg17-aaaa"), _inv("rag-b-pg18-bbbb", pg="18")])
+    faulty = _sidefile_fault_summary(tmp_path, "rag-b-pg18-bbbb", json.dumps(_caller_prov()))
+    res = _build(plan, [_summary("rag-a-pg17-aaaa"), faulty])
+    assert res["result_resolved"] is True and res["errors"] == []
+    legs = {l["invocation_id"]: l for l in res["legs"]}
+    assert (legs["rag-a-pg17-aaaa"]["execution_status"], legs["rag-a-pg17-aaaa"]["test_verdict"]) == (
+        "completed", "pass")
+    assert legs["rag-a-pg17-aaaa"]["installed_package_sha256"] == "d" * 64
+    assert legs["rag-b-pg18-bbbb"]["execution_status"] == "infra_failure"
+    assert (res["execution_status"], res["reason_code"]) == ("infra_failure", "infra_leg")
+
+
+@pytest.mark.parametrize("provenance_text", ["{truncated", "[]"])
+def test_sidefile_fault_with_unreadable_provenance_still_fails_closed(tmp_path, provenance_text):
+    plan = _plan([_inv("rag-a-pg17-aaaa"), _inv("rag-b-pg18-bbbb", pg="18")])
+    faulty = _sidefile_fault_summary(tmp_path, "rag-b-pg18-bbbb", provenance_text)
+    res = _build(plan, [_summary("rag-a-pg17-aaaa"), faulty])
+    assert res["result_resolved"] is False

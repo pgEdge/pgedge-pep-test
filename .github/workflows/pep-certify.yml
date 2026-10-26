@@ -140,13 +140,16 @@ jobs:
           # the unresolved plan and fail closed with a real reason. Any OTHER exit code, or a missing
           # or malformed output document, is a genuine planner failure and fails this job (so `set -e`
           # is dropped only around the planner call, which is classified explicitly below).
+          # --annotate-errors prints an unresolved plan's errors (for example a plan above GitHub's
+          # 256-job matrix limit) as escaped ::error:: annotations, so the reason shows on the run.
           set +e
           python3 pipeline/pep_invocation_plan.py \
             --cert-plan plan-in/cert-plan.json \
             --exec-catalog pipeline/pep_exec_catalog.json \
             --containers configuration/containers_list.json \
             --execution-mode "${EXECUTION_MODE}" \
-            --out "$out"
+            --out "$out" \
+            --annotate-errors
           rc=$?
           set -e
           if [ "$rc" -ne 0 ] && [ "$rc" -ne 1 ]; then
@@ -294,35 +297,20 @@ jobs:
           github-token: ${{ github.token }}
       - name: List this run's artifacts (paginated) -> normalized listing + download ids
         id: collect
-        continue-on-error: true      # a transport fault -> no/partial listing -> collector fails closed
+        continue-on-error: true      # a listing failure -> no listing -> collector fails closed
         env:
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
           RUN_ID: ${{ github.run_id }}
           NAME_PREFIX: pep-summary-
         run: |
-          set -euo pipefail
-          page=1
-          echo '[]' > artifacts.json
-          while : ; do
-            resp="$(gh api "repos/${REPO}/actions/runs/${RUN_ID}/artifacts?per_page=100&page=${page}")"
-            printf '%s' "$resp" | jq '.artifacts' > page.json
-            jq -s '.[0] + .[1]' artifacts.json page.json > artifacts.tmp
-            mv artifacts.tmp artifacts.json
-            total="$(printf '%s' "$resp" | jq '.total_count')"
-            got="$(jq 'length' artifacts.json)"
-            n="$(printf '%s' "$resp" | jq '.artifacts | length')"
-            page=$((page + 1))
-            { [ "$got" -ge "$total" ] || [ "$n" -eq 0 ]; } && break
-          done
-          rm -f page.json
-          # Normalized listing the collector consumes (allowlisted fields only; no URLs).
-          jq '[ .[] | {id, name, expired, size_in_bytes} ]' artifacts.json > listing.json
-          # Coarse prefix filter for DOWNLOAD ids only; exclude expired ids (they cannot
-          # be downloaded). Acceptance is by immutable id + validated content in the collector.
-          ids="$(jq -r --arg p "$NAME_PREFIX" '[ .[] | select((.name // "") | startswith($p)) | select(.expired != true) | .id ] | join(",")' artifacts.json)"
-          echo "download_ids=${ids}" >> "$GITHUB_OUTPUT"
-          echo "Prepared listing with $(jq 'length' listing.json) artifact(s); download ids: ${ids:-<none>}"
+          # Read through the capture transport: the same bounded retries for transient GitHub
+          # API failures (3 attempts in total per page) and the same no-retry classes as capture.
+          # Writes the normalized listing the collector consumes (allowlisted fields only; no
+          # URLs) and download_ids: the non-expired pep-summary-* ids. Acceptance is by
+          # immutable id + validated content in the collector.
+          python3 pipeline/pep_artifact_listing.py --repo "$REPO" --run-id "$RUN_ID" \
+            --name-prefix "$NAME_PREFIX" --listing listing.json --github-output "$GITHUB_OUTPUT"
       - name: Download candidate summaries by immutable id
         id: dl_summaries
         if: ${{ steps.collect.outputs.download_ids != '' }}

@@ -24,9 +24,12 @@ def _load_util(name):
     return mod
 
 
-pep_request_env = _load_util('pep_request_env')
-pep_verify = _load_util('pep_verify')
-pep_evidence = _load_util('pep_evidence')
+# The shared integration-mode install/identity steps. This module uses the helper's own instances
+# of the request/evidence helpers, so a patch of rag.pep_evidence (etc.) reaches the shared code.
+pep_integration_mode = _load_util('pep_integration_mode')
+pep_request_env = pep_integration_mode.pep_request_env
+pep_verify = pep_integration_mode.pep_verify
+pep_evidence = pep_integration_mode.pep_evidence
 
 load_dotenv()
 client = docker.from_env()
@@ -288,33 +291,10 @@ def test_rag_component_install(container_name, container_type, component):
 
     try:
         if INTEGRATION_REQUEST is not None:
-            # Integration mode: install per the request's decision.
-            req = INTEGRATION_REQUEST
-            kind, exact = pep_verify.choose_install(req)
-            installed_sha256 = None
-            if kind == "pinned":
-                # EXACT / L2a -- assert the result so a failed exact-version install
-                # fails loudly here instead of being papered over by identity later.
-                # The verified install also returns the SHA-256 of the package file it
-                # installed, recorded below for the certification digest check.
-                ok, out, installed_sha256 = package_management.install_pinned(
-                    container, req["package_name"], exact)
-                assert ok, f"pinned install of {req['package_name']}={exact} failed: {out}"
-                print(f"✅ pinned install: {req['package_name']}={exact} sha256={installed_sha256}")
-            else:
-                # L1 degraded path -- latest, not pinned. Install the REQUEST
-                # package (caller-authoritative), never the parametrized config
-                # component, so an L1 run cannot install a config-named package.
-                ok, platform, message = package_management.install_package(container, req["package_name"])
-                assert ok, f"Package installation failed: {message}"
-                print(f"✅ {message} (L1/latest -- degraded, not pinned)")
-            # Record the install scope marker AFTER a successful install: binds this
-            # run + target so the identity test can enforce install-before-identity
-            # (a failed install raises above, so no marker is written -> identity fails).
-            install_out = os.getenv("PEP_INSTALL_OUT", "test-logs/install-evidence.json")
-            pep_evidence.write_install_evidence(
-                req, os.environ.get("PEP_RUN_TOKEN", ""), kind, exact, install_out,
-                installed_sha256=installed_sha256)
+            # Integration mode: install per the request's decision (pinned, or the degraded
+            # latest install of the REQUEST package, never a config-named one), then record
+            # the install scope marker (a failed install raises first, so no marker is written).
+            pep_integration_mode.install_for_request(container, INTEGRATION_REQUEST)
         else:
             # Standalone mode: unchanged legacy behavior.
             success, platform, message = package_management.install_package(container, component)
@@ -611,48 +591,16 @@ def test_rag_identity(container_name, container_type, component):
 
     assert container.status == "running"
 
-    identity_out = os.getenv("PEP_IDENTITY_OUT", "test-logs/identity-evidence.json")
-
-    # Install-before-identity precondition: trust identity only if THIS run installed
-    # THIS target (scope marker written by test_rag_component_install). On any failure
-    # -- absent/stale/mismatched marker -- persist schema-valid zero-observation
-    # identity evidence (L2 rungs may be not_proven while L1 is not_attempted, since
-    # identity was never queried), so the run reports a truthful completed/fail rather
-    # than a masked infra_failure, and fail WITHOUT querying identity, so no
-    # post-replacement state can be certified.
-    install_out = os.getenv("PEP_INSTALL_OUT", "test-logs/install-evidence.json")
-    run_token = os.environ.get("PEP_RUN_TOKEN", "")
-    pre = pep_evidence.install_precondition_problems(
-        pep_evidence.load_json_object(install_out), req, run_token)
-    if pre:
-        reason = "; ".join(pre)
-        pep_evidence.record_precondition_failure(req, identity_out)
-        pytest.fail(f"install-before-identity precondition failed: {reason}")
-
-    fam = req["family"]
-    # Gather ALL observations together (read-only helpers from package_management).
-    pm_ver = package_management.query_installed_version(container, req["package_name"])
-    # Caller-authoritative: resolve the binary for the REQUEST package (not the
-    # config-parametrized component) via upstream's fixture-derived helper, using
-    # the actual container type so the right expected-output file is read.
-    binary_path = get_rag_binary(req["package_name"], container_type)
-    binary_missing = not binary_path
-    bin_ver = None if binary_missing else package_management.query_binary_version(container, binary_path)
-    observed = {
-        "rpm": pm_ver if fam == "rpm" else None,
-        "deb": pm_ver if fam == "deb" else None,
-        "binary": bin_ver,
-        "component_version": pm_ver,
-    }
-
-    # record_identity_verdict persists the evidence BEFORE returning problems, so a
-    # failing assertion below never loses it. It also writes an audit-only
-    # observed-identity.json (the actual package/binary observed) to PEP_OBSERVED_OUT
-    # -- a SEPARATE file that never affects the verdict; identity_out stays strict.
-    observed_out = os.getenv("PEP_OBSERVED_OUT", "test-logs/observed-identity.json")
-    ev, problems = pep_evidence.record_identity_verdict(
-        observed, req, identity_out, binary_missing=binary_missing,
-        run_token=run_token, observed_out=observed_out)
+    # Install-before-identity precondition, then the package-manager and binary observations
+    # and the persisted verdict (shared). On a precondition failure (absent/stale/mismatched
+    # marker) schema-valid zero-observation evidence is persisted and identity is never queried,
+    # so no post-replacement state can be certified. Caller-authoritative: the binary is resolved
+    # for the REQUEST package via the fixture-derived helper, using the actual container type,
+    # and only after the precondition passed.
+    ev, problems = pep_integration_mode.record_identity(
+        container, req, resolve_binary=lambda: get_rag_binary(req["package_name"], container_type))
+    if ev is None:
+        pytest.fail("; ".join(problems))
     print(f"identity evidence ({component}): {ev}")
 
     assert not problems, "; ".join(problems)

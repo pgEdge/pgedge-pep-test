@@ -4,7 +4,8 @@ Implements the request rules from the design spec (sections 3 and 5):
 `expected_version` is REQUIRED and build-authoritative (never falls back to
 config); the scalar target fields (family/arch/pg_major/container_alias) are required.
 `component` must be known and `package_name` must be one of the packages it maps
-to (COMPONENT_PACKAGES); an expected package-manager string must match the target
+to (COMPONENT_PACKAGES; for a PG-coupled component, the package for the request's family, PG
+major and release series); an expected package-manager string must match the target
 family (`expected_rpm`->rpm, `expected_deb`->deb) or the request is rejected.
 
 Identity-rung classification is deliberately CONSERVATIVE about decision gate G6
@@ -42,7 +43,9 @@ VALID_FAMILIES = ("rpm", "deb")
 VALID_ARCHES = ("amd64", "arm64")
 VALID_MODES = ("observe", "gate")
 VALID_SCENARIOS = ("certification", "upgrade")
-# Known component -> accepted physical package name(s). This mapping is NOT hardcoded here:
+# Known component -> accepted physical package name(s) (COMPONENT_PACKAGES, flat entries) or, for a
+# PG-coupled component such as spock, its name templates (COMPONENT_POLICY, matched by the shared
+# rules in pep_package_policy.py). This mapping is NOT hardcoded here:
 # it is DERIVED from the single PEP-owned component/package policy file (pep_capture_policy.json,
 # schema pep-capture-policy/1) -- the SAME source release capture resolves per component -- so
 # capture, invocation planning and normalize_request share ONE authority instead of separate
@@ -53,16 +56,27 @@ VALID_SCENARIOS = ("certification", "upgrade")
 _COMPONENT_POLICY_SCHEMA = "pep-capture-policy/1"
 _DEFAULT_COMPONENT_POLICY = _Path(__file__).resolve().parent / "pep_capture_policy.json"
 
+# The shared package-matching rules (one instance for every consumer, like this module itself).
+if "pep_package_policy" in _sys.modules:
+    _pp = _sys.modules["pep_package_policy"]
+else:
+    _pp_spec = _ilu.spec_from_file_location(
+        "pep_package_policy", str(_Path(__file__).with_name("pep_package_policy.py")))
+    _pp = _ilu.module_from_spec(_pp_spec)
+    _sys.modules["pep_package_policy"] = _pp
+    _pp_spec.loader.exec_module(_pp)
+
 
 class ComponentPolicyError(ValueError):
     """Raised when the PEP-owned component/package policy file is missing or malformed."""
 
 
-def load_component_packages(policy_path=None):
-    """Return ``{component: (package_name, ...)}`` from the single PEP-owned component/package
-    policy file. Package order is preserved (canonical/active first). A missing/malformed file
-    or entry raises ``ComponentPolicyError`` with a clear reason -- fail closed, never a partial
-    or silently-empty registry."""
+def load_component_policy(policy_path=None):
+    """Return ``{component: entry}`` from the single PEP-owned component/package policy file,
+    every entry validated by the shared rules (``pep_package_policy.validate_entry``): the flat
+    ``allowed_runtime_package_names`` form or the PG-coupled template form. A missing/malformed
+    file or entry raises ``ComponentPolicyError`` with a clear reason -- fail closed, never a
+    partial or silently-empty registry."""
     path = _Path(policy_path) if policy_path is not None else _DEFAULT_COMPONENT_POLICY
     try:
         raw = path.read_text(encoding="utf-8")
@@ -85,22 +99,29 @@ def load_component_packages(policy_path=None):
         if not isinstance(entry, dict):
             raise ComponentPolicyError(
                 "component/package policy entry for %r is not an object" % (comp,))
-        names = entry.get("allowed_runtime_package_names")
-        if not (isinstance(names, list) and names
-                and all(isinstance(x, str) and x.strip() != "" for x in names)):
+        errs = _pp.validate_entry(entry)
+        if errs:
             raise ComponentPolicyError(
-                "component/package policy entry for %r needs a nonempty "
-                "allowed_runtime_package_names list of nonblank strings" % (comp,))
-        if len(set(names)) != len(names):
-            raise ComponentPolicyError(
-                "component/package policy entry for %r has duplicate package names" % (comp,))
-        out[comp] = tuple(names)
+                "component/package policy entry for %r: %s" % (comp, errs[0]))
+        out[comp] = entry
     return out
 
 
-# Built once at import from the shared policy; normalize_request validates against it and
-# pep_invocation_plan reuses THIS exact object (identity), so there is no second registry.
-COMPONENT_PACKAGES = load_component_packages()
+def load_component_packages(policy_path=None):
+    """Return ``{component: (package_name, ...)}`` for the FLAT entries of the policy file,
+    package order preserved (canonical/active first). PG-coupled entries have no fixed name list
+    and are matched through ``COMPONENT_POLICY`` instead. Raises ``ComponentPolicyError`` like
+    ``load_component_policy``."""
+    return {comp: tuple(entry["allowed_runtime_package_names"])
+            for comp, entry in load_component_policy(policy_path).items()
+            if not _pp.is_coupled(entry)}
+
+
+# Built once at import from the shared policy; normalize_request validates against them and
+# pep_invocation_plan reuses THESE exact objects (identity), so there is no second registry.
+COMPONENT_POLICY = load_component_policy()
+COMPONENT_PACKAGES = {comp: tuple(entry["allowed_runtime_package_names"])
+                      for comp, entry in COMPONENT_POLICY.items() if not _pp.is_coupled(entry)}
 _BUILDNUM_RE = re.compile(r"^[A-Za-z0-9._]+$")   # e.g. 1, test1_1, beta3_1
 _PG_MAJOR_RE = re.compile(r"^\d+$")
 
@@ -153,9 +174,10 @@ def normalize_request(raw: dict, *, catalog_path=None) -> dict:
 
     # component must be known, and package_name must be one of the packages that
     # component maps to (rejects unknown components and unrelated package names).
-    component = _enum(_require(raw, "component"), tuple(COMPONENT_PACKAGES), "component")
+    component = _enum(_require(raw, "component"), tuple(COMPONENT_POLICY), "component")
     package_name = _require(raw, "package_name")
-    if package_name not in COMPONENT_PACKAGES[component]:
+    coupled = _pp.is_coupled(COMPONENT_POLICY[component])
+    if not coupled and package_name not in COMPONENT_PACKAGES[component]:
         raise RequestError(
             f"package_name {package_name!r} does not match component {component!r} "
             f"(expected one of {list(COMPONENT_PACKAGES[component])})")
@@ -170,6 +192,18 @@ def normalize_request(raw: dict, *, catalog_path=None) -> dict:
     pg_major = _require(raw, "pg_major")
     if not _PG_MAJOR_RE.match(str(pg_major)):
         raise RequestError(f"pg_major {pg_major!r} must be numeric")
+    if coupled:
+        # A PG-coupled component's package is bound to the family, the PG major and the series of
+        # the release version (shared rule, also used by planning and the component test).
+        why = _pp.classify(COMPONENT_POLICY[component], package_name, family, str(pg_major),
+                           expected_version)
+        if why is not None:
+            expected = _pp.expected_names(COMPONENT_POLICY[component], family, str(pg_major),
+                                          expected_version)
+            raise RequestError(
+                f"package_name {package_name!r} does not match component {component!r} for "
+                f"{family} PG{pg_major} version {expected_version!r} ({why}; "
+                f"expected one of {list(expected)})")
     # Target is selected by a catalog ALIAS (the OS is embedded in the container
     # name; a bare distro/el-version cannot select a container). Validate that the
     # alias RESOLVES in the catalog and that the resolved entry's family/arch agree

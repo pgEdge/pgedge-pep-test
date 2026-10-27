@@ -66,7 +66,8 @@ def ensure_container_running(client, container_name, container_type, force_recre
         client: Docker client object (or AWSInstanceClient in AWS_MODE)
         container_name: Name of the container / AWS instance
         container_type: Type of container ("rhel" or "deb")
-        force_recreate: If True, remove any existing container and create a fresh one.
+        force_recreate: If True, remove any existing container (with its anonymous
+                        volumes) and create a fresh one.
                         Prevents disk-space accumulation from prior test runs.
 
     Returns:
@@ -90,13 +91,9 @@ def ensure_container_running(client, container_name, container_type, force_recre
 
         if force_recreate:
             print(f"force_recreate=True: removing existing container '{container_name}' (status: {container.status}) for a clean slate...")
-            container.remove(force=True)
-            # Prune dangling volumes to reclaim disk space
-            try:
-                client.volumes.prune()
-                print("Pruned dangling volumes to reclaim disk space")
-            except docker.errors.APIError:
-                pass
+            # v=True also removes this container's anonymous volumes. Never prune volumes
+            # here: an unfiltered prune deletes other projects' unused volumes host-wide.
+            container.remove(force=True, v=True)
             raise docker.errors.NotFound(container_name)
 
         # Check container status

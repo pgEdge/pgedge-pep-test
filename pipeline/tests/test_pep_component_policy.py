@@ -17,7 +17,8 @@ from pathlib import Path
 import pytest
 
 # Plain imports (pytest puts utillities/ on sys.path) reuse the SAME module singletons the rest
-# of the suite uses -- importantly, pep_invocation_plan binds pep_request.COMPONENT_PACKAGES by
+# of the suite uses -- importantly, pep_invocation_plan binds pep_request.COMPONENT_PACKAGES (and
+# COMPONENT_POLICY) by
 # identity, so we must not re-exec/clobber those modules here.
 import pep_request as pr           # noqa: E402
 import pep_capture_io as IO        # noqa: E402
@@ -33,8 +34,12 @@ _POLICY = _HELPERS / "pep_capture_policy.json"
 # --------------------------------------------------------------------------- #
 def test_request_registry_is_derived_from_the_policy_file():
     doc = json.loads(_POLICY.read_text(encoding="utf-8"))
-    want = {c: tuple(e["allowed_runtime_package_names"]) for c, e in doc["components"].items()}
+    assert pr.COMPONENT_POLICY == doc["components"]
+    # the flat name registry holds exactly the flat entries; PG-coupled entries have no fixed list
+    want = {c: tuple(e["allowed_runtime_package_names"]) for c, e in doc["components"].items()
+            if "allowed_runtime_package_names" in e}
     assert pr.COMPONENT_PACKAGES == want
+    assert set(want) | {"spock"} == set(doc["components"])
 
 
 def test_policy_defines_both_rag_and_smoke():
@@ -43,9 +48,21 @@ def test_policy_defines_both_rag_and_smoke():
     assert pr.COMPONENT_PACKAGES["pgedge-capture-smoke"] == ("pgedge-capture-smoke",)
 
 
+def test_policy_defines_spock_as_one_pg_coupled_component():
+    spock = pr.COMPONENT_POLICY["spock"]
+    assert spock["pg_coupled"] is True
+    assert spock["runtime_package_templates"] == {
+        "rpm": ["pgedge-spock{series}_{pg}"], "deb": ["pgedge-postgresql-{pg}-spock{series}"]}
+    assert spock["series_by_version_major"] == {"5": "50", "6": "60"}
+    assert spock["uncertified_runtime_package_templates"] == {"rpm": ["pgedge-spock{series}_{pg}-llvmjit"]}
+    assert spock["uncertified_reason"].strip()
+    assert "spock" not in pr.COMPONENT_PACKAGES
+
+
 def test_planner_shares_the_request_object_not_a_copy():
     # the planner reuses the SAME in-memory mapping -> one authority, never a second registry
     assert P.COMPONENT_PACKAGES is pr.COMPONENT_PACKAGES
+    assert P.COMPONENT_POLICY is pr.COMPONENT_POLICY
 
 
 def test_capture_and_request_agree_for_every_component():
@@ -53,6 +70,8 @@ def test_capture_and_request_agree_for_every_component():
     for comp, packages in pr.COMPONENT_PACKAGES.items():
         pol = IO.resolve_component_policy(str(_POLICY), comp)
         assert tuple(pol["allowed_runtime_package_names"]) == packages, comp
+    for comp, entry in pr.COMPONENT_POLICY.items():
+        assert IO.resolve_component_policy(str(_POLICY), comp) == entry, comp
 
 
 # --------------------------------------------------------------------------- #
@@ -81,6 +100,45 @@ def test_request_accepts_smoke_component_end_to_end():
                                     package_name="pgedge-capture-smoke"))
     assert req["component"] == "pgedge-capture-smoke"
     assert req["package_name"] == "pgedge-capture-smoke"
+
+
+def _spock(**over):
+    return _req(**dict({"component": "spock", "package_name": "pgedge-spock50_17",
+                        "expected_version": "5.0.13"}, **over))
+
+
+@pytest.mark.parametrize("family,alias,pkg,version,pg", [
+    ("rpm", "rocky9-amd64", "pgedge-spock50_17", "5.0.13", "17"),
+    ("deb", "debian13-amd64", "pgedge-postgresql-17-spock50", "5.0.13", "17"),
+    ("rpm", "rocky9-amd64", "pgedge-spock60_18", "6.0.0", "18"),
+    ("deb", "debian13-amd64", "pgedge-postgresql-16-spock60", "6.0.0", "16"),
+], ids=["rpm-v5", "deb-v5", "rpm-v6", "deb-v6"])
+def test_request_accepts_spock_package_for_its_family_pg_and_series(family, alias, pkg, version, pg):
+    req = pr.normalize_request(_spock(family=family, container_alias=alias, package_name=pkg,
+                                      expected_version=version, pg_major=pg))
+    assert (req["component"], req["package_name"], req["family"]) == ("spock", pkg, family)
+
+
+@pytest.mark.parametrize("over,why", [
+    ({"package_name": "pgedge-postgresql-17-spock50"}, "package_family_mismatch"),
+    ({"package_name": "pgedge-spock50_16"}, "pg_major_mismatch"),
+    ({"pg_major": "18"}, "pg_major_mismatch"),
+    ({"package_name": "pgedge-spock60_17"}, "series_mismatch"),
+    ({"expected_version": "6.0.0"}, "series_mismatch"),
+    ({"expected_version": "7.0.0"}, "series_unknown"),
+    ({"package_name": "pgedge-spock50_17-llvmjit"}, "runtime_not_certified"),
+    ({"package_name": "pgedge-spock50_17-debuginfo"}, "package_not_allowed"),
+    ({"package_name": "pgedge-rag-server2"}, "package_not_allowed"),
+], ids=["family", "pkg-pg", "req-pg", "pkg-series", "ver-series", "unknown-series", "llvmjit",
+        "debuginfo", "unrelated"])
+def test_request_rejects_mismatched_spock_package(over, why):
+    with pytest.raises(pr.RequestError, match=why):
+        pr.normalize_request(_spock(**over))
+
+
+def test_rag_package_on_spock_and_spock_package_on_rag_rejected():
+    with pytest.raises(pr.RequestError):
+        pr.normalize_request(_req(package_name="pgedge-spock50_17"))
 
 
 def test_unrelated_and_unknown_pairs_still_rejected():
@@ -123,6 +181,44 @@ def test_malformed_or_unknown_policy_fails_clearly(tmp_path):
             "components": {"c": {"allowed_runtime_package_names": ["p", "p"]}}}))
 
 
+_SPOCK_LIKE = {"pg_coupled": True,
+               "runtime_package_templates": {"rpm": ["p{series}_{pg}"], "deb": ["p-{pg}-{series}"]},
+               "series_by_version_major": {"5": "50"}}
+
+
+@pytest.mark.parametrize("entry", [
+    dict(_SPOCK_LIKE, pg_coupled="true"),                                   # not strictly True
+    dict(_SPOCK_LIKE, allowed_runtime_package_names=["p"]),                 # flat + coupled mixed
+    dict(_SPOCK_LIKE, runtime_package_templates={}),                        # no templates
+    dict(_SPOCK_LIKE, runtime_package_templates={"apk": ["p{pg}"]}),        # unknown family
+    dict(_SPOCK_LIKE, runtime_package_templates={"rpm": ["p{series}"]}),    # no {pg}
+    dict(_SPOCK_LIKE, runtime_package_templates={"rpm": ["p{pg}{pg}"]}),    # {pg} twice
+    dict(_SPOCK_LIKE, runtime_package_templates={"rpm": ["p{arch}_{pg}"]}), # unknown placeholder
+    dict(_SPOCK_LIKE, runtime_package_templates={"rpm": ["p{pg"]}),         # malformed placeholder
+    {k: v for k, v in _SPOCK_LIKE.items() if k != "series_by_version_major"},  # {series} unmapped
+    dict(_SPOCK_LIKE, series_by_version_major={"5": "fifty"}),             # non-digit series
+    dict(_SPOCK_LIKE, series_by_version_major={"5": "50", "6": "50"}),     # two majors, one series
+    dict(_SPOCK_LIKE, uncertified_runtime_package_templates={"rpm": ["p{series}_{pg}-x"]}),  # no reason
+    dict(_SPOCK_LIKE, uncertified_reason="why"),                            # reason, no templates
+], ids=["pg_coupled-not-true", "mixed-flat", "empty-templates", "unknown-family", "no-pg",
+        "pg-twice", "unknown-placeholder", "malformed-placeholder", "series-unmapped",
+        "bad-series", "dup-series", "uncertified-no-reason", "reason-no-templates"])
+def test_malformed_pg_coupled_policy_fails_in_request_and_capture(tmp_path, entry):
+    path = _write(tmp_path, {"schema": "pep-capture-policy/1", "components": {"c": entry}})
+    with pytest.raises(pr.ComponentPolicyError):
+        pr.load_component_policy(path)
+    with pytest.raises(IO.CaptureIOError):
+        IO.resolve_component_policy(path, "c")
+
+
+def test_wellformed_pg_coupled_policy_loads_in_request_and_capture(tmp_path):
+    path = _write(tmp_path, {"schema": "pep-capture-policy/1", "components": {
+        "c": _SPOCK_LIKE, "f": {"allowed_runtime_package_names": ["a"]}}})
+    assert pr.load_component_policy(path)["c"] == _SPOCK_LIKE
+    assert pr.load_component_packages(path) == {"f": ("a",)}
+    assert IO.resolve_component_policy(path, "c") == _SPOCK_LIKE
+
+
 def test_wellformed_custom_policy_loads_and_preserves_order(tmp_path):
     ok = _write(tmp_path, {"schema": "pep-capture-policy/1", "components": {
         "c": {"allowed_runtime_package_names": ["a", "b"], "expected_binary_version": "9.9"}}})
@@ -162,6 +258,8 @@ for name in order:
 import pep_invocation_plan as P
 import pep_request as R
 assert P.COMPONENT_PACKAGES is R.COMPONENT_PACKAGES, "planner COMPONENT_PACKAGES is not the request object"
+assert P.COMPONENT_POLICY is R.COMPONENT_POLICY, "planner COMPONENT_POLICY is not the request object"
+assert P._pp is R._pp is sys.modules["pep_package_policy"], "package-policy rules are not one module"
 assert P.VALID_CHANNELS is R.VALID_CHANNELS, "planner VALID_CHANNELS is not the request object"
 print("OK")
 """

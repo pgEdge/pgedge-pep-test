@@ -316,6 +316,25 @@ def test_identity_fails_when_install_marker_absent(monkeypatch, tmp_path):
     _assert_precondition_failure(ident, ei, "absent")
 
 
+def test_precondition_is_checked_before_the_binary_is_resolved(monkeypatch, tmp_path):
+    # The binary lookup must not run before install-before-identity: with no install marker and
+    # a resolver that raises, the precondition failure is still recorded and reported, and the
+    # resolver is never called.
+    req = _int_req(PEP_EXPECTED_DEB="1.0.0~beta1-1.trixie")
+    _inst, ident = _wire_integration(monkeypatch, tmp_path, req)   # no install run -> no marker
+    calls = []
+
+    def unreadable(*a, **k):
+        calls.append(a)
+        raise PermissionError("expected-output file is unreadable")
+
+    monkeypatch.setattr(rag, "get_rag_binary", unreadable)
+    with pytest.raises(pytest.fail.Exception) as ei:
+        rag.test_rag_identity("c1", "deb", "pgedge-rag-server")
+    _assert_precondition_failure(ident, ei, "absent")
+    assert calls == []
+
+
 def test_identity_fails_on_stale_run_token(monkeypatch, tmp_path):
     req = _int_req(PEP_EXPECTED_DEB="1.0.0~beta1-1.trixie")
     inst, ident = _wire_integration(monkeypatch, tmp_path, req, run_token="run-NEW")

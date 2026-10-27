@@ -120,9 +120,10 @@ jobs:
       - name: Check every case from evidence, not job colour
         run: |
           python3 - <<'PY'
-          import json, os, re, subprocess, sys, time
+          import http.client, json, os, re, subprocess, sys, time, urllib.error, urllib.request
           import xml.etree.ElementTree as ET
           from pathlib import Path
+          from urllib.parse import urlsplit
 
           E = os.environ
           FROZEN, REPO = E["FROZEN"], E["GITHUB_REPOSITORY"]
@@ -176,6 +177,31 @@ jobs:
                   if i + 1 < tries:
                       time.sleep(15)
               raise RuntimeError("gh api %s failed: %s" % (path, r.stderr.strip()[:300]))
+
+          # Job logs are read as bytes over HTTPS, not through gh: newer gh refuses to print text that
+          # contains the logs' colour codes. The token is an unredirected header, so it reaches
+          # api.github.com only, never the signed log URL; redirects must stay on HTTPS. Terminal
+          # control sequences are stripped before the text is searched or recorded.
+          CONTROL = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)|\x1b[@-_]|[\x00-\x08\x0b-\x1f\x7f-\x9f]")
+
+          class HttpsOnlyRedirect(urllib.request.HTTPRedirectHandler):
+              def redirect_request(self, req, fp, code, msg, headers, newurl):
+                  if urlsplit(newurl).scheme != "https":
+                      raise urllib.error.URLError("refused non-HTTPS redirect")
+                  return super().redirect_request(req, fp, code, msg, headers, newurl)
+
+          def job_log(jid, tries=4):
+              req = urllib.request.Request("https://api.github.com/repos/%s/actions/jobs/%s/logs" % (REPO, jid))
+              req.add_unredirected_header("Authorization", "Bearer " + E.get("GH_TOKEN", ""))
+              for i in range(tries):
+                  try:
+                      with urllib.request.build_opener(HttpsOnlyRedirect).open(req, timeout=120) as r:
+                          return CONTROL.sub("", r.read().decode("utf-8", "replace"))
+                  except (OSError, ValueError, http.client.HTTPException) as e:
+                      err = e
+                  if i + 1 < tries:
+                      time.sleep(15)
+              raise RuntimeError("job %s log: %s" % (jid, err))
 
           def pinned_token(c):
               # expected_buildnum is only regex-checked by PEP; tie it to the pinned token here.
@@ -301,7 +327,7 @@ jobs:
                   log = ""
                   if check(len(jid) == 1 and all(j["conclusion"] == "success" for j in jobs if j["id"] in jid), tag + "called job %r" % jid):
                       try:
-                          log = gh("repos/%s/actions/jobs/%s/logs" % (REPO, jid[0]), 4)
+                          log = job_log(jid[0])
                       except RuntimeError as e:
                           problems.append(tag + "job log unavailable: %s" % e)
                   esc = re.escape(pkg)

@@ -141,6 +141,27 @@ def _nonblank_str(x):
     return isinstance(x, str) and x.strip() != ""
 
 
+# A plan's uncertified_runtime_packages record: a runtime companion the component policy names as
+# not certified. Identity and reason are required; the location fields may be null.
+_UNCERTIFIED_REQUIRED = ("cell_id", "family", "physical_package", "sha256", "reason")
+_UNCERTIFIED_OPTIONAL = ("os", "arch", "build_pg_major", "path")
+
+
+def uncertified_record_problems(rec):
+    """Problems with one ``uncertified_runtime_packages`` record (empty == valid). Shared with the
+    report, so a record the reducer would reject is shown there as malformed, never dropped."""
+    if not isinstance(rec, dict):
+        return ["must be an object"]
+    out = ["%s must be a nonblank string" % k for k in _UNCERTIFIED_REQUIRED if not _nonblank_str(rec.get(k))]
+    if _nonblank_str(rec.get("family")) and rec["family"] not in ("rpm", "deb"):
+        out.append("family must be rpm or deb")
+    if _nonblank_str(rec.get("sha256")) and not _PLANNED_SHA256_RE.fullmatch(rec["sha256"]):
+        out.append("sha256 must be 64 hex characters")
+    out.extend("%s must be a string or null" % k for k in _UNCERTIFIED_OPTIONAL
+               if not (rec.get(k) is None or isinstance(rec.get(k), str)))
+    return out
+
+
 def _coerce(v):
     """Compare provenance values by their string form (env values are strings, but a
     source plan may carry an int run id/attempt); returns "" for a None/blank value."""
@@ -696,6 +717,7 @@ def _fail_closed(errors, plan=None, unexpected=None, current_run_attempt=None):
         "counts": _zero_counts(len(unexpected)),
         "legs": [],
         "coverage_gaps": [],
+        "uncertified_runtime_packages": [],
         "historical_results": [],
         "unexpected_results": _sorted_unexpected(unexpected),
     }
@@ -766,6 +788,15 @@ def build_cert_result(plan, summaries, current_run_attempt):
         outer.append("plan release must be an object")
     if not isinstance(plan.get("coverage_gaps"), list):
         outer.append("plan coverage_gaps must be a list")
+    # Absent (an older plan) means none; present, it must be a list of well-formed records, so a
+    # malformed record fails closed instead of silently disappearing.
+    unc = plan.get("uncertified_runtime_packages", [])
+    if not isinstance(unc, list):
+        outer.append("plan uncertified_runtime_packages must be a list")
+    else:
+        outer.extend("plan uncertified_runtime_packages[%d].%s" % (i, p) if isinstance(r, dict)
+                     else "plan uncertified_runtime_packages[%d] %s" % (i, p)
+                     for i, r in enumerate(unc) for p in uncertified_record_problems(r))
     # A resolved plan must carry an empty errors list; a resolved plan bearing errors
     # is internally contradictory and must fail closed.
     plan_errs = plan.get("errors")
@@ -939,6 +970,8 @@ def build_cert_result(plan, summaries, current_run_attempt):
         "counts": _counts(legs, n_expected, plan_gaps, 0),
         "legs": legs,
         "coverage_gaps": copy.deepcopy(plan_gaps),
+        # Noted for the reader only: never a gap and never counted against coverage.
+        "uncertified_runtime_packages": copy.deepcopy(plan.get("uncertified_runtime_packages", [])),
         "historical_results": _sorted_historical(historical),
         "unexpected_results": [],
     }

@@ -86,7 +86,9 @@ else:
     _pr = _ilu.module_from_spec(_pr_spec)
     _sys.modules["pep_request"] = _pr
     _pr_spec.loader.exec_module(_pr)
-COMPONENT_PACKAGES = _pr.COMPONENT_PACKAGES      # {logical_component: (accepted physical package, ...)}
+COMPONENT_PACKAGES = _pr.COMPONENT_PACKAGES      # {flat logical_component: (accepted physical package, ...)}
+COMPONENT_POLICY = _pr.COMPONENT_POLICY          # {logical_component: policy entry}, incl. PG-coupled
+_pp = _pr._pp                                    # the shared package-matching rules (same instance)
 VALID_CHANNELS = _pr.VALID_CHANNELS              # ("release", "staging", "daily")
 
 # Same reuse boundary for pep_verify: its assert_safe_version IS the PEP contract for a pinnable
@@ -161,6 +163,8 @@ GAP_NO_RUNTIME_TARGET = "no_runtime_target"         # built, but no allowed runt
 GAP_TARGET_INELIGIBLE = "target_ineligible"
 # An allowed runtime package the cert-plan rejected for its evidence; its exclusion reasons are the detail.
 GAP_MEMBER_REJECTED = "member_rejected"
+# A PG-coupled package that does not belong to its target's family, PG major or series.
+GAP_PACKAGE_POLICY_MISMATCH = "package_policy_mismatch"
 
 # cert-plan/1 member exclusions that are deliberate policy, not evidence defects: never gaps.
 _POLICY_EXCLUSIONS = frozenset({"non_runtime", "package_not_allowed"})
@@ -363,7 +367,7 @@ def enabled_platforms_from_catalog(catalog):
 # --------------------------------------------------------------------------- #
 # per-target reconciliation
 # --------------------------------------------------------------------------- #
-def _validate_eligible_target(target, release, component_packages):
+def _validate_eligible_target(target, release, component_packages, component_policy=None):
     """Validate the fields THIS module actually consumes from an eligible target, returning
     ``(gap_reason_or_None, detail_or_None)``. A malformed shape yields a coverage gap (never a
     raised exception, never a partially-null matrix entry). Family/arch/OS/PG capability are
@@ -376,6 +380,21 @@ def _validate_eligible_target(target, release, component_packages):
     pkg_name = target.get("physical_package")
     if not _nonblank_str(pkg_name):
         return GAP_MALFORMED_TARGET, "physical_package is blank"
+
+    # Backstop for a PG-coupled component: the SAME shared rule the cert-plan and normalize_request
+    # apply, re-checked against THIS target's family, build PG major and the release version, so a
+    # package for another family, PG major or series can never become an invocation.
+    entry = (component_policy or {}).get(lc_release)
+    if _pp.is_coupled(entry):
+        if target.get("pg_coupled") is not True:
+            return GAP_PACKAGE_POLICY_MISMATCH, "PG-coupled component on a target without PG coupling"
+        why = _pp.classify(entry, pkg_name, target.get("family"), target.get("build_pg_major"),
+                           release.get("intended_version"))
+        if why is not None:
+            return GAP_PACKAGE_POLICY_MISMATCH, "%s: %r for %s PG%s version %r" % (
+                why, pkg_name, target.get("family"), target.get("build_pg_major"),
+                release.get("intended_version"))
+        component_packages = None             # the coupled rule replaced the flat-name check
 
     # Reuse the authoritative PEP component<->package registry: an unknown logical component or a
     # physical package not accepted for it is a CAPABILITY gap (see module notes), never an
@@ -599,26 +618,48 @@ def _no_target_gap(cell):
                      ", ".join(reasons) or "no inspected packages")
 
 
+def _member_identity(m):
+    return tuple(m.get(k) if _nonblank_str(m.get(k)) else None
+                 for k in ("package_name", "artifact_member_path", "native_arch", "sha256"))
+
+
 def _rejected_member_gaps(cell):
     """Member-scope gaps for a cell that DID yield a target: one per inspected FILE of an allowed
     runtime package that the cert-plan rejected for its evidence. Policy exclusions are intentional
     and never gaps. The cert-plan keeps one member record per receipt file (receipts reject duplicate
     paths), so each rejected record is its own gap and is never merged by metadata, which distinct
     files can share. A valid target certifies only its own file, so a rejected file sharing its
-    package name is still a gap. The detail names the file's artifact path, native arch and checksum."""
+    package name is still a gap. The detail names the file's artifact path, native arch and checksum.
+    A PG-coupled package for the wrong family, PG major or series is an ordinary rejected member, so
+    it stays visible beside a valid target. A runtime companion whose ONLY exclusion is the policy's
+    ``runtime_not_certified`` is not a gap: it is listed by ``_uncertified_runtime_packages``."""
     gaps = []
     for m in _members(cell):
         rs = _exclusions(m)
-        if not rs or _POLICY_EXCLUSIONS.intersection(rs):
+        if not rs or _POLICY_EXCLUSIONS.intersection(rs) or rs == [_pp.R_UNCERTIFIED]:
             continue
-        name, path, native, sha = (m.get(k) if _nonblank_str(m.get(k)) else None
-                                   for k in ("package_name", "artifact_member_path", "native_arch", "sha256"))
+        name, path, native, sha = _member_identity(m)
         detail = ",".join(rs)
         for label, value in (("path", path), ("native_arch", native), ("sha256", sha and sha[:12])):
             if value:
                 detail += "; %s=%s" % (label, value)
         gaps.append(_cell_gap(cell, GAP_SCOPE_MEMBER, GAP_MEMBER_REJECTED, detail, physical_package=name))
     return gaps          # ordered by the plan-wide gap sort; each detail carries its unique path
+
+
+def _uncertified_runtime_packages(cell, reason):
+    """The runtime companions in a cell that the component's policy names as NOT certified (e.g.
+    spock's RPM -llvmjit), with the policy's reason. Reported alongside the result -- never a
+    coverage gap and never silently dropped."""
+    out = []
+    for m in _members(cell):
+        if _exclusions(m) == [_pp.R_UNCERTIFIED]:
+            name, path, native, sha = _member_identity(m)
+            out.append({"cell_id": cell.get("cell_id"), "family": cell.get("family"),
+                        "os": cell.get("os"), "arch": cell.get("normalized_arch"),
+                        "build_pg_major": cell.get("build_pg_major"), "physical_package": name,
+                        "path": path, "sha256": sha, "reason": reason})
+    return out
 
 
 def _cells_structure_errors(cert_plan):
@@ -665,8 +706,9 @@ def _capture_evidence_errors(i, cell):
 def _account_cells(cert_plan, execution_mode):
     """Split every planned cell into runnable targets and coverage gaps (never mutates input).
 
-    Returns ``(runnable, gaps, n_selected)``. Each runnable target is tagged with its owning
-    ``_cell_id``. A target runs when its STRICT ``eligibility == 'eligible'`` (certifiable; either
+    Returns ``(runnable, gaps, n_selected, uncertified)``; ``uncertified`` lists, from every cell,
+    the runtime companions the policy names as not certified (reported, never gaps). Each runnable
+    target is tagged with its owning ``_cell_id``. A target runs when its STRICT ``eligibility == 'eligible'`` (certifiable; either
     mode). In ``preview`` mode ONLY, a target also runs when its separate additive
     ``preview_eligibility == 'eligible'`` (a simulated, built + identity-confirmed,
     truthfully-unpublished dry-run target); a non-runnable preview target reports that preview
@@ -674,6 +716,11 @@ def _account_cells(cert_plan, execution_mode):
     already verified the stamped mode and the cell structure."""
     preview = (execution_mode == "preview")
     reason_key = "preview_eligibility_reason" if preview else "eligibility_reason"
+    policy_doc = cert_plan.get("component_policy") if isinstance(cert_plan.get("component_policy"), dict) else {}
+    uncertified_reason = policy_doc.get("uncertified_reason")
+    uncertified = []
+    for cell in cert_plan["cells"]:
+        uncertified.extend(_uncertified_runtime_packages(cell, uncertified_reason))
     runnable, gaps, n_selected = [], [], 0
     for cell in cert_plan["cells"]:
         targets = cell["targets"]
@@ -690,20 +737,24 @@ def _account_cells(cert_plan, execution_mode):
                 detail = t.get(reason_key)
                 gaps.append(_gap(tagged, GAP_TARGET_INELIGIBLE, detail if _nonblank_str(detail) else None))
         gaps.extend(_rejected_member_gaps(cell))
-    return runnable, gaps, n_selected
+    return runnable, gaps, n_selected, uncertified
 
 
 def build_invocation_plan(cert_plan, exec_catalog, enabled_platforms, *,
-                          component_packages=None, valid_channels=None, execution_mode="full"):
+                          component_packages=None, valid_channels=None, execution_mode="full",
+                          component_policy=None):
     """Reduce a resolved ``cert-plan/1`` + centralized execution data into a deterministic
     ``pep-invocation-plan/1`` dict. Never raises for JSON-compatible input; fail-closed shapes
     yield ``plan_resolved == false`` with ``errors`` and an EMPTY matrix.
 
     ``enabled_platforms`` is ``{(family, arch, catalog_os): alias}`` for currently-enabled containers
-    (see ``enabled_platforms_from_catalog``). ``component_packages`` / ``valid_channels`` default to
-    the authoritative ``pep_request`` contract; tests may inject a synthetic registry."""
+    (see ``enabled_platforms_from_catalog``). ``component_packages`` / ``component_policy`` /
+    ``valid_channels`` default to the authoritative ``pep_request`` contract; tests may inject a
+    synthetic registry."""
     if component_packages is None:
         component_packages = COMPONENT_PACKAGES
+    if component_policy is None:
+        component_policy = COMPONENT_POLICY
     if valid_channels is None:
         valid_channels = VALID_CHANNELS
 
@@ -762,7 +813,7 @@ def build_invocation_plan(cert_plan, exec_catalog, enabled_platforms, *,
                            supported_pgs=supported_pgs, execution_mode=execution_mode)
 
     invocations = []
-    runnable, gaps, selected_n = _account_cells(cert_plan, execution_mode)
+    runnable, gaps, selected_n, uncertified = _account_cells(cert_plan, execution_mode)
     covered_n = 0
     for target in runnable:
         family = target.get("family")
@@ -775,7 +826,8 @@ def build_invocation_plan(cert_plan, exec_catalog, enabled_platforms, *,
             gaps.append(_gap(target, GAP_UNSUPPORTED_ARCH, detail=str(arch)))
             continue
         # Identity / component / package-object integrity (fail-closed per-target, never raising).
-        val_gap, val_detail = _validate_eligible_target(target, release, component_packages)
+        val_gap, val_detail = _validate_eligible_target(target, release, component_packages,
+                                                        component_policy)
         if val_gap is not None:
             gaps.append(_gap(target, val_gap, detail=val_detail))
             continue
@@ -848,6 +900,10 @@ def build_invocation_plan(cert_plan, exec_catalog, enabled_platforms, *,
         "supported_pg_majors": list(supported_pgs),
         "matrix": {"include": invocations},
         "coverage_gaps": gaps,
+        # Runtime companions the policy names as not certified (never gaps, never counted).
+        "uncertified_runtime_packages": sorted(
+            uncertified, key=lambda u: (str(u.get("cell_id") or ""), str(u.get("physical_package") or ""),
+                                        str(u.get("path") or ""))),
         "counts": {
             "planned_cells": len(cert_plan["cells"]),
             "selected_targets": selected_n,
@@ -879,6 +935,7 @@ def _unresolved(errors, release=None, provenance=None, supported_pgs=None, execu
         "supported_pg_majors": list(supported_pgs or []),
         "matrix": {"include": []},          # NEVER a matrix from a fail-closed plan
         "coverage_gaps": [],
+        "uncertified_runtime_packages": [],
         "counts": {"planned_cells": 0, "selected_targets": 0, "eligible_targets": 0,
                    "covered_targets": 0, "coverage_gaps": 0,
                    "gaps_by_scope": {GAP_SCOPE_CELL: 0, GAP_SCOPE_TARGET: 0, GAP_SCOPE_MEMBER: 0},

@@ -1,0 +1,383 @@
+name: PEP 0d31b9c Spock PG16/PG18 existing-package validation (temporary)
+# Temporary, branch-scoped caller; never merged. Existing-package integration/regression
+# tests, NOT receipt-backed release certification: published staging Spock 5.0.13 packages are
+# installed by exact version through pep-integration.yml at v1_STABLE commit 0d31b9c. Observe
+# mode keeps failing product tests green, so `assert` checks the uploaded evidence, not job colours.
+on:
+  push:
+    branches: [validate/pep-0d31b9c-spock-pg16-pg18]
+permissions: {}
+
+jobs:
+  spock-oel9-pg16:
+    name: Spock · oel9-amd64 · PG16 · pgedge-spock50_16 5.0.13-1.el9 (staging)
+    permissions: {contents: read}
+    uses: pgEdge/pgedge-pep-test/.github/workflows/pep-integration.yml@0d31b9cd666a996792ccf1bbec5275d0bfed9bab
+    with:
+      component: spock
+      package_name: pgedge-spock50_16
+      channel: staging
+      expected_version: "5.0.13"
+      expected_buildnum: "1"
+      expected_rpm: "5.0.13-1.el9"
+      container_alias: oel9-amd64
+      pg_major: "16"
+      family: rpm
+      arch: amd64
+      scenario: certification
+      mode: observe
+      execution_mode: full
+      invocation_id: val0d31b9c-spock-oel9-amd64-pg16
+      pep_implementation_ref: 0d31b9cd666a996792ccf1bbec5275d0bfed9bab
+
+  spock-oel9-pg18:
+    name: Spock · oel9-amd64 · PG18 · pgedge-spock50_18 5.0.13-1.el9 (staging)
+    permissions: {contents: read}
+    uses: pgEdge/pgedge-pep-test/.github/workflows/pep-integration.yml@0d31b9cd666a996792ccf1bbec5275d0bfed9bab
+    with:
+      component: spock
+      package_name: pgedge-spock50_18
+      channel: staging
+      expected_version: "5.0.13"
+      expected_buildnum: "1"
+      expected_rpm: "5.0.13-1.el9"
+      container_alias: oel9-amd64
+      pg_major: "18"
+      family: rpm
+      arch: amd64
+      scenario: certification
+      mode: observe
+      execution_mode: full
+      invocation_id: val0d31b9c-spock-oel9-amd64-pg18
+      pep_implementation_ref: 0d31b9cd666a996792ccf1bbec5275d0bfed9bab
+
+  spock-debian12-pg16:
+    name: Spock · debian12-amd64 · PG16 · pgedge-postgresql-16-spock50 5.0.13-1.bookworm (staging)
+    permissions: {contents: read}
+    uses: pgEdge/pgedge-pep-test/.github/workflows/pep-integration.yml@0d31b9cd666a996792ccf1bbec5275d0bfed9bab
+    with:
+      component: spock
+      package_name: pgedge-postgresql-16-spock50
+      channel: staging
+      expected_version: "5.0.13"
+      expected_buildnum: "1"
+      expected_deb: "5.0.13-1.bookworm"
+      container_alias: debian12-amd64   # certification counterpart (pipeline/pep_exec_catalog.json)
+      pg_major: "16"
+      family: deb
+      arch: amd64
+      scenario: certification
+      mode: observe
+      execution_mode: full
+      invocation_id: val0d31b9c-spock-debian12-amd64-pg16
+      pep_implementation_ref: 0d31b9cd666a996792ccf1bbec5275d0bfed9bab
+
+  spock-debian12-pg18:
+    name: Spock · debian12-amd64 · PG18 · pgedge-postgresql-18-spock50 5.0.13-1.bookworm (staging)
+    permissions: {contents: read}
+    uses: pgEdge/pgedge-pep-test/.github/workflows/pep-integration.yml@0d31b9cd666a996792ccf1bbec5275d0bfed9bab
+    with:
+      component: spock
+      package_name: pgedge-postgresql-18-spock50
+      channel: staging
+      expected_version: "5.0.13"
+      expected_buildnum: "1"
+      expected_deb: "5.0.13-1.bookworm"
+      container_alias: debian12-amd64   # certification counterpart (pipeline/pep_exec_catalog.json)
+      pg_major: "18"
+      family: deb
+      arch: amd64
+      scenario: certification
+      mode: observe
+      execution_mode: full
+      invocation_id: val0d31b9c-spock-debian12-amd64-pg18
+      pep_implementation_ref: 0d31b9cd666a996792ccf1bbec5275d0bfed9bab
+
+  assert:
+    name: assert validation evidence (4 cases)
+    needs: [spock-oel9-pg16, spock-oel9-pg18, spock-debian12-pg16, spock-debian12-pg18]
+    if: ${{ always() }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      actions: read        # run metadata (referenced_workflows), this attempt's jobs, called-job logs
+    env:
+      FROZEN: 0d31b9cd666a996792ccf1bbec5275d0bfed9bab
+      # Staging metadata (primary.xml / Packages) and an independent download agree.
+      SPOCK_RPM16_SHA256: 94d3647d87068034815077da9090fa6d41a17d3cde13b07d56b577f5d2b4b530
+      SPOCK_RPM18_SHA256: 454a27188568a38ea735230dff642ade0431e0dbbfbade194b4cfe0d3a74108b
+      SPOCK_DEB16_SHA256: 11ec03b12d0722776679b896f301a8b5a145159fba4d7515e071d3e237f9a5ca
+      SPOCK_DEB18_SHA256: 3a336ee003986115ef252aca7ac8fb8a7a687b6e03758059631356707af85fb3
+      NEEDS_JSON: ${{ toJSON(needs) }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Download this run's four summaries (current attempt only)
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131  # v7.0.0
+        with:
+          pattern: pep-summary-*-val0d31b9c-*-r${{ github.run_number }}-a${{ github.run_attempt }}
+          path: summaries
+      - name: Check every case from evidence, not job colour
+        run: |
+          python3 - <<'PY'
+          import http.client, json, os, re, subprocess, sys, time, urllib.error, urllib.request
+          import xml.etree.ElementTree as ET
+          from pathlib import Path
+          from urllib.parse import urlsplit
+
+          E = os.environ
+          FROZEN, REPO = E["FROZEN"], E["GITHUB_REPOSITORY"]
+          RUN_ID, ATT, RUN_NO = E["GITHUB_RUN_ID"], E["GITHUB_RUN_ATTEMPT"], E["GITHUB_RUN_NUMBER"]
+          NEEDS = json.loads(E["NEEDS_JSON"])
+          ROOT = Path("summaries")
+          SUFFIX = " / full test (install and product tests)"
+          IDENTITY = {"l2a": "proven", "l2b": "not_attempted", "l1": "proven"}
+          SUMMARY_KEYS = {"invocation_id", "execution_status", "test_verdict", "enforcement_mode",
+                          "identity_evidence", "counts", "provenance", "installed_package_sha256"}
+          TESTS = {"spock": 15, "rag": 12}
+          SKIPS = {
+              "spock": {"test_verify_spock_pkg_version":
+                        "integration mode: test_spock_identity checks the exact requested version"},
+              "rag": {"test_rag_component_upgrade": "Skipping upgrade tests because UPGRADE=false in env",
+                      "test_rag_component_version": "integration mode: superseded by test_rag_identity",
+                      "test_rag_binary_version": "integration mode: superseded by test_rag_identity"},
+          }
+          CONTAINER = {"oel9-amd64": "auto-oel9-amd-rhel", "debian12-amd64": "auto-debian12-amd-deb"}
+          LIBDIR = {"rpm": "/usr/pgsql-%s/lib", "deb": "/usr/lib/postgresql/%s/lib"}
+          PREREQS = {"rpm": ["pgedge-postgresql%s-server", "pgedge-postgresql%s-contrib"],
+                     "deb": ["pgedge-postgresql-%s"]}
+
+          def case(job, label, comp, pkg, ch, alias, fam, ver, bn, tok, digest_env, pg):
+              return dict(job=job, label=label, comp=comp, pkg=pkg, ch=ch, alias=alias, fam=fam,
+                          ver=ver, bn=bn, tok=tok, digest=E[digest_env], pg=pg)
+
+          CASES = [
+              case("spock-oel9-pg16", "Spock", "spock", "pgedge-spock50_16", "staging", "oel9-amd64",
+                   "rpm", "5.0.13", "1", "5.0.13-1.el9", "SPOCK_RPM16_SHA256", "16"),
+              case("spock-oel9-pg18", "Spock", "spock", "pgedge-spock50_18", "staging", "oel9-amd64",
+                   "rpm", "5.0.13", "1", "5.0.13-1.el9", "SPOCK_RPM18_SHA256", "18"),
+              case("spock-debian12-pg16", "Spock", "spock", "pgedge-postgresql-16-spock50", "staging",
+                   "debian12-amd64", "deb", "5.0.13", "1", "5.0.13-1.bookworm", "SPOCK_DEB16_SHA256", "16"),
+              case("spock-debian12-pg18", "Spock", "spock", "pgedge-postgresql-18-spock50", "staging",
+                   "debian12-amd64", "deb", "5.0.13", "1", "5.0.13-1.bookworm", "SPOCK_DEB18_SHA256", "18"),
+          ]
+
+          problems, rows, details = [], [], {}
+
+          def check(ok, what):
+              if not ok:
+                  problems.append(what)
+              return ok
+
+          def gh(path, tries=1):
+              for i in range(tries):
+                  r = subprocess.run(["gh", "api", path], capture_output=True, text=True)
+                  if r.returncode == 0:
+                      return r.stdout
+                  if i + 1 < tries:
+                      time.sleep(15)
+              raise RuntimeError("gh api %s failed: %s" % (path, r.stderr.strip()[:300]))
+
+          # Job logs are read as bytes over HTTPS, not through gh: newer gh refuses to print text that
+          # contains the logs' colour codes. The token is an unredirected header, so it reaches
+          # api.github.com only, never the signed log URL; redirects must stay on HTTPS. Terminal
+          # control sequences are stripped before the text is searched or recorded.
+          CONTROL = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)|\x1b[@-_]|[\x00-\x08\x0b-\x1f\x7f-\x9f]")
+
+          class HttpsOnlyRedirect(urllib.request.HTTPRedirectHandler):
+              def redirect_request(self, req, fp, code, msg, headers, newurl):
+                  if urlsplit(newurl).scheme != "https":
+                      raise urllib.error.URLError("refused non-HTTPS redirect")
+                  return super().redirect_request(req, fp, code, msg, headers, newurl)
+
+          def job_log(jid, tries=4):
+              req = urllib.request.Request("https://api.github.com/repos/%s/actions/jobs/%s/logs" % (REPO, jid))
+              req.add_unredirected_header("Authorization", "Bearer " + E.get("GH_TOKEN", ""))
+              for i in range(tries):
+                  try:
+                      with urllib.request.build_opener(HttpsOnlyRedirect).open(req, timeout=120) as r:
+                          return CONTROL.sub("", r.read().decode("utf-8", "replace"))
+                  except (OSError, ValueError, http.client.HTTPException) as e:
+                      err = e
+                  if i + 1 < tries:
+                      time.sleep(15)
+              raise RuntimeError("job %s log: %s" % (jid, err))
+
+          def pinned_token(c):
+              # expected_buildnum is only regex-checked by PEP; tie it to the pinned token here.
+              if c["fam"] == "rpm":
+                  return "%s-%s.el9" % (c["ver"], c["bn"])
+              pre, _, n = c["bn"].rpartition("_")
+              return ("%s~%s-%s.bookworm" % (c["ver"], pre, n)) if pre else ("%s-%s.bookworm" % (c["ver"], c["bn"]))
+
+          # Run level: the reusable workflow ran at the frozen revision, on this run and attempt.
+          try:
+              run = json.loads(gh("repos/%s/actions/runs/%s" % (REPO, RUN_ID), 3))
+              refs = run.get("referenced_workflows") or []
+              check([(r.get("path"), r.get("sha")) for r in refs] ==
+                    [("pgEdge/pgedge-pep-test/.github/workflows/pep-integration.yml@" + FROZEN, FROZEN)],
+                    "run: referenced_workflows %r" % refs)
+              check((run.get("head_sha"), str(run.get("run_attempt"))) == (E["GITHUB_SHA"], ATT),
+                    "run: head_sha/run_attempt %r" % ((run.get("head_sha"), run.get("run_attempt")),))
+              jobs = json.loads(gh("repos/%s/actions/runs/%s/attempts/%s/jobs?per_page=100" % (REPO, RUN_ID, ATT), 3))["jobs"]
+          except (RuntimeError, ValueError) as e:
+              problems.append("run: metadata unavailable: %s" % e)
+              jobs = []
+
+          names = {c["job"]: "pep-summary-%s-%s-amd64-pg%s-%s-%s-certification-full-val0d31b9c-%s-%s-pg%s-r%s-a%s"
+                   % (c["comp"], c["fam"], c["pg"], c["ch"], c["alias"], c["comp"], c["alias"], c["pg"], RUN_NO, ATT) for c in CASES}
+          found = sorted(p.name for p in ROOT.iterdir()) if ROOT.is_dir() else []
+          check(found == sorted(names.values()), "artifacts %r != expected %r" % (found, sorted(names.values())))
+
+          for c in CASES:
+              job, comp, fam, pkg, tok, digest, pg = c["job"], c["comp"], c["fam"], c["pkg"], c["tok"], c["digest"], c["pg"]
+              tag = job + ": "
+              iid = "val0d31b9c-%s-%s-pg%s" % (comp, c["alias"], pg)
+              target = {"package_name": pkg, "family": fam, "arch": "amd64", "pg_major": pg,
+                        "container_alias": c["alias"], "channel": c["ch"]}
+              run_token = "%s-%s" % (RUN_ID, ATT)
+              d = ROOT / names[job]
+              det = details[job] = {"artifact": names[job], "expected_sha256": digest}
+              check(re.fullmatch(r"[0-9a-f]{64}", digest) is not None, tag + "expected digest malformed")
+              check(pinned_token(c) == tok, tag + "requested buildnum %r does not give %r" % (c["bn"], tok))
+              n = NEEDS.get(job) or {}
+              out = n.get("outputs") or {}
+              check(n.get("result") == "success", tag + "job result %r" % n.get("result"))
+              check(out.get("summary_artifact") == names[job], tag + "summary_artifact %r" % out.get("summary_artifact"))
+
+              def load(f):
+                  return json.loads((d / f).read_text())
+              try:
+                  s, inst, obs, ide, prov, rc, cur = (load(f) for f in (
+                      "summary.json", "install-evidence.json", "observed-identity.json", "identity-evidence.json",
+                      "provenance.json", "resolved-config.json", "current-run.json"))
+              except (OSError, ValueError) as e:
+                  problems.append(tag + "evidence missing/unreadable: %s" % e)
+                  continue
+              want_prov = {"caller_repo": REPO, "caller_sha": E["GITHUB_SHA"], "caller_ref": E["GITHUB_REF"],
+                           "caller_run_id": RUN_ID, "caller_run_attempt": ATT,
+                           "pep_requested_ref": FROZEN, "pep_resolved_sha": FROZEN}
+              want_counts = {"tests": TESTS[comp], "failures": 0, "errors": 0, "skipped": len(SKIPS[comp])}
+              check(set(s) == SUMMARY_KEYS, tag + "summary keys %r (reason/malformed_reports must be absent)" % sorted(s))
+              check(s.get("invocation_id") == iid, tag + "invocation_id %r" % s.get("invocation_id"))
+              check((s.get("execution_status"), s.get("test_verdict"), s.get("enforcement_mode")) == ("completed", "pass", "observe"),
+                    tag + "status %r" % ((s.get("execution_status"), s.get("test_verdict"), s.get("enforcement_mode")),))
+              check((out.get("execution_status"), out.get("test_verdict")) == (s.get("execution_status"), s.get("test_verdict")),
+                    tag + "job outputs disagree with summary.json")
+              check(s.get("identity_evidence") == IDENTITY and ide == IDENTITY, tag + "identity %r / %r" % (s.get("identity_evidence"), ide))
+              check(s.get("counts") == want_counts, tag + "counts %r != %r" % (s.get("counts"), want_counts))
+              check(s.get("installed_package_sha256") == digest, tag + "installed sha256 %r != expected %r" % (s.get("installed_package_sha256"), digest))
+              check(prov == want_prov and s.get("provenance") == want_prov, tag + "provenance %r / %r" % (prov, s.get("provenance")))
+              check(inst == {"run_token": run_token, "installed": True, "install_kind": "pinned", "install_token": tok,
+                             "installed_sha256": digest, "target": target, "expected_version": c["ver"]},
+                    tag + "install evidence %r" % inst)
+              ob = obs.get("observed") or {}
+              check(obs.get("run_token") == run_token and obs.get("target") == target
+                    and ob.get("package_manager_version") == tok and ob.get("component_version") == tok
+                    and (comp != "spock" or ob.get("binary_version") is None), tag + "observed identity %r" % obs)
+              check(rc.get("repo") == {"value": c["ch"], "source": "caller"}
+                    and rc.get("scenario") == {"value": "certification", "source": "caller"}
+                    and (rc.get("upgrade") or {}).get("value") == "false", tag + "resolved-config %r" % rc)
+              det.update(installed_sha256=s.get("installed_package_sha256"), counts=s.get("counts"),
+                         observed=ob, invocation_id=s.get("invocation_id"))
+
+              reports = sorted({re.sub(r"^.*?test-logs/", "", r) for r in (cur.get("reports") or [])})
+              if not check(len({Path(r).name for r in reports}) == 1 and Path(reports[0]).name == "report-%s-%s-%s.xml" % (fam, comp, pg),
+                           tag + "reports %r" % cur.get("reports")):
+                  continue
+              try:
+                  xml_root = ET.parse(d / reports[0]).getroot()
+              except (OSError, ET.ParseError) as e:
+                  problems.append(tag + "JUnit unreadable: %s" % e)
+                  continue
+              cases, skipped = [], {}
+              for tc in xml_root.iter("testcase"):
+                  nm = tc.get("name") or ""
+                  base, _, param = nm.partition("[")
+                  st = next((k for k in ("failure", "error", "skipped") if tc.find(k) is not None), "passed")
+                  cases.append((base, st))
+                  check(tc.get("classname") == "component-test.test_pep_" + comp, tag + "classname %r" % tc.get("classname"))
+                  check(param in (CONTAINER[c["alias"]] + "]", "%s-%s]" % (CONTAINER[c["alias"]], pkg)),
+                        tag + "%s ran on %r" % (base, param))
+                  if st == "skipped":
+                      skipped[base] = tc.find("skipped").get("message")
+              bad = [x for x in cases if x[1] in ("failure", "error")]
+              passed = [b for b, st in cases if st == "passed"]
+              check(not bad, tag + "failing cases %r" % bad)
+              check(skipped == SKIPS[comp], tag + "skips %r != %r" % (skipped, SKIPS[comp]))
+              check(len(cases) == TESTS[comp] and len(passed) == TESTS[comp] - len(SKIPS[comp]) > 0, tag + "cases %r" % cases)
+              det.update(passed=len(passed), skipped=skipped, testcases=cases)
+
+              if comp == "spock":
+                  try:
+                      pv = load("prerequisite-versions.json")
+                  except (OSError, ValueError) as e:
+                      pv = {}
+                      problems.append(tag + "prerequisite-versions.json: %s" % e)
+                  iv = pv.get("installed_versions") or {}
+                  prereqs = [p % pg for p in PREREQS[fam]]
+                  pre_vers = {iv.get(k) for k in prereqs}
+                  pre = next(iter(pre_vers)) if len(pre_vers) == 1 else None
+                  mm = re.fullmatch(r"%s\.(\d+)-\S+" % pg, pre or "")
+                  check(pv.get("channel") == "staging" and pv.get("pg_major") == pg and pv.get("requested_package") == pkg
+                        and set(iv) == set(prereqs) | {pkg} and iv.get(pkg) == tok and mm is not None,
+                        tag + "prerequisites %r" % pv)
+                  want_num = "%s00%02d" % (pg, int(mm.group(1))) if mm else None
+                  prefix = "%s · %s · PG%s · %s " % (c["label"], c["alias"], pg, pkg)
+                  jid = [j["id"] for j in jobs if j["name"].startswith(prefix) and j["name"].endswith(SUFFIX)]
+                  log = ""
+                  if check(len(jid) == 1 and all(j["conclusion"] == "success" for j in jobs if j["id"] in jid), tag + "called job %r" % jid):
+                      try:
+                          log = job_log(jid[0])
+                      except RuntimeError as e:
+                          problems.append(tag + "job log unavailable: %s" % e)
+                  esc = re.escape(pkg)
+                  markers = {
+                      "prereq_installed": r"installed %s = (%s\.\d+-\S+)" % (re.escape(prereqs[0]), pg),
+                      "spock_installed": r"installed %s = (%s)\s" % (esc, re.escape(tok)),
+                      "single_spock_pkg": r"Only %s is installed among spock packages" % esc,
+                      "library_owner": r"(%s/spock\.so) belongs to (%s)\s" % (re.escape(LIBDIR[fam] % pg), esc),
+                      "n1": r"n1: PostgreSQL (\d+), spock (\S+)",
+                      "n2": r"n2: PostgreSQL (\d+), spock (\S+)",
+                      "sub_status": r"spock\.sub_show_status\(\) indicates subscription is replicating",
+                      "n1_rows": r"n1 has rows from both n1 and n2",
+                      "n2_rows": r"n2 has rows from both n1 and n2",
+                      "bidirectional": r"Bidirectional replication verified between n1 and n2",
+                  }
+                  seen = {}
+                  for key, pat in markers.items():
+                      m = re.search(pat, log)
+                      seen[key] = m.group(0).strip() if m else None
+                      check(m is not None, tag + "job log lacks %s (%r)" % (key, pat))
+                      if m and key in ("n1", "n2"):
+                          check(m.group(1) == want_num and m.group(2) == c["ver"],
+                                tag + "%s runs PostgreSQL %s spock %s, expected %s / %s" % (key, m.group(1), m.group(2), want_num, c["ver"]))
+                      if m and key == "prereq_installed":
+                          check(m.group(1) == pre, tag + "log prerequisite %s != evidence %s" % (m.group(1), pre))
+                  det.update(prerequisites=iv, log_markers=seen, called_job_id=jid[0] if jid else None)
+
+              rows.append("| %s | %s/%s | %d passed, %d skipped, 0 failed | `%s` | %s |" % (
+                  job, s.get("execution_status"), s.get("test_verdict"), len(passed), len(skipped),
+                  s.get("installed_package_sha256"), "match" if s.get("installed_package_sha256") == digest else "MISMATCH"))
+
+          Path("validation-result.json").write_text(json.dumps(
+              {"frozen_pep": FROZEN, "run_id": RUN_ID, "run_attempt": ATT, "caller_sha": E["GITHUB_SHA"],
+               "verdict": "fail" if problems else "pass", "problems": problems, "cases": details}, indent=1, sort_keys=True))
+          with open(E["GITHUB_STEP_SUMMARY"], "a") as f:
+              f.write("### PEP 0d31b9c Spock PG16/PG18 existing-package validation\n\n"
+                      "| case | status | cases | installed sha256 | vs expected |\n|---|---|---|---|---|\n"
+                      + "\n".join(rows) + "\n\n"
+                      + ("**FAILED**\n\n" + "\n".join("- " + p for p in problems) if problems
+                         else "All four cases verified from evidence.\n"))
+          print("\n".join(rows))
+          if problems:
+              print("\n".join(problems), file=sys.stderr)
+              sys.exit(1)
+          print("All four cases verified from evidence.")
+          PY
+      - name: Upload the assertion result
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
+        with:
+          name: pep-validation-0d31b9c-spock-result-r${{ github.run_number }}-a${{ github.run_attempt }}
+          path: validation-result.json
+          if-no-files-found: warn

@@ -1310,3 +1310,93 @@ def test_oversized_catalog_pg_major_is_rejected_never_raises():
 def test_pg_coupled_oversized_build_major_is_a_gap_never_raises():
     plan = build([cell("c", [target("rpm", "el-9", "amd64", pg_coupled=True, build_pg_major="1" * 5000)])])
     assert gap_reasons(plan) == [P.GAP_INVALID_PG_COUPLING] and plan["matrix"]["include"] == []
+
+
+# --------------------------------------------------------------------------- #
+# GitHub's 256-job matrix limit: fail closed with an empty matrix and a reason
+# --------------------------------------------------------------------------- #
+def test_matrix_limit_is_githubs_256_jobs():
+    assert P.GITHUB_MATRIX_LIMIT == 256
+
+
+def _real_rag_cert_plan_and_sources():
+    ec = json.loads(EXEC_CATALOG_FILE.read_text())
+    enabled_platforms, err = P.load_enabled_platforms(str(CONTAINERS_FILE))
+    assert err is None and enabled_platforms
+    return cert_plan(_rag_cells_from_fixture()), ec, enabled_platforms
+
+
+def test_a_plan_exactly_at_the_limit_resolves(monkeypatch):
+    cp, ec, enabled = _real_rag_cert_plan_and_sources()
+    n = len(P.build_invocation_plan(cp, ec, enabled)["matrix"]["include"])
+    monkeypatch.setattr(P, "GITHUB_MATRIX_LIMIT", n)
+    plan = P.build_invocation_plan(cp, ec, enabled)
+    assert plan["plan_resolved"] is True and len(plan["matrix"]["include"]) == n
+
+
+def test_a_plan_one_over_the_limit_fails_closed_with_context_and_diagnostics(monkeypatch):
+    cp, ec, enabled = _real_rag_cert_plan_and_sources()
+    resolved = P.build_invocation_plan(cp, ec, enabled)
+    n = len(resolved["matrix"]["include"])
+    monkeypatch.setattr(P, "GITHUB_MATRIX_LIMIT", n - 1)
+    plan = P.build_invocation_plan(cp, ec, enabled)
+    assert plan["plan_resolved"] is False and plan["matrix"] == {"include": []}
+    assert len(plan["errors"]) == 1
+    msg = plan["errors"][0]
+    assert ("%d test runs exceed GitHub's limit of %d jobs per matrix" % (n, n - 1)) in msg
+    assert "PG majors 16,17,18" in msg and "pgedge-rag-server2" in msg
+    # The release, provenance, execution mode and PG majors stay on the unresolved plan.
+    for key in ("release", "provenance", "execution_mode", "supported_pg_majors"):
+        assert plan[key] == resolved[key], key
+
+
+def test_main_exits_1_and_writes_the_unresolved_plan_over_the_limit(tmp_path, monkeypatch):
+    monkeypatch.setattr(P, "GITHUB_MATRIX_LIMIT", 1)
+    cells = [cell("c", [target("rpm", "el-9", "amd64", cell_id="c")])]   # 3 PG majors -> 3 test runs
+    cp = tmp_path / "cert-plan.json"; cp.write_text(json.dumps(cert_plan(cells)))
+    out = tmp_path / "inv.json"
+    rc = P.main(["--cert-plan", str(cp), "--exec-catalog", str(EXEC_CATALOG_FILE),
+                 "--containers", str(CONTAINERS_FILE), "--out", str(out)])
+    doc = json.loads(out.read_text())
+    assert rc == 1 and doc["plan_resolved"] is False and doc["matrix"] == {"include": []}
+    assert "exceed GitHub's limit of 1 jobs per matrix" in doc["errors"][0]
+
+
+# --------------------------------------------------------------------------- #
+# --annotate-errors: an unresolved plan's errors as escaped workflow annotations
+# --------------------------------------------------------------------------- #
+def test_annotations_are_escaped_so_a_message_cannot_start_another_command():
+    lines = P.workflow_error_annotations(["100% over\nlimit", "a\r\n::stop-commands::x", "plain"])
+    assert lines == [
+        "::error::PEP invocation plan not resolved: 100%25 over%0Alimit",
+        "::error::PEP invocation plan not resolved: a%0D%0A::stop-commands::x",
+        "::error::PEP invocation plan not resolved: plain",
+    ]
+    assert all("\n" not in l and "\r" not in l for l in lines)
+
+
+def _main_with_annotations(tmp_path, capsys, cells, extra=()):
+    cp = tmp_path / "cert-plan.json"; cp.write_text(json.dumps(cert_plan(cells)))
+    rc = P.main(["--cert-plan", str(cp), "--exec-catalog", str(EXEC_CATALOG_FILE),
+                 "--containers", str(CONTAINERS_FILE), "--out", str(tmp_path / "inv.json"),
+                 "--annotate-errors", *extra])
+    return rc, capsys.readouterr().out
+
+
+def test_main_annotates_each_error_of_an_unresolved_plan(tmp_path, capsys, monkeypatch):
+    monkeypatch.setattr(P, "GITHUB_MATRIX_LIMIT", 1)
+    rc, out = _main_with_annotations(tmp_path, capsys, [cell("c", [target("rpm", "el-9", "amd64", cell_id="c")])])
+    assert rc == 1
+    assert out.splitlines() == ["::error::PEP invocation plan not resolved: " + e
+                                for e in json.loads((tmp_path / "inv.json").read_text())["errors"]]
+
+
+def test_main_prints_no_annotation_for_a_resolved_plan(tmp_path, capsys):
+    rc, out = _main_with_annotations(tmp_path, capsys, [cell("c", [target("rpm", "el-9", "amd64", cell_id="c")])])
+    assert rc == 0 and out == ""
+
+
+def test_annotate_errors_requires_out(tmp_path):
+    with pytest.raises(SystemExit) as e:
+        P.main(["--cert-plan", "x", "--exec-catalog", "y", "--containers", "z", "--annotate-errors"])
+    assert e.value.code == 2

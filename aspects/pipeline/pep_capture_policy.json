@@ -1,6 +1,6 @@
 {
   "schema": "pep-capture-policy/1",
-  "_note": "The SINGLE PEP-OWNED component/package policy: the one authority for which runtime package names belong to each logical component (plus optional capture-time expected-binary policy). It is consumed by ALL THREE stages so they cannot diverge: release capture resolves a component's entry here (pipeline/pep_capture_io.py), and both invocation planning and per-run request validation share ONE mapping (aspects/pipeline/pep_request.py derives COMPONENT_PACKAGES from the file; pipeline/pep_invocation_plan.py reuses that in-memory object, never a copy). Add or retire a component/package mapping HERE ONLY -- there is no separate hardcoded registry. The filename and schema (pep-capture-policy/1) are retained to avoid churn; the 'capture' in the name is historical -- the role is the shared component/package policy, not capture-only. Package order matters: the FIRST allowed_runtime_package_names entry is the canonical/active package; later entries are still-accepted predecessors. expected_binary_version is optional capture-time identity policy (\"\" = none). This file NEVER carries platform / OS / architecture / PostgreSQL policy -- that universe is owned by configuration/containers_list.json + pipeline/pep_exec_catalog.json and is formed by intersecting built cells with PEP's execution catalog. 'pgedge-capture-smoke' is the internal synthetic fixture component used by the capture smoke and the coordinator live-validation caller.",
+  "_note": "The SINGLE PEP-OWNED component/package policy: the one authority for which runtime package names belong to each logical component (plus optional capture-time expected-binary policy). It is consumed by ALL THREE stages so they cannot diverge: release capture resolves a component's entry here (pipeline/pep_capture_io.py), and both invocation planning and per-run request validation share ONE mapping (aspects/pipeline/pep_request.py loads COMPONENT_POLICY from the file; pipeline/pep_invocation_plan.py reuses that in-memory object, never a copy) and every package-name decision goes through aspects/pipeline/pep_package_policy.py. Add or retire a component/package mapping HERE ONLY -- there is no separate hardcoded registry. The filename and schema (pep-capture-policy/1) are retained to avoid churn; the 'capture' in the name is historical -- the role is the shared component/package policy, not capture-only. Package order matters: the FIRST allowed_runtime_package_names entry is the canonical/active package; later entries are still-accepted predecessors. A PG-coupled component (spock) instead declares \"pg_coupled\": true with per-family runtime_package_templates, where {pg} is the PostgreSQL major the package was BUILT for and {series} is the product series derived from the release version's major through series_by_version_major; a package of the component for the wrong family, PG major or series is rejected and stays visible. uncertified_runtime_package_templates (with a required uncertified_reason) name runtime companions the component builds but does not certify; they are reported as not certified (in the build artifacts, not installed or tested), never as coverage gaps. expected_binary_version is optional capture-time identity policy (\"\" = none). This file NEVER carries platform / OS / architecture / PostgreSQL-version policy (the {pg} placeholder only names a package; it never adds or removes a PG major) -- that universe is owned by configuration/containers_list.json + pipeline/pep_exec_catalog.json and is formed by intersecting built cells with PEP's execution catalog. 'pgedge-capture-smoke' is the internal synthetic fixture component used by the capture smoke and the coordinator live-validation caller.",
   "components": {
     "rag": {
       "allowed_runtime_package_names": ["pgedge-rag-server2", "pgedge-rag-server"],
@@ -8,6 +8,19 @@
     },
     "pgedge-capture-smoke": {
       "allowed_runtime_package_names": ["pgedge-capture-smoke"],
+      "expected_binary_version": ""
+    },
+    "spock": {
+      "pg_coupled": true,
+      "runtime_package_templates": {
+        "rpm": ["pgedge-spock{series}_{pg}"],
+        "deb": ["pgedge-postgresql-{pg}-spock{series}"]
+      },
+      "series_by_version_major": {"5": "50", "6": "60"},
+      "uncertified_runtime_package_templates": {
+        "rpm": ["pgedge-spock{series}_{pg}-llvmjit"]
+      },
+      "uncertified_reason": "RPM-only JIT bitcode companion; the Spock functional test does not install it or exercise JIT",
       "expected_binary_version": ""
     }
   }

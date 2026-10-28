@@ -55,6 +55,18 @@ else:
     _sys.modules["pep_evidence_class"] = _ev
     _ev_spec.loader.exec_module(_ev)
 
+# The shared package-matching rules (aspects/pipeline/pep_package_policy.py, stdlib only): the SAME
+# rules request validation and the invocation planner apply, loaded once the same way.
+if "pep_package_policy" in _sys.modules:
+    PP = _sys.modules["pep_package_policy"]
+else:
+    _pp_spec = _ilu.spec_from_file_location(
+        "pep_package_policy",
+        str(_Path(__file__).resolve().parents[1] / "aspects" / "pipeline" / "pep_package_policy.py"))
+    PP = _ilu.module_from_spec(_pp_spec)
+    _sys.modules["pep_package_policy"] = PP
+    _pp_spec.loader.exec_module(PP)
+
 SCHEMA = "cert-plan/1"
 
 BUILD_STATES = ("available", "incomplete", "failed", "never_ran", "ambiguous")
@@ -187,6 +199,10 @@ def _validate_envelope(inp):
         ebv = pol.get("expected_binary_version")
         if ebv is not None and not isinstance(ebv, str):
             d.append("component_policy.expected_binary_version must be a string")
+        # Any PG-coupled key (even beside a flat list, which the shared rules reject) means the
+        # whole entry must pass the same validation the policy loaders apply.
+        if any(k in pol for k in PP.COUPLED_KEYS):
+            d.extend("component_policy: %s" % e for e in PP.validate_entry(pol))
     jr = inp.get("job_records")
     if isinstance(jr, list):
         for i, r in enumerate(jr):
@@ -422,10 +438,22 @@ def _make_target(cell, member, policy, release_intent, provenance, family, pg_no
     }
 
 
+def _package_reason(policy, allowed, name, family, pg_norm, release_intent):
+    """None if ``name`` is the package the component certifies in this cell, else the exclusion
+    reason. A flat policy keeps today's check (``package_not_allowed`` off the allowlist). A
+    PG-coupled policy uses the shared rules for this cell's family, BUILD PG major and the
+    release's intended version, so a package for another family, PG major or series gets its own
+    reason (kept visible by the planner) instead of the silent ``package_not_allowed``."""
+    if PP.is_coupled(policy):
+        return PP.classify(policy, name, family, pg_norm.get("build_pg_major"),
+                           release_intent.get("intended_version"))
+    return None if name in allowed else "package_not_allowed"
+
+
 def _select_targets(cell, art, policy, release_intent, provenance, family, allowed, pg_norm):
     """Return (targets, target_selection_state, members_out). `allowed` is the pre-sanitized
-    string-only allowlist set. Every inspected member is retained with `selected` +
-    exclusion_reasons; a candidate must carry the evidence required to justify eligibility
+    string-only allowlist set (flat policies). Every inspected member is retained with `selected`
+    + exclusion_reasons; a candidate must carry the evidence required to justify eligibility
     (allowed runtime name, supported+agreeing arch, and a non-empty checksum and version)."""
     members_out, candidates = [], []
     cell_arch_supported = cell.get("normalized_arch") in SUPPORTED_ARCHES
@@ -447,8 +475,9 @@ def _select_targets(cell, art, policy, release_intent, provenance, family, allow
         else:
             if m.get("package_class") != "runtime":
                 reasons.append("non_runtime")
-            if m.get("package_name") not in allowed:
-                reasons.append("package_not_allowed")
+            why = _package_reason(policy, allowed, m.get("package_name"), family, pg_norm, release_intent)
+            if why is not None:
+                reasons.append(why)
             if not (norm in SUPPORTED_ARCHES or norm in _ARCH_INDEPENDENT):
                 reasons.append("unsupported_arch")
             elif not (norm == cell.get("normalized_arch") or norm in _ARCH_INDEPENDENT):
@@ -836,7 +865,8 @@ def reduce(inp):
             "simulated": (sim_value if sim_valid else None)},   # null == missing/invalid
         "component_policy": {
             "allowed_runtime_package_names": sorted(allowed_set),   # same sanitized value
-            "expected_binary_version": policy.get("expected_binary_version")},
+            "expected_binary_version": policy.get("expected_binary_version"),
+            **(PP.describe(policy) or {})},                        # PG-coupled templates only
         "cells": cells_out,
         "coverage_denominators": {
             "planned_build_cells": len(planned_list),   # honest: original planned entries

@@ -1,0 +1,215 @@
+name: PEP Certification Preview
+# Whole-certification preview check, in its own Actions run (separate from pep-selftest.yml).
+#
+# On every pull request (no path filter) it builds one tiny RPM and one tiny DEB of the internal
+# fixture component pgedge-capture-smoke, records their pep-receipt/2 receipts with the local
+# receipt action exactly as a release pipeline does, and calls the REAL reusable coordinator
+# (pep-certify.yml, by relative path, so at the revision under test) as a SIMULATED release:
+# the packages are never published, both publication results are truthfully "skipped",
+# execution_mode is preview and enforcement is observe. The last job checks the whole result
+# with pipeline/pep_preview_check.py (see docs/CI.md, "Certification preview check").
+#
+# The two cells are TEST FIXTURES ONLY: they define no supported OS/arch/PG/component universe.
+# Which containers and PG majors they expand to comes from PEP's catalogs at the revision under
+# test, and the check pins the resulting fixture expectation (2 targets x PG 16-18 = 6 previews).
+# workflow_dispatch works only once this file is on the default branch. To check again, start a
+# fresh workflow run; do not re-run this run's jobs (docs/CI.md, "Retrying").
+on:
+  pull_request: {}
+  workflow_dispatch: {}
+
+# Least privilege at the top; each job grants only what it needs (a reusable workflow can never
+# exceed the caller's granted token). No secrets are used: a preview pulls no images.
+permissions: {}
+
+jobs:
+  build:
+    # One build job per fixture cell. The job NAME carries the producer-neutral
+    # [pep-cell:<cell_id>] marker capture associates jobs by. These cell ids differ from the
+    # capture smoke's, so the two workflows' check names never collide on a commit.
+    name: build [pep-cell:${{ matrix.cell_id }}]
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - cell_id: certpreview-rpm-el9-amd64
+            family: rpm
+          - cell_id: certpreview-deb-bookworm-amd64
+            family: deb
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: read      # checkout only; artifact uploads use the runtime token
+    steps:
+      - name: Checkout PEP (provides the local receipt action + inspector)
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803  # v6.1.0
+        with:
+          persist-credentials: false
+
+      - name: Build one tiny ${{ matrix.family }} package (pgedge-capture-smoke 1.0.0, never published)
+        env:
+          FAMILY: ${{ matrix.family }}
+        run: |
+          set -euo pipefail
+          mkdir -p pkgout
+          if [ "$FAMILY" = "deb" ]; then
+            mkdir -p root/DEBIAN
+            cat > root/DEBIAN/control <<'EOF'
+          Package: pgedge-capture-smoke
+          Version: 1.0.0-1.bookworm
+          Architecture: amd64
+          Maintainer: PEP Preview <pep@example.invalid>
+          Description: tiny certification-preview package (deb cell)
+          EOF
+            pkg="pgedge-capture-smoke_1.0.0-1.bookworm_amd64.deb"
+            dpkg-deb --build root "pkgout/$pkg"
+          else
+            if ! command -v rpmbuild >/dev/null 2>&1; then
+              sudo apt-get update -qq
+              sudo apt-get install -y -qq rpm
+            fi
+            cat > tiny.spec <<'EOF'
+          Name: pgedge-capture-smoke
+          Version: 1.0.0
+          Release: 1.el9
+          Summary: tiny certification-preview rpm (rpm cell)
+          License: MIT
+          BuildArch: noarch
+          %description
+          tiny certification preview package
+          %files
+          %changelog
+          EOF
+            rpmbuild -bb --define "_topdir $PWD/rpmbuild" tiny.spec
+            pkg="pgedge-capture-smoke-1.0.0-1.el9.noarch.rpm"
+            cp "rpmbuild/RPMS/noarch/$pkg" "pkgout/$pkg"
+          fi
+
+      - name: Upload package artifact FIRST (producer-natural, unique name)
+        id: up
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
+        with:
+          name: certpreview-pkg-${{ matrix.family }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: pkgout/
+          if-no-files-found: error
+
+      - name: Generate pep-receipt/2 for the cell (LOCAL composite action)
+        uses: ./.github/actions/pep-package-receipt
+        with:
+          cell_id: ${{ matrix.cell_id }}
+          family: ${{ matrix.family }}
+          package_dir: pkgout
+          package_artifact_id: ${{ steps.up.outputs.artifact-id }}
+          package_artifact_name: certpreview-pkg-${{ matrix.family }}-${{ github.run_id }}-${{ github.run_attempt }}
+          package_artifact_digest: ${{ steps.up.outputs.artifact-digest }}
+
+  certify:
+    # The real coordinator at the revision under test. !cancelled(): a build failure still
+    # reaches it, so it records truthful partial evidence (and the assert job then fails).
+    needs: build
+    if: ${{ !cancelled() }}
+    uses: ./.github/workflows/pep-certify.yml
+    permissions:
+      contents: read      # nested checkouts of the revision under test
+      actions: read       # capture/aggregate list this run's jobs and artifacts, download by id
+    with:
+      # PG-independent cells stated explicitly (pg_coupled=false), so the planner expands each
+      # across PEP's supported PG majors.
+      rpm_matrix: '{"include":[{"cell_id":"certpreview-rpm-el9-amd64","family":"rpm","os":"el-9","normalized_arch":"amd64","pg_coupled":false}]}'
+      deb_matrix: '{"include":[{"cell_id":"certpreview-deb-bookworm-amd64","family":"deb","os":"bookworm","normalized_arch":"amd64","pg_coupled":false}]}'
+      # SIMULATED release: built, never published, and both publications truthfully skipped.
+      release_intent: '{"logical_component":"pgedge-capture-smoke","intended_version":"1.0.0","intended_buildnum":"1","effective_tag":"v1.0.0","channel":"daily","simulated":true}'
+      publication_results: '{"rpm":"skipped","deb":"skipped"}'
+      execution_mode: preview
+      enforcement: observe
+
+  assert:
+    # always(): run even when the coordinator failed, and REQUIRE its success below, so a red,
+    # skipped or cancelled coordinator can never read as a passing preview.
+    name: assert certification preview
+    needs: certify
+    if: ${{ always() }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: read      # checkout of the revision under test (the checker)
+      actions: read       # list this run's artifacts and download them by immutable id
+    env:
+      # What the coordinator's evidence must identify: this repository, run and attempt, and
+      # the revision under test (pep-certify.yml is called by relative path from this
+      # workflow's own commit, so its resolved revision must be github.workflow_sha).
+      EXPECT_REPOSITORY: ${{ github.repository }}
+      EXPECT_RUN_ID: ${{ github.run_id }}
+      EXPECT_RUN_NUMBER: ${{ github.run_number }}
+      EXPECT_RUN_ATTEMPT: ${{ github.run_attempt }}
+      EXPECT_SHA: ${{ github.sha }}
+      EXPECT_REF: ${{ github.ref }}
+      EXPECT_PEP_SHA: ${{ github.workflow_sha }}
+      # The coordinator's result and outputs, shared by every step that checks them: the first
+      # check step reads them all, and the final verify step compares them with cert-decision.
+      # (A step's own env is not visible to later steps, so these must be job-level.)
+      CERTIFY_RESULT: ${{ needs.certify.result }}
+      CERT_CONCLUSION: ${{ needs.certify.outputs.certification_conclusion }}
+      CERT_STATE: ${{ needs.certify.outputs.certification_state }}
+      CERT_EXECUTION: ${{ needs.certify.outputs.execution_status }}
+      CERT_TESTS: ${{ needs.certify.outputs.test_verdict }}
+      CERT_COVERAGE: ${{ needs.certify.outputs.coverage_status }}
+      CERT_REASON: ${{ needs.certify.outputs.reason_code }}
+      CERT_EVIDENCE_ID: ${{ needs.certify.outputs.evidence_artifact_id }}
+      CERT_EVIDENCE_NAME: ${{ needs.certify.outputs.evidence_artifact_name }}
+    steps:
+      - name: Checkout the revision under test
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803  # v6.1.0
+        with:
+          persist-credentials: false
+
+      - name: Set up Python (pinned)
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1  # v6.3.0
+        with: {python-version: "3.11"}
+
+      - name: Require a successful coordinator and a genuine preview decision
+        # Runs before any download, so a blank or invalid evidence id can never reach
+        # download-artifact (a blank artifact-ids input would download every artifact).
+        run: python3 pipeline/pep_preview_check.py coordinator
+
+      - name: List this run's artifacts and select the capture documents by exact name
+        id: select
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          # The listing reads through the capture transport (bounded retries for transient
+          # GitHub API errors); download ids for the summaries are not used here.
+          python3 pipeline/pep_artifact_listing.py --repo "$EXPECT_REPOSITORY" --run-id "$EXPECT_RUN_ID" \
+            --name-prefix pep-summary- --listing listing.json --github-output listing-ids.txt
+          python3 pipeline/pep_preview_check.py select --listing listing.json --github-output "$GITHUB_OUTPUT"
+
+      - name: Download the combined certification evidence BY IMMUTABLE ID
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131  # v7.0.0
+        with:
+          # a single artifact-id extracts FLAT into `path`
+          artifact-ids: ${{ needs.certify.outputs.evidence_artifact_id }}
+          path: dl-evidence
+          github-token: ${{ github.token }}
+
+      - name: Download the capture evidence BY IMMUTABLE ID
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131  # v7.0.0
+        with:
+          artifact-ids: ${{ steps.select.outputs.capture_evidence_id }}
+          path: dl-capture
+          github-token: ${{ github.token }}
+
+      - name: Download the certification plan BY IMMUTABLE ID
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131  # v7.0.0
+        with:
+          artifact-ids: ${{ steps.select.outputs.cert_plan_id }}
+          path: dl-cert-plan
+          github-token: ${{ github.token }}
+
+      - name: Check the evidence, decision, collection ledger and report
+        run: |
+          python3 pipeline/pep_preview_check.py verify \
+            --evidence-dir dl-evidence \
+            --capture-evidence dl-capture/capture-evidence.json \
+            --cert-plan dl-cert-plan/cert-plan.json \
+            --listing listing.json

@@ -1,0 +1,203 @@
+{
+  "cells": [
+    {
+      "artifact_name": "certpreview-deb-bookworm-amd64",
+      "build_evidence": {
+        "artifact_duplicate": false,
+        "artifact_id": 1004,
+        "artifact_present": true,
+        "latest_conclusion": "success",
+        "latest_job_id": 1006,
+        "latest_run_attempt": 1,
+        "latest_status": "completed"
+      },
+      "build_pg_major": null,
+      "build_pg_version": null,
+      "build_state": "available",
+      "capture_evidence": {
+        "code": null,
+        "detail": "",
+        "evidence_class": "accepted",
+        "verdict": "accepted"
+      },
+      "cell_id": "certpreview-deb-bookworm-amd64",
+      "family": "deb",
+      "members": [
+        {
+          "artifact_member_path": "pgedge-capture-smoke_1.0.0-1.bookworm_amd64.deb",
+          "epoch": null,
+          "native_arch": "amd64",
+          "normalized_arch": "amd64",
+          "package_class": "runtime",
+          "package_name": "pgedge-capture-smoke",
+          "release": "1.bookworm",
+          "selected": true,
+          "sha256": "42fda962f2cc5dbc69095dadd17fe4b7b32d7f678f0dae6aebc8e6bd47e28959",
+          "version": "1.0.0"
+        }
+      ],
+      "normalized_arch": "amd64",
+      "os": "bookworm",
+      "pg_coupled": false,
+      "planned": true,
+      "publication_reason": "simulated",
+      "publication_state": "publish_skipped",
+      "target_selection_state": "resolved",
+      "targets": [
+        {
+          "build_pg_major": null,
+          "build_pg_version": null,
+          "eligibility": "ineligible",
+          "eligibility_reason": "simulated_not_eligible",
+          "execution_arch": "amd64",
+          "expected": {
+            "expected_binary_version": "",
+            "intended_buildnum": "1",
+            "intended_version": "1.0.0"
+          },
+          "family": "deb",
+          "logical_component": "pgedge-capture-smoke",
+          "native_package_arch": "amd64",
+          "os": "bookworm",
+          "package": {
+            "epoch": null,
+            "name": "pgedge-capture-smoke",
+            "release": "1.bookworm",
+            "sha256": "42fda962f2cc5dbc69095dadd17fe4b7b32d7f678f0dae6aebc8e6bd47e28959",
+            "version": "1.0.0"
+          },
+          "package_identity_state": "confirmed",
+          "pg_coupled": false,
+          "physical_package": "pgedge-capture-smoke",
+          "preview_eligibility": "eligible",
+          "preview_eligibility_reason": "simulated_built_identity_confirmed_dry_run",
+          "producer_repo": "pgEdge/pgedge-pep-test",
+          "target_id": "certpreview-deb-bookworm-amd64::pgedge-capture-smoke"
+        }
+      ]
+    },
+    {
+      "artifact_name": "certpreview-rpm-el9-amd64",
+      "build_evidence": {
+        "artifact_duplicate": false,
+        "artifact_id": 1001,
+        "artifact_present": true,
+        "latest_conclusion": "success",
+        "latest_job_id": 1003,
+        "latest_run_attempt": 1,
+        "latest_status": "completed"
+      },
+      "build_pg_major": null,
+      "build_pg_version": null,
+      "build_state": "available",
+      "capture_evidence": {
+        "code": null,
+        "detail": "",
+        "evidence_class": "accepted",
+        "verdict": "accepted"
+      },
+      "cell_id": "certpreview-rpm-el9-amd64",
+      "family": "rpm",
+      "members": [
+        {
+          "artifact_member_path": "pgedge-capture-smoke-1.0.0-1.el9.noarch.rpm",
+          "epoch": null,
+          "native_arch": "noarch",
+          "normalized_arch": "noarch",
+          "package_class": "runtime",
+          "package_name": "pgedge-capture-smoke",
+          "release": "1.el9",
+          "selected": true,
+          "sha256": "929f4ccadcd27c6652f6bac99abba21f165bbb025a1186bfeaeabd268b7b8b25",
+          "version": "1.0.0"
+        }
+      ],
+      "normalized_arch": "amd64",
+      "os": "el-9",
+      "pg_coupled": false,
+      "planned": true,
+      "publication_reason": "simulated",
+      "publication_state": "publish_skipped",
+      "target_selection_state": "resolved",
+      "targets": [
+        {
+          "build_pg_major": null,
+          "build_pg_version": null,
+          "eligibility": "ineligible",
+          "eligibility_reason": "simulated_not_eligible",
+          "execution_arch": "amd64",
+          "expected": {
+            "expected_binary_version": "",
+            "intended_buildnum": "1",
+            "intended_version": "1.0.0"
+          },
+          "family": "rpm",
+          "logical_component": "pgedge-capture-smoke",
+          "native_package_arch": "noarch",
+          "os": "el-9",
+          "package": {
+            "epoch": null,
+            "name": "pgedge-capture-smoke",
+            "release": "1.el9",
+            "sha256": "929f4ccadcd27c6652f6bac99abba21f165bbb025a1186bfeaeabd268b7b8b25",
+            "version": "1.0.0"
+          },
+          "package_identity_state": "confirmed",
+          "pg_coupled": false,
+          "physical_package": "pgedge-capture-smoke",
+          "preview_eligibility": "eligible",
+          "preview_eligibility_reason": "simulated_built_identity_confirmed_dry_run",
+          "producer_repo": "pgEdge/pgedge-pep-test",
+          "target_id": "certpreview-rpm-el9-amd64::pgedge-capture-smoke"
+        }
+      ]
+    }
+  ],
+  "cert_result_boundary": {
+    "execution_status_vocab": [
+      "completed",
+      "preview",
+      "incomplete",
+      "infra_failure"
+    ],
+    "schema": "cert-result/1",
+    "test_verdict_vocab": [
+      "pass",
+      "fail",
+      "not_run"
+    ]
+  },
+  "component_policy": {
+    "allowed_runtime_package_names": [
+      "pgedge-capture-smoke"
+    ],
+    "expected_binary_version": ""
+  },
+  "coverage_denominators": {
+    "available_build_cells": 2,
+    "eligible_targets": 0,
+    "planned_build_cells": 2,
+    "preview_eligible_targets": 2,
+    "required_invocations": null,
+    "selected_targets": 2
+  },
+  "errors": [],
+  "execution_mode": "preview",
+  "plan_resolved": true,
+  "provenance": {
+    "ref": "refs/pull/99/merge",
+    "repository": "pgEdge/pgedge-pep-test",
+    "run_attempt": "1",
+    "run_id": "9100000001",
+    "sha": "1f0ecccccccccccccccccccccccccccccccccccc"
+  },
+  "release_intent": {
+    "channel": "daily",
+    "effective_tag": "v1.0.0",
+    "intended_buildnum": "1",
+    "intended_version": "1.0.0",
+    "logical_component": "pgedge-capture-smoke",
+    "simulated": true
+  },
+  "schema": "cert-plan/1"
+}

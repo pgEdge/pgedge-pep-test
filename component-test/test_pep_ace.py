@@ -450,6 +450,60 @@ def test_ace_help(container_name, container_type):
     print(f"✅ ace --help executed successfully")
 
 
+@pytest.mark.parametrize("container_name,container_type", all_containers)
+def test_ace_binary_version(container_name, container_type):
+    """Verify that the ace binary reports the expected version.
+
+    Runs `ace --version`, which prints a single line of the form
+    "ace version 3.0.0-rc.2", and compares the version token against
+    PGEDGE_ACE_VERSION. A pre-release suffix on the binary (-rc.2, -beta1)
+    is accepted for a released expected version, so config16/17/18/19.env
+    can pin "3.0.0" while the staging build still reports "3.0.0-rc.2".
+    Skipped when PGEDGE_ACE_VERSION is not set.
+    """
+    if not ace_version:
+        pytest.skip("PGEDGE_ACE_VERSION not set in env, skipping version check")
+
+    container_name = container_name.strip()
+    if not container_name:
+        pytest.skip("No container defined in env")
+
+    try:
+        container = client.containers.get(container_name)
+    except docker.errors.NotFound:
+        pytest.skip(f"Container {container_name} not found or not running.")
+
+    assert container.status == "running"
+
+    print(f"\n--- Checking ace --version on {container_name} ({container_type}) ---")
+
+    exit_code, output = container.exec_run(
+        ["bash", "-c", "/usr/bin/ace --version 2>&1"],
+        user="root",
+    )
+    version_output = output.decode().strip()
+    print(f"   Output: {version_output}")
+
+    assert exit_code == 0, (
+        f"ace --version failed with exit code {exit_code}: {version_output}"
+    )
+    assert version_output, "ace --version returned empty output"
+
+    # "ace version 3.0.0-rc.2" -> "3.0.0-rc.2"
+    first_line = version_output.splitlines()[0]
+    reported_version = first_line.split()[-1]
+
+    assert (
+        reported_version == ace_version
+        or reported_version.startswith(f"{ace_version}-")
+    ), (
+        f"ace version mismatch: expected '{ace_version}' "
+        f"(optionally with a pre-release suffix), got '{reported_version}' "
+        f"from output:\n  {version_output}"
+    )
+    print(f"✅ ace reports version {reported_version} (expected {ace_version})")
+
+
 # ============================================================================
 # ACE Functional Tests (3-node cluster)
 # ============================================================================
@@ -841,12 +895,13 @@ def test_ace_table_diff(container_name, container_type):
 
     pg_service_path = "/tmp/pg_service.conf"
 
-    print(f"\n--- ACE: Running table-diff on public.n1 ---")
+    print(f"\n--- ACE: Running table-diff on public.n1 "
+          f"for cluster '{ace_cluster_name}' ---")
 
     exit_code, output = container.exec_run(
         ["bash", "-c",
          f"cd /tmp && PGSERVICEFILE={pg_service_path} "
-         f"/usr/bin/ace table-diff -o html public.n1"],
+         f"/usr/bin/ace table-diff -o html {ace_cluster_name} public.n1"],
         user="root"
     )
     output_str = output.decode()

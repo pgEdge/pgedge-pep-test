@@ -432,8 +432,10 @@ def test_verify_bundled_files(container_name, container_type, component):
             pytest.fail(f"{message}{details_str}")
 
     except Exception as e:
-        # Handle cases like missing expected files
-        if "No expected file found" in str(e):
+        # A missing expected-output reference skips a standalone run. In integration mode it
+        # fails: skips are reported separately, but the overall verdict can still pass with
+        # this verification skipped, so the requested package would never be compared.
+        if "No expected file found" in str(e) and INTEGRATION_REQUEST is None:
             pytest.skip(str(e))
         else:
             pytest.fail(f"Failed to verify bundled files: {str(e)}")

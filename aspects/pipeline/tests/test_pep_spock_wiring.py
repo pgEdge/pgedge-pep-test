@@ -360,7 +360,7 @@ def _raises(exc):
 
 
 def test_integration_mode_fails_when_the_bundled_file_reference_is_missing(monkeypatch):
-    # A skip counts as passing in the run summary, so a release package would look verified.
+    # Skips are reported separately, but the overall verdict can still pass with this check skipped.
     outcome, msg = _bundled_outcome(monkeypatch, _V5_RPM, _raises(_NO_REFERENCE))
     assert outcome == "failed" and "No expected file found for pgedge-spock50_17" in msg
 

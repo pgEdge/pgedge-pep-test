@@ -579,3 +579,66 @@ def test_standalone_honors_configured_platform_filter():
     assert rag._effective_platform_filter(None, "deb") == "deb"
     assert rag._effective_platform_filter(None, "RPM") == "rpm"
     assert rag._effective_platform_filter(None, "") == ""
+
+
+# --------------------------------------------------------------------------- bundled-file reference
+def _no_reference(package):
+    return Exception("No expected file found for %s at /x/expected-output (checked: /x/a)" % package)
+
+
+def _raises(exc):
+    def verify(**kwargs):
+        raise exc
+    return verify
+
+
+def _bundled_outcome(monkeypatch, req, ctype, component, verify):
+    """Run the real test_verify_bundled_files and report ("passed"|"skipped"|"failed", message).
+    Recording the outcome keeps an unexpected skip from being reported as a skipped test."""
+    monkeypatch.setattr(rag, "INTEGRATION_REQUEST", req)
+    monkeypatch.setattr(rag, "client", _Client())
+    monkeypatch.setattr(rag.file_management, "verify_bundled_files", verify)
+    try:
+        rag.test_verify_bundled_files("c1", ctype, component)
+    except pytest.skip.Exception as e:
+        return "skipped", str(e)
+    except pytest.fail.Exception as e:
+        return "failed", str(e)
+    return "passed", ""
+
+
+_INTEGRATION = [
+    (lambda: _rag2_rpm_req(PEP_EXPECTED_RPM="2.0.0-1.el9"), "rhel", "pgedge-rag-server2"),
+    (lambda: _int_req(PEP_PACKAGE_NAME="pgedge-rag-server2", PEP_EXPECTED_VERSION="2.0.0",
+                      PEP_EXPECTED_DEB="2.0.0-1.trixie"), "deb", "pgedge-rag-server2"),
+    (lambda: _int_req(PEP_EXPECTED_DEB="1.0.0-1.trixie"), "deb", "pgedge-rag-server"),
+]
+_IDS = ["rpm-rag2", "deb-rag2", "deb-rag"]
+
+
+@pytest.mark.parametrize("make_req,ctype,package", _INTEGRATION, ids=_IDS)
+def test_integration_mode_fails_when_the_bundled_file_reference_is_missing(monkeypatch, make_req, ctype, package):
+    # Skips are reported separately, but the overall verdict can still pass with this check skipped.
+    req = make_req()
+    assert req["package_name"] == package and req["family"] == ("rpm" if ctype == "rhel" else "deb")
+    outcome, msg = _bundled_outcome(monkeypatch, req, ctype, package, _raises(_no_reference(package)))
+    assert outcome == "failed" and "No expected file found for %s" % package in msg
+
+
+@pytest.mark.parametrize("ctype", ["rhel", "deb"])
+def test_standalone_still_skips_when_the_bundled_file_reference_is_missing(monkeypatch, ctype):
+    outcome, msg = _bundled_outcome(monkeypatch, None, ctype, "pgedge-rag-server2",
+                                    _raises(_no_reference("pgedge-rag-server2")))
+    assert outcome == "skipped" and "No expected file found" in msg
+
+
+@pytest.mark.parametrize("make_req,ctype,package", _INTEGRATION + [(lambda: None, "rhel", "pgedge-rag-server2")],
+                         ids=_IDS + ["standalone"])
+def test_bundled_file_outcomes_are_unchanged_when_the_reference_exists(monkeypatch, make_req, ctype, package):
+    req = make_req()
+    assert _bundled_outcome(monkeypatch, req, ctype, package, lambda **k: (True, None, "match")) == ("passed", "")
+    outcome, msg = _bundled_outcome(monkeypatch, req, ctype, package,
+                                    lambda **k: (False, {"missing_files": ["/usr/x"]}, "Bundled files differ"))
+    assert outcome == "failed" and "Missing files" in msg and "/usr/x" in msg
+    outcome, msg = _bundled_outcome(monkeypatch, req, ctype, package, _raises(RuntimeError("rpm -ql failed")))
+    assert outcome == "failed" and "Failed to verify bundled files: rpm -ql failed" in msg

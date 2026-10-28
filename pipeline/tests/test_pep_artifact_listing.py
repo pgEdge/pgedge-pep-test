@@ -114,3 +114,48 @@ def test_missing_token_fails_without_any_request(tmp_path, network):
     _, calls, _ = network
     rc, listing, _ = _run(tmp_path, env={})
     assert rc == 1 and calls == [] and not listing.exists()
+
+
+_MALFORMED = ["https://api.github.com/x/9/zip", 5, None, ["pep-summary-z"], True]
+
+
+def test_a_non_object_entry_stays_in_the_listing_as_an_invalid_placeholder(tmp_path, network):
+    plan, _, _ = network
+    page = [_art(1, "pep-summary-a")] + _MALFORMED + [_art(2, "pep-summary-b")]
+    plan[_PAGE1] = [{"total_count": len(page), "artifacts": page}]
+    rc, listing, out = _run(tmp_path)
+    assert rc == 0
+    text = listing.read_text()
+    rows = json.loads(text)
+    assert len(rows) == len(page)                                   # nothing disappears
+    assert rows[1:-1] == [None] * len(_MALFORMED)                   # same place, content not copied
+    assert "api.github.com" not in text and "pep-summary-z" not in text
+    assert out.read_text() == "download_ids=1,2\n"
+
+
+def test_a_malformed_entry_reaches_the_collector_and_fails_collection_closed(tmp_path, network):
+    import pep_result_io as RIO
+    plan, _, _ = network
+    plan[_PAGE1] = [{"total_count": 2, "artifacts": [_art(1, "rpm__el-9__amd64"), "garbage"]}]
+    rc, listing, _ = _run(tmp_path)
+    assert rc == 0
+    summaries, _, meta = RIO.collect(json.loads(listing.read_text()), str(tmp_path), "pep-summary-")
+    assert meta["invalid_entry_count"] == 1 and meta["anomaly"] is True
+    assert summaries == [None]                                      # one fail-closed sentinel
+
+
+def test_a_listing_of_valid_objects_is_unchanged_and_collects_cleanly(tmp_path, network):
+    import pep_result_io as RIO
+    plan, _, _ = network
+    plan[_PAGE1] = [{"total_count": 2, "artifacts": [_art(1, "rpm__el-9__amd64"), _art(2, "deb__bookworm__amd64")]}]
+    rc, listing, out = _run(tmp_path)
+    rows = json.loads(listing.read_text())
+    assert rc == 0 and out.read_text() == "download_ids=\n"
+    assert rows == [{"id": 1, "name": "rpm__el-9__amd64", "expired": False, "size_in_bytes": 10},
+                    {"id": 2, "name": "deb__bookworm__amd64", "expired": False, "size_in_bytes": 20}]
+    _, _, meta = RIO.collect(rows, str(tmp_path), "pep-summary-")
+    assert meta["invalid_entry_count"] == 0 and meta["anomaly"] is False
+
+
+def test_download_ids_ignore_placeholders():
+    assert L.download_ids([None, {"id": 3, "name": "pep-summary-a", "expired": False}, None], "pep-summary-") == [3]

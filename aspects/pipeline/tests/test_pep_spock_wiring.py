@@ -331,3 +331,75 @@ def test_component_tests_share_the_integration_helper_instances(monkeypatch):
     assert m.pep_request_env is m.pep_integration_mode.pep_request_env
     assert m.package_management is m.pep_integration_mode.package_management
     assert m._pp is sys.modules["pep_package_policy"]
+
+
+# --------------------------------------------------------------------------- bundled-file reference
+_NO_REFERENCE = Exception("No expected file found for pgedge-spock50_17 at /x/expected-output/rpm (checked: /x/a)")
+_STANDALONE = {"PG_MAJOR_VERSION": "17"}
+
+
+def _bundled_outcome(monkeypatch, env, verify):
+    """Run the real test_verify_bundled_files and report ("passed"|"skipped"|"failed", message).
+    Recording the outcome keeps an unexpected skip from being reported as a skipped test."""
+    m = load(monkeypatch, env)
+    monkeypatch.setattr(m, "client", _Client(_Container(_pkg_list())))
+    monkeypatch.setattr(m.file_management, "verify_bundled_files", verify)
+    try:
+        m.test_verify_bundled_files("rocky9-amd64", "rhel")
+    except pytest.skip.Exception as e:
+        return "skipped", str(e)
+    except pytest.fail.Exception as e:
+        return "failed", str(e)
+    return "passed", ""
+
+
+def _raises(exc):
+    def verify(**kwargs):
+        raise exc
+    return verify
+
+
+def test_integration_mode_fails_when_the_bundled_file_reference_is_missing(monkeypatch):
+    # Skips are reported separately, but the overall verdict can still pass with this check skipped.
+    outcome, msg = _bundled_outcome(monkeypatch, _V5_RPM, _raises(_NO_REFERENCE))
+    assert outcome == "failed" and "No expected file found for pgedge-spock50_17" in msg
+
+
+def test_standalone_still_skips_when_the_bundled_file_reference_is_missing(monkeypatch):
+    outcome, msg = _bundled_outcome(monkeypatch, _STANDALONE, _raises(_NO_REFERENCE))
+    assert outcome == "skipped" and "No expected file found" in msg
+
+
+@pytest.mark.parametrize("env", [_V5_RPM, _STANDALONE], ids=["integration", "standalone"])
+def test_bundled_file_outcomes_are_unchanged_when_the_reference_exists(monkeypatch, env):
+    assert _bundled_outcome(monkeypatch, env, lambda **k: (True, None, "match")) == ("passed", "")
+    outcome, msg = _bundled_outcome(monkeypatch, env, lambda **k: (False, {"missing_files": ["/usr/x"]}, "Bundled files differ"))
+    assert outcome == "failed" and "Missing files" in msg and "/usr/x" in msg
+    outcome, msg = _bundled_outcome(monkeypatch, env, _raises(RuntimeError("rpm -ql failed")))
+    assert outcome == "failed" and "rpm -ql failed" in msg
+
+
+# --------------------------------------------------------------------------- prerelease versions
+# Real pgEdge prereleases. Tag v5.0.13-rc.1 -> release intent 5.0.13 / rc1_1 -> staging RPM
+# pgedge-spock50_17 5.0.13-rc1_1.el9; tag v6.0.0-beta.1 -> 6.0.0 / beta1_1 -> staging DEB
+# pgedge-postgresql-17-spock60 6.0.0~beta1-1.bookworm. The prerelease tag lives only in the package
+# version (checked by the identity step); the extension version is SPOCK_VERSION without it (the
+# beta DEB ships default_version '6.0.0'), so it must still equal expected_version exactly.
+_RC_RPM = dict(_V5_RPM, PEP_EXPECTED_BUILDNUM="rc1_1", PEP_EXPECTED_RPM="5.0.13-rc1_1.el9")
+_BETA_DEB = dict(_V6_DEB, PEP_EXPECTED_BUILDNUM="beta1_1", PEP_EXPECTED_DEB="6.0.0~beta1-1.bookworm",
+                 PEP_CONTAINER_ALIAS="debian12-amd64", DEB_CONTAINERS="debian12-amd64")
+
+
+@pytest.mark.parametrize("env,ctype,owner,shipped,other", [
+    (_RC_RPM, "rhel", "pgedge-spock50_17", "5.0.13", "5.0.12"),
+    (_BETA_DEB, "deb", "pgedge-postgresql-17-spock60", "6.0.0", "6.0.1"),
+], ids=["rc-rpm", "beta-deb"])
+def test_a_prerelease_request_accepts_the_extension_version_its_package_ships(monkeypatch, env, ctype, owner,
+                                                                              shipped, other):
+    m = load(monkeypatch, env)
+    assert m.INTEGRATION_PROBLEM is None
+    cfg = m.get_container_config(ctype)
+    m.verify_nodes_use_requested_spock(_Container(_nodes(owner=owner, ext=(shipped, shipped))), ctype, cfg)
+    for wrong in (other, shipped + "~beta1", shipped + "-rc.1"):    # still exact: no prefix or substring match
+        with pytest.raises(AssertionError, match="spock extension version is %r" % wrong):
+            m.verify_nodes_use_requested_spock(_Container(_nodes(owner=owner, ext=(wrong, wrong))), ctype, cfg)

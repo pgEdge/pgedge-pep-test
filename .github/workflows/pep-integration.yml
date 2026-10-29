@@ -226,6 +226,10 @@ jobs:
         if: ${{ steps.preflight.outputs.rc == '0' }}   # skip when execution_mode is invalid
         continue-on-error: true          # handle framework failure -> summarize anyway
         env:                             # pass inputs via env + build a Bash array (injection-safe)
+          # The pgEdge repositories authenticate clients with mutual TLS; the
+          # aspects read these and hand them to pgedge-subscription-manager.
+          PGEDGE_REPO_CLIENT_CRT: ${{ secrets.PGEDGE_REPO_CLIENT_CRT }}
+          PGEDGE_REPO_CLIENT_KEY: ${{ secrets.PGEDGE_REPO_CLIENT_KEY }}
           IN_PG: ${{ inputs.pg_major }}
           IN_FAMILY: ${{ inputs.family }}
           IN_ARCH: ${{ inputs.arch }}

@@ -92,6 +92,10 @@ def _install_client_certificate(container, platform):
     crt, key = pgedge_client_cert.read_client_certificate()
     if not crt or not key:
         print(f" {pgedge_client_cert.NO_CERTIFICATE_MESSAGE}")
+        # pep-integration.yml starts a full run only with a complete pair, so
+        # reaching here there is a setup problem, never a product one. A no-op
+        # in a standalone run.
+        pgedge_client_cert.record_setup_failure(pgedge_client_cert.MISSING_CERTIFICATE)
         return False
 
     pgedge_client_cert.install_on_target(container, platform, crt, key)
@@ -124,6 +128,22 @@ def _configure_rhel_repo(container, repo):
         print(f" Repository switched to {repo}")
 
     enabled = _install_client_certificate(container, "rhel")
+
+    if enabled:
+        # pgedge-subscription-manager enables the repositories but tolerates a
+        # failed refresh, so a certificate the server refuses would surface only
+        # at the first package install, read as a product failure. Refresh just
+        # the repositories it enabled (not the disabled source one).
+        exit_code, output = container.exec_run(
+            ["/bin/sh", "-c", "dnf -q makecache --repo=pgedge --repo=pgedge-noarch"],
+            user="root"
+        )
+        if exit_code != 0:
+            pgedge_client_cert.record_setup_failure(pgedge_client_cert.REPOSITORY_FAILURE)
+            raise Exception(
+                f"pgEdge repositories could not be refreshed with the client "
+                f"certificate: {output.decode()}")
+        pgedge_client_cert.clear_setup_failure()
 
     return True, "rhel", _result_message(repo, enabled)
 
@@ -178,7 +198,14 @@ def _configure_debian_repo(container, repo):
         ["/bin/sh", "-c", "apt-get update"], user="root"
     )
     if exit_code != 0:
+        if enabled:
+            # The first fetch through the client certificate; see _configure_rhel_repo.
+            # It refreshes every source, so the reason Summarize gives stays neutral.
+            pgedge_client_cert.record_setup_failure(pgedge_client_cert.REPOSITORY_FAILURE)
         raise Exception(f"apt-get update failed: {output.decode()}")
+
+    if enabled:
+        pgedge_client_cert.clear_setup_failure()
 
     print(" Package lists updated (apt-get update)")
 

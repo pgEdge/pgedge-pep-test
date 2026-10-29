@@ -44,6 +44,11 @@ on:
       # provenance are preserved and are independent of any token.
       DOCKERHUB_USERNAME: {required: false}   # optional; full-mode pull rate limits
       DOCKERHUB_TOKEN:    {required: false}
+      # The pgEdge repositories authenticate clients with mutual TLS. Optional:
+      # preview mode installs nothing, so a caller that only previews needs no
+      # certificate; full mode without one leaves the repositories disabled.
+      PGEDGE_REPO_CLIENT_CRT: {required: false}
+      PGEDGE_REPO_CLIENT_KEY: {required: false}
     outputs:
       execution_status:  {value: "${{ jobs.run.outputs.execution_status }}"}
       test_verdict:      {value: "${{ jobs.run.outputs.test_verdict }}"}

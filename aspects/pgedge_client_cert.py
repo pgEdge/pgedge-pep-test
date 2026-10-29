@@ -13,10 +13,16 @@ through the environment, either as PEM contents or as paths:
 
 With neither supplied the repositories stay disabled and no pgEdge package
 installs, so the caller reports that rather than failing obscurely later.
+
+The key never appears in a command: it travels as a tar on stdin, or through
+docker's archive API. Both runners here echo the commands they are given, and
+a process list is readable by any local user, so embedding it either way would
+put the private key in CI logs.
 """
 
-import base64
+import io
 import os
+import tarfile
 from pathlib import Path
 
 # Where pgedge-subscription-manager keeps the pair. It derives the same paths
@@ -42,22 +48,36 @@ def read_client_certificate():
     return None, None
 
 
-def install_script(crt, key, platform):
-    """Shell that writes the pair and hands it to pgedge-subscription-manager.
+def tar_payload(crt, key):
+    """The pair as a tar, ready for stdin or docker's put_archive."""
+    buf = io.BytesIO()
+    with tarfile.open(fileobj=buf, mode="w") as tar:
+        for name, body, mode in (
+            ("client.crt", crt, 0o644),
+            ("client.key", key, 0o600),
+        ):
+            data = (body.rstrip("\n") + "\n").encode()
+            info = tarfile.TarInfo(name)
+            info.size = len(data)
+            info.mode = mode
+            info.uid = info.gid = 0
+            tar.addfile(info, io.BytesIO(data))
+    return buf.getvalue()
 
-    The PEM travels base64-encoded so no quoting or newline survives the trip
-    through the shell, and the key file is created at 0600 before its contents
-    are written rather than chmod'ed afterwards.
+
+def install_script(platform):
+    """Shell that reads the tar on stdin and hands the pair to the manager.
+
+    Carries no secret, so it is safe for a runner that echoes commands.
     """
     cert_dir = CERT_DIR[platform]
-    b64 = lambda s: base64.b64encode((s.rstrip("\n") + "\n").encode()).decode()
     return (
         "set -e; "
         f"install -d -m 0755 {cert_dir}; "
-        f"install -m 0600 /dev/null {cert_dir}/client.key; "
-        f"printf %s '{b64(crt)}' | base64 -d > {cert_dir}/client.crt; "
+        "umask 077; "
+        f"tar -x -C {cert_dir} client.crt client.key; "
         f"chmod 0644 {cert_dir}/client.crt; "
-        f"printf %s '{b64(key)}' | base64 -d > {cert_dir}/client.key; "
+        f"chmod 0600 {cert_dir}/client.key; "
         f"pgedge-subscription-manager install "
         f"{cert_dir}/client.crt {cert_dir}/client.key --force"
     )

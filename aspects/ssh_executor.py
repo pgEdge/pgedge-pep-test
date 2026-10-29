@@ -45,12 +45,14 @@ class SSHExecutor:
         """AWS instances are assumed to be running — mirrors container.status."""
         return "running"
 
-    def exec_run(self, command, user="root", timeout=300, **kwargs):
+    def exec_run(self, command, user="root", timeout=300, demux=False, **kwargs):
         """
         Execute a command on the remote host.
 
         Matches docker-py's container.exec_run() return value:
             (exit_code: int, output: bytes)
+        or, with demux=True, stdout and stderr kept apart (None when empty):
+            (exit_code: int, (stdout: bytes | None, stderr: bytes | None))
 
         The `user` parameter maps to sudo -u <user> or plain sudo for root,
         mirroring Docker's user= behaviour.
@@ -83,6 +85,8 @@ class SSHExecutor:
                 output = stdout.read()
                 err_output = stderr.read()
                 exit_code = stdout.channel.recv_exit_status()
+                if demux:
+                    return exit_code, (output or None, err_output or None)
                 if err_output:
                     output = output + err_output
                 return exit_code, output

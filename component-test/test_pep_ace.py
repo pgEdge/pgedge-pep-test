@@ -1,4 +1,5 @@
 import os
+import re
 import sys
 import subprocess
 import time
@@ -450,16 +451,38 @@ def test_ace_help(container_name, container_type):
     print(f"✅ ace --help executed successfully")
 
 
+# `ace --version` prints "ace version <version>" on stdout, where a release build's
+# <version> is its git tag without the leading "v" (3.0.0, 3.0.0-rc.3). A leading "v"
+# and text after the version, such as "(commit abc1234)", are tolerated.
+_ACE_VERSION_LINE = re.compile(
+    r"ace version v?(\d+\.\d+\.\d+(?:-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?"
+    r"(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?)(?:\s.*)?")
+
+
+def _parse_ace_version(stdout):
+    """The version on the one "ace version ..." line of `ace --version` stdout.
+
+    Raises ValueError when there is no such line, more than one, or the version is
+    not major.minor.patch with an optional pre-release or build suffix."""
+    lines = [line.strip() for line in stdout.splitlines()
+             if re.match(r"ace version(\s|$)", line.strip())]
+    if len(lines) != 1:
+        raise ValueError(f"expected one 'ace version' line on stdout, found {len(lines)}")
+    match = _ACE_VERSION_LINE.fullmatch(lines[0])
+    if not match:
+        raise ValueError(f"malformed version line {lines[0]!r}")
+    return match.group(1)
+
+
 @pytest.mark.parametrize("container_name,container_type", all_containers)
 def test_ace_binary_version(container_name, container_type):
-    """Verify that the ace binary reports the expected version.
+    """Verify that the ace binary reports exactly PGEDGE_ACE_VERSION.
 
-    Runs `ace --version`, which prints a single line of the form
-    "ace version 3.0.0-rc.2", and compares the version token against
-    PGEDGE_ACE_VERSION. A pre-release suffix on the binary (-rc.2, -beta1)
-    is accepted for a released expected version, so config16/17/18/19.env
-    can pin "3.0.0" while the staging build still reports "3.0.0-rc.2".
-    Skipped when PGEDGE_ACE_VERSION is not set.
+    Only stdout of `ace --version` is parsed, so a warning on stderr cannot be
+    taken for the version. The match is exact on every channel: "3.0.0" fails
+    on an RC, dirty or development build (3.0.0-rc.3, 3.0.0-dirty,
+    3.0.0-5-gabc1234), and a pre-release passes only when PGEDGE_ACE_VERSION
+    names it (3.0.0-rc.3). Skipped when PGEDGE_ACE_VERSION is not set.
     """
     if not ace_version:
         pytest.skip("PGEDGE_ACE_VERSION not set in env, skipping version check")
@@ -477,29 +500,31 @@ def test_ace_binary_version(container_name, container_type):
 
     print(f"\n--- Checking ace --version on {container_name} ({container_type}) ---")
 
-    exit_code, output = container.exec_run(
-        ["bash", "-c", "/usr/bin/ace --version 2>&1"],
+    # demux returns stdout and stderr separately; without it docker merges them.
+    exit_code, (stdout, stderr) = container.exec_run(
+        ["/usr/bin/ace", "--version"],
         user="root",
+        demux=True,
     )
-    version_output = output.decode().strip()
-    print(f"   Output: {version_output}")
+    stdout = (stdout or b"").decode()
+    stderr = (stderr or b"").decode()
+    print(f"   stdout: {stdout.strip()}")
+    if stderr.strip():
+        print(f"   stderr: {stderr.strip()}")
 
     assert exit_code == 0, (
-        f"ace --version failed with exit code {exit_code}: {version_output}"
+        f"ace --version failed with exit code {exit_code}:\n"
+        f"  stdout: {stdout!r}\n  stderr: {stderr!r}"
     )
-    assert version_output, "ace --version returned empty output"
+    try:
+        reported_version = _parse_ace_version(stdout)
+    except ValueError as e:
+        pytest.fail(f"Cannot read the ace version: {e}\n"
+                    f"  stdout: {stdout!r}\n  stderr: {stderr!r}")
 
-    # "ace version 3.0.0-rc.2" -> "3.0.0-rc.2"
-    first_line = version_output.splitlines()[0]
-    reported_version = first_line.split()[-1]
-
-    assert (
-        reported_version == ace_version
-        or reported_version.startswith(f"{ace_version}-")
-    ), (
-        f"ace version mismatch: expected '{ace_version}' "
-        f"(optionally with a pre-release suffix), got '{reported_version}' "
-        f"from output:\n  {version_output}"
+    assert reported_version == ace_version, (
+        f"ace version mismatch: expected exactly '{ace_version}', got "
+        f"'{reported_version}' (set PGEDGE_ACE_VERSION to a pre-release to expect one)"
     )
     print(f"✅ ace reports version {reported_version} (expected {ace_version})")
 

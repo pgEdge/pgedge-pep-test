@@ -50,6 +50,10 @@ on:
     secrets:
       DOCKERHUB_USERNAME: {required: false}   # optional; forwarded only for full certification
       DOCKERHUB_TOKEN:    {required: false}
+      # mTLS for the gated pgEdge repositories, forwarded only for full
+      # certification: a preview installs nothing and needs no certificate.
+      PGEDGE_REPO_CLIENT_CRT: {required: false}
+      PGEDGE_REPO_CLIENT_KEY: {required: false}
     outputs:
       certification_conclusion: {description: "success|failure (policy decision)", value: "${{ jobs.certify.outputs.certification_conclusion }}"}
       certification_state:      {description: "pass|fail|incomplete|preview",        value: "${{ jobs.certify.outputs.certification_state }}"}
@@ -134,6 +138,8 @@ jobs:
     secrets:
       DOCKERHUB_USERNAME: ${{ needs.normalize.outputs.execution_mode == 'full' && secrets.DOCKERHUB_USERNAME || '' }}
       DOCKERHUB_TOKEN:    ${{ needs.normalize.outputs.execution_mode == 'full' && secrets.DOCKERHUB_TOKEN || '' }}
+      PGEDGE_REPO_CLIENT_CRT: ${{ needs.normalize.outputs.execution_mode == 'full' && secrets.PGEDGE_REPO_CLIENT_CRT || '' }}
+      PGEDGE_REPO_CLIENT_KEY: ${{ needs.normalize.outputs.execution_mode == 'full' && secrets.PGEDGE_REPO_CLIENT_KEY || '' }}
 
   # --- 3. one summary, whatever happened above --------------------------------
   summary:

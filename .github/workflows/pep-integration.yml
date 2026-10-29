@@ -44,6 +44,11 @@ on:
       # provenance are preserved and are independent of any token.
       DOCKERHUB_USERNAME: {required: false}   # optional; full-mode pull rate limits
       DOCKERHUB_TOKEN:    {required: false}
+      # The pgEdge repositories authenticate clients with mutual TLS. Optional:
+      # preview mode installs nothing, so a caller that only previews needs no
+      # certificate; full mode without one leaves the repositories disabled.
+      PGEDGE_REPO_CLIENT_CRT: {required: false}
+      PGEDGE_REPO_CLIENT_KEY: {required: false}
     outputs:
       execution_status:  {value: "${{ jobs.run.outputs.execution_status }}"}
       test_verdict:      {value: "${{ jobs.run.outputs.test_verdict }}"}
@@ -226,6 +231,12 @@ jobs:
         if: ${{ steps.preflight.outputs.rc == '0' }}   # skip when execution_mode is invalid
         continue-on-error: true          # handle framework failure -> summarize anyway
         env:                             # pass inputs via env + build a Bash array (injection-safe)
+          # The pgEdge repositories authenticate clients with mutual TLS; the
+          # aspects read these and hand them to pgedge-subscription-manager.
+          # Only for full mode: a preview installs nothing, so neither the
+          # dry-run framework nor its children should ever see the key.
+          PGEDGE_REPO_CLIENT_CRT: ${{ inputs.execution_mode == 'full' && secrets.PGEDGE_REPO_CLIENT_CRT || '' }}
+          PGEDGE_REPO_CLIENT_KEY: ${{ inputs.execution_mode == 'full' && secrets.PGEDGE_REPO_CLIENT_KEY || '' }}
           IN_PG: ${{ inputs.pg_major }}
           IN_FAMILY: ${{ inputs.family }}
           IN_ARCH: ${{ inputs.arch }}

@@ -112,7 +112,7 @@ def install_locally(platform, crt, key, sudo=False):
 
 
 NO_CERTIFICATE_MESSAGE = (
-    "No pgEdge client certificate supplied: the repositories stay disabled and "
-    "no pgEdge package will install. Set PGEDGE_REPO_CLIENT_CRT and "
-    "PGEDGE_REPO_CLIENT_KEY (or the _FILE variants)."
+    "No pgEdge client certificate supplied: the gated repositories stay "
+    "disabled, so no package from them will install. Set "
+    "PGEDGE_REPO_CLIENT_CRT and PGEDGE_REPO_CLIENT_KEY (or the _FILE variants)."
 )

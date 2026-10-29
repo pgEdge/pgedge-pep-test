@@ -472,7 +472,7 @@ The gate also refuses a completed result whose test runs do not all carry a matc
 - **Production gating is deferred.** `mode=gate` exists but has not been run on live CI; the POC runs `observe`.
 - **Single target per call**, and L2 requires explicit `expected_*` strings (no automatic derivation from buildnum/tag yet).
 - The live full-mode path has been validated for a **DEB** target; the RPM full-mode path is covered by unit tests but not yet run live.
-- **Repository access needs a client certificate.** The pgEdge repositories authenticate clients with mutual TLS, and `pgedge-release` ships its definitions disabled. PEP installs the pair through `pgedge-subscription-manager` when `PGEDGE_REPO_CLIENT_CRT` and `PGEDGE_REPO_CLIENT_KEY` are supplied; without them the repositories stay disabled and no pgEdge package installs. A calling workflow has to pass both for a full run.
+- **Repository access needs a client certificate.** The pgEdge repositories authenticate clients with mutual TLS, and `pgedge-release` ships its definitions disabled. PEP installs the pair through `pgedge-subscription-manager` when `PGEDGE_REPO_CLIENT_CRT` and `PGEDGE_REPO_CLIENT_KEY` are supplied; without them the repositories stay disabled, so no target package from the gated repositories installs. The `pgedge-release` bootstrap package itself still does: it comes from `downloads.pgedge.com`, which is ungated, because the gated repositories cannot serve what configures access to them. A calling workflow has to pass both for a full run.
 
 The next step is a real cross-repo caller in a component's release pipeline (report-only), which exercises this workflow end-to-end from the publishing side.
 
@@ -502,7 +502,7 @@ A release pipeline that builds and publishes packages calls `.github/workflows/p
     secrets:            # optional; withheld on simulated runs, and PEP forwards them only for full certification
       DOCKERHUB_USERNAME: ${{ needs.determine-repo-type.outputs.simulated == 'false' && secrets.DOCKERHUB_USERNAME || '' }}
       DOCKERHUB_TOKEN:    ${{ needs.determine-repo-type.outputs.simulated == 'false' && secrets.DOCKERHUB_TOKEN || '' }}
-      # The gated repositories; without these a full run installs nothing.
+      # The gated repositories; without these a full run cannot install its target packages.
       PGEDGE_REPO_CLIENT_CRT: ${{ needs.determine-repo-type.outputs.simulated == 'false' && secrets.PGEDGE_REPO_CLIENT_CRT || '' }}
       PGEDGE_REPO_CLIENT_KEY: ${{ needs.determine-repo-type.outputs.simulated == 'false' && secrets.PGEDGE_REPO_CLIENT_KEY || '' }}
 ```
@@ -511,7 +511,7 @@ A release pipeline that builds and publishes packages calls `.github/workflows/p
     A reusable workflow rejects a secret it does not declare, so the two
     repository secrets above only work once `v1_STABLE` points at a commit that
     declares them. Until then a caller passes the Docker Hub pair alone, and a
-    full run leaves the repositories disabled.
+    full run leaves the gated repositories disabled.
 
 Each package job also keeps its `[pep-cell:<cell_id>]` name marker and its `pep-package-receipt` step, pinned to a full commit SHA, so evidence is recorded where each package is built. The receipt pin does not have to match the commit `v1_STABLE` points to (see [Stable channel](#stable-channel-v1_stable)).
 

@@ -82,7 +82,7 @@ def _result_message(repo, enabled):
         return f"Repository configured successfully (repo={repo})"
     return (
         f"Repository defined (repo={repo}) but left disabled: no client "
-        f"certificate was supplied, so no pgEdge package will install"
+        f"certificate was supplied, so no package from it will install"
     )
 
 

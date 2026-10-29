@@ -16,6 +16,7 @@ import sys
 from pathlib import Path
 
 import docker
+import dotenv
 import paramiko
 import pytest
 
@@ -47,7 +48,8 @@ class _Stream:
 def ssh(monkeypatch):
     """Install a fake paramiko.SSHClient answering each exec_command from ``replies`` in turn:
     (stdout, stderr, exit_code) or an exception to raise. Returns the record of what was sent."""
-    monkeypatch.delenv("AWS_SSH_KEY_PATH", raising=False)
+    # Empty, not deleted: load_dotenv() (run by the ACE import) keeps variables already set.
+    monkeypatch.setenv("AWS_SSH_KEY_PATH", "")
     monkeypatch.setattr(ssh_executor.time, "sleep", lambda seconds: None)
     record = {"replies": [], "sent": [], "connects": 0}
 
@@ -157,3 +159,22 @@ def test_the_ace_version_check_rejects_a_wrong_version_over_ssh(monkeypatch, ssh
     outcome, message = run_ace_over_ssh(monkeypatch, ssh, "3.0.0-rc.3", (b"ace version 3.0.0-rc.2\n", b"", 0))
     assert outcome == "failed"
     assert "3.0.0-rc.2" in message
+
+
+def test_a_dotenv_key_path_loaded_by_the_ace_import_reads_no_private_key(monkeypatch, ssh, tmp_path):
+    """The ACE module calls load_dotenv() on import, after the fixture has run. A .env that sets
+    AWS_SSH_KEY_PATH (synthetic here) must not lead the executor to read a private key file."""
+    env_file = tmp_path / ".env"
+    env_file.write_text("AWS_SSH_KEY_PATH=%s\n" % (tmp_path / "synthetic-key.pem"))
+    load_dotenv = dotenv.load_dotenv
+    monkeypatch.setattr(dotenv, "load_dotenv", lambda *args, **kwargs: load_dotenv(env_file))
+    key_reads = []
+
+    def read_key(path, *args, **kwargs):
+        key_reads.append(path)
+        raise AssertionError("private key file read: %s" % path)
+
+    monkeypatch.setattr(ssh_executor.paramiko.RSAKey, "from_private_key_file", read_key)
+    reply = (b"ace version 3.0.0-rc.3\n", b"", 0)
+    assert run_ace_over_ssh(monkeypatch, ssh, "3.0.0-rc.3", reply) == ("passed", "")
+    assert key_reads == []

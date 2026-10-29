@@ -22,6 +22,7 @@ put the private key in CI logs.
 
 import io
 import os
+import subprocess
 import tarfile
 from pathlib import Path
 
@@ -65,22 +66,49 @@ def tar_payload(crt, key):
     return buf.getvalue()
 
 
-def install_script(platform):
-    """Shell that reads the tar on stdin and hands the pair to the manager.
+def _enable_script(cert_dir, unpack):
+    """Fix the modes and hand the pair to pgedge-subscription-manager.
 
     Carries no secret, so it is safe for a runner that echoes commands.
     """
-    cert_dir = CERT_DIR[platform]
+    unpack_step = f"tar -x -C {cert_dir} client.crt client.key; " if unpack else ""
     return (
         "set -e; "
         f"install -d -m 0755 {cert_dir}; "
         "umask 077; "
-        f"tar -x -C {cert_dir} client.crt client.key; "
+        f"{unpack_step}"
         f"chmod 0644 {cert_dir}/client.crt; "
         f"chmod 0600 {cert_dir}/client.key; "
         f"pgedge-subscription-manager install "
         f"{cert_dir}/client.crt {cert_dir}/client.key --force"
     )
+
+
+def install_on_target(target, platform, crt, key):
+    """Install on a docker container or SSHExecutor.
+
+    The pair goes over put_archive, so it never appears in a command.
+    """
+    cert_dir = CERT_DIR[platform]
+    exit_code, output = target.exec_run(
+        ["/bin/sh", "-c", f"install -d -m 0755 {cert_dir}"], user="root")
+    if exit_code != 0:
+        raise Exception(f"Could not create {cert_dir}: {output.decode()}")
+
+    target.put_archive(cert_dir, tar_payload(crt, key))
+
+    exit_code, output = target.exec_run(
+        ["/bin/sh", "-c", _enable_script(cert_dir, unpack=False)], user="root")
+    if exit_code != 0:
+        raise Exception(f"Failed to install client certificate: {output.decode()}")
+
+
+def install_locally(platform, crt, key, sudo=False):
+    """Install on this host. The tar goes on stdin, never into argv."""
+    cert_dir = CERT_DIR[platform]
+    argv = (["sudo"] if sudo else []) + [
+        "sh", "-c", _enable_script(cert_dir, unpack=True)]
+    subprocess.run(argv, input=tar_payload(crt, key), check=True)
 
 
 NO_CERTIFICATE_MESSAGE = (

@@ -91,10 +91,12 @@ def install_pgedge_repo():
     )
 
     # The repositories ship disabled and authenticate clients with mutual TLS.
+    # Not through run_cmd(): it echoes the command, which would put the private
+    # key in the logs. The tar goes on stdin instead.
     crt, key = pgedge_client_cert.read_client_certificate()
     if crt and key:
-        run_cmd("sh -c " + repr(
-            pgedge_client_cert.install_script(crt, key, "rhel")))
+        print("\n>>> Installing the pgEdge client certificate")
+        pgedge_client_cert.install_locally("rhel", crt, key)
     else:
         print(pgedge_client_cert.NO_CERTIFICATE_MESSAGE)
 

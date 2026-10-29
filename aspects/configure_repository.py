@@ -94,12 +94,7 @@ def _install_client_certificate(container, platform):
         print(f" {pgedge_client_cert.NO_CERTIFICATE_MESSAGE}")
         return False
 
-    exit_code, output = container.exec_run(
-        ["/bin/sh", "-c", pgedge_client_cert.install_script(crt, key, platform)],
-        user="root",
-    )
-    if exit_code != 0:
-        raise Exception(f"Failed to install client certificate: {output.decode()}")
+    pgedge_client_cert.install_on_target(container, platform, crt, key)
 
     print(" Installed client certificate, pgEdge repositories enabled")
     return True

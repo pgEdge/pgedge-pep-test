@@ -233,8 +233,10 @@ jobs:
         env:                             # pass inputs via env + build a Bash array (injection-safe)
           # The pgEdge repositories authenticate clients with mutual TLS; the
           # aspects read these and hand them to pgedge-subscription-manager.
-          PGEDGE_REPO_CLIENT_CRT: ${{ secrets.PGEDGE_REPO_CLIENT_CRT }}
-          PGEDGE_REPO_CLIENT_KEY: ${{ secrets.PGEDGE_REPO_CLIENT_KEY }}
+          # Only for full mode: a preview installs nothing, so neither the
+          # dry-run framework nor its children should ever see the key.
+          PGEDGE_REPO_CLIENT_CRT: ${{ inputs.execution_mode == 'full' && secrets.PGEDGE_REPO_CLIENT_CRT || '' }}
+          PGEDGE_REPO_CLIENT_KEY: ${{ inputs.execution_mode == 'full' && secrets.PGEDGE_REPO_CLIENT_KEY || '' }}
           IN_PG: ${{ inputs.pg_major }}
           IN_FAMILY: ${{ inputs.family }}
           IN_ARCH: ${{ inputs.arch }}

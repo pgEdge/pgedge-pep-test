@@ -105,7 +105,11 @@ def setup_debian(os_id="", major="", target=None):
         "-o \"$d/pgedge-release.deb\"; "
         "sudo apt-get install -y \"$d/pgedge-release.deb\""
     )
-    run(cmd)
+    # A nonzero status here means no sources file and no
+    # pgedge-subscription-manager; carrying on would report prerequisite
+    # success and fail much later with "Unable to locate package".
+    if run(cmd):
+        raise Exception("Failed to install the pgEdge repository package")
 
     # The repository ships disabled and authenticates clients with mutual TLS.
     # The pair never goes through run(): every executor here echoes the command

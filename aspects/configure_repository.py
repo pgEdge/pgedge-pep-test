@@ -4,6 +4,8 @@ Generic repository configuration module for pgedge packages.
 Supports both RHEL-based and Debian-based distributions.
 """
 
+from aspects import pgedge_client_cert
+
 
 def _wait_for_apt_lock(container, timeout=120):
     """
@@ -74,10 +76,41 @@ def configure_pgedge_repository(container, repo="release"):
         return _configure_debian_repo(container, repo)
 
 
+def _result_message(repo, enabled):
+    """Say plainly whether the repositories came out usable."""
+    if enabled:
+        return f"Repository configured successfully (repo={repo})"
+    return (
+        f"Repository defined (repo={repo}) but left disabled: no client "
+        f"certificate was supplied, so no pgEdge package will install"
+    )
+
+
+def _install_client_certificate(container, platform):
+    """Install the client certificate and enable the gated repositories."""
+
+    crt, key = pgedge_client_cert.read_client_certificate()
+    if not crt or not key:
+        print(f" {pgedge_client_cert.NO_CERTIFICATE_MESSAGE}")
+        return False
+
+    exit_code, output = container.exec_run(
+        ["/bin/sh", "-c", pgedge_client_cert.install_script(crt, key, platform)],
+        user="root",
+    )
+    if exit_code != 0:
+        raise Exception(f"Failed to install client certificate: {output.decode()}")
+
+    print(" Installed client certificate, pgEdge repositories enabled")
+    return True
+
+
 def _configure_rhel_repo(container, repo):
     """Configure repository for RHEL-based distributions."""
 
-    repo_url = "https://dnf.pgedge.com/reporpm/pgedge-release-latest.noarch.rpm"
+    # downloads.pgedge.com, not dnf.pgedge.com: the gated repository cannot
+    # serve the package that configures access to it.
+    repo_url = "https://downloads.pgedge.com/reporpm/pgedge-release-latest.noarch.rpm"
     exit_code, output = container.exec_run(
         ["/bin/sh", "-c", f"dnf install -y {repo_url}"], user="root"
     )
@@ -95,7 +128,9 @@ def _configure_rhel_repo(container, repo):
             raise Exception(f"Failed to switch repo to {repo}: {output.decode()}")
         print(f" Repository switched to {repo}")
 
-    return True, "rhel", f"Repository configured successfully (repo={repo})"
+    enabled = _install_client_certificate(container, "rhel")
+
+    return True, "rhel", _result_message(repo, enabled)
 
 
 def _configure_debian_repo(container, repo):
@@ -104,11 +139,21 @@ def _configure_debian_repo(container, repo):
     # Wait for any background apt process before touching dpkg/apt
     _wait_for_apt_lock(container)
 
-    deb_url = "https://apt.pgedge.com/repodeb/pgedge-release_latest_all.deb"
+    # downloads.pgedge.com, not apt.pgedge.com -- see _configure_rhel_repo.
+    deb_url = "https://downloads.pgedge.com/repodeb/pgedge-release_latest_all.deb"
+    # apt-get, not dpkg -i: the package depends on lsb-release, and dpkg
+    # leaves it unpacked-but-unconfigured when a dependency is missing. That
+    # wrote no sources file and no pgedge-subscription-manager, which the
+    # trailing "|| true" then hid -- the tests failed much later with
+    # "Unable to locate package".
+    # -f so an HTTP error is a failure rather than an error page saved under a
+    # .deb name; a private directory so the download cannot be pre-placed, and
+    # removed either way.
     install_cmd = (
-        f"curl -sSL {deb_url} -o /tmp/pgedge-release.deb && "
-        f"dpkg -i /tmp/pgedge-release.deb && "
-        f"rm -f /tmp/pgedge-release.deb || true"
+        'set -e; d=$(mktemp -d); '
+        'trap \'rm -rf "$d"\' EXIT; '
+        f'curl -fsSL {deb_url} -o "$d/pgedge-release.deb"; '
+        'apt-get install -y "$d/pgedge-release.deb"'
     )
     exit_code, output = container.exec_run(["/bin/sh", "-c", install_cmd], user="root")
     if exit_code != 0:
@@ -126,6 +171,11 @@ def _configure_debian_repo(container, repo):
             raise Exception(f"Failed to switch repo to {repo}: {output.decode()}")
         print(f" Repository switched to {repo}")
 
+    # Before apt-get update: pgedge-release points apt at a host it cannot
+    # reach without the certificate, and an unreachable source fails the whole
+    # update, not just pgEdge's part of it.
+    enabled = _install_client_certificate(container, "ubuntu")
+
     # Wait again before apt-get update in case dpkg triggered background work
     _wait_for_apt_lock(container)
 
@@ -137,4 +187,4 @@ def _configure_debian_repo(container, repo):
 
     print(" Package lists updated (apt-get update)")
 
-    return True, "ubuntu", f"Repository configured successfully (repo={repo})"
+    return True, "ubuntu", _result_message(repo, enabled)

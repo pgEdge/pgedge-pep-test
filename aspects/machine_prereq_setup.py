@@ -4,6 +4,8 @@ import sys
 import os
 import re
 
+from aspects import pgedge_client_cert
+
 # Default command executor for standalone execution
 def default_run(cmd):
     print(f"\n>>> Running: {cmd}")
@@ -90,14 +92,28 @@ def setup_debian(os_id="", major=""):
         # All Debian versions: sq is in the standard main repos
         run("DEBIAN_FRONTEND=noninteractive apt-get install -y sq")
 
-    # Add pgEdge repo
+    # Add pgEdge repo. downloads.pgedge.com, not apt.pgedge.com: the gated
+    # repository cannot serve the package that configures access to it.
+    #
+    # apt-get, not dpkg -i: the package depends on lsb-release, and dpkg leaves
+    # it unpacked-but-unconfigured when that is missing -- no sources file and
+    # no pgedge-subscription-manager. A trailing "|| true" would hide that and
+    # the failure would surface much later as "Unable to locate package".
     cmd = (
-        "curl -sSL https://apt.pgedge.com/repodeb/pgedge-release_latest_all.deb "
-        "-o /tmp/pgedge-release.deb && "
-        "sudo dpkg -i /tmp/pgedge-release.deb && "
-        "rm -f /tmp/pgedge-release.deb || true"
+        "set -e; d=$(mktemp -d); trap 'rm -rf \"$d\"' EXIT; "
+        "curl -fsSL https://downloads.pgedge.com/repodeb/pgedge-release_latest_all.deb "
+        "-o \"$d/pgedge-release.deb\"; "
+        "sudo apt-get install -y \"$d/pgedge-release.deb\""
     )
     run(cmd)
+
+    # The repository ships disabled and authenticates clients with mutual TLS.
+    crt, key = pgedge_client_cert.read_client_certificate()
+    if crt and key:
+        run("sudo sh -c " + repr(
+            pgedge_client_cert.install_script(crt, key, "ubuntu")))
+    else:
+        print(pgedge_client_cert.NO_CERTIFICATE_MESSAGE)
 
 
 def disable_pgdg_repositories():

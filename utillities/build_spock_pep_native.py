@@ -8,6 +8,10 @@ import subprocess
 import sys
 import os
 
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), '..'))
+
+from aspects import pgedge_client_cert
+
 
 def run_cmd(cmd, check=True, shell=True):
     """Execute a shell command and return the result."""
@@ -78,7 +82,21 @@ def install_pgedge_repo():
     print("Step 2: Installing pgEdge repository...")
     print("=" * 60)
 
-    run_cmd("dnf install -y https://dnf.pgedge.com/reporpm/pgedge-release-latest.noarch.rpm", check=False)
+    # downloads.pgedge.com, not dnf.pgedge.com: the gated repository cannot
+    # serve the package that configures access to it.
+    run_cmd(
+        "dnf install -y "
+        "https://downloads.pgedge.com/reporpm/pgedge-release-latest.noarch.rpm",
+        check=False,
+    )
+
+    # The repositories ship disabled and authenticate clients with mutual TLS.
+    crt, key = pgedge_client_cert.read_client_certificate()
+    if crt and key:
+        run_cmd("sh -c " + repr(
+            pgedge_client_cert.install_script(crt, key, "rhel")))
+    else:
+        print(pgedge_client_cert.NO_CERTIFICATE_MESSAGE)
 
 
 def install_postgresql(pg_version):

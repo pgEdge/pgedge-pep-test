@@ -1,0 +1,236 @@
+name: PEP dde10a5 repository-authentication validation (temporary)
+# Temporary, branch-scoped caller; never merged. Direct pep-integration.yml legs at main dde10a5
+# (#37). Four full runs install existing, already-published RAG and Spock packages from the
+# release channel, then preview, missing-pair, incomplete-pair and rejected-pair runs check the
+# repository-authentication classification. Nothing is built or published.
+#
+# This proves each leg's behaviour on its own. It is NOT evidence for the product caller chain
+# (release workflow -> pep-release-certify -> pep-certify); the RAG chain check covers that.
+# The rejected-pair leg passes synthetic, non-PEM literals, never a credential. Observe mode
+# keeps failing outcomes green, so `assert` checks the uploaded evidence, not job colours.
+on:
+  push:
+    branches: [validate/pep-dde10a5-repo-auth]
+permissions: {}
+
+jobs:
+  rag-rpm:
+    name: "rag-rpm: oel9-amd64 pgedge-rag-server2 2.0.0-1.el9 (release)"
+    permissions: {contents: read}
+    uses: pgEdge/pgedge-pep-test/.github/workflows/pep-integration.yml@dde10a527dfae56a3c85e278efb460f86275e16f
+    with:
+      component: rag
+      package_name: pgedge-rag-server2
+      channel: release
+      expected_version: "2.0.0"
+      expected_buildnum: "1"
+      expected_rpm: "2.0.0-1.el9"
+      container_alias: oel9-amd64
+      pg_major: "17"
+      family: rpm
+      arch: amd64
+      scenario: certification
+      mode: observe
+      execution_mode: full
+      invocation_id: vdde10a5-rag-rpm
+      pep_implementation_ref: dde10a527dfae56a3c85e278efb460f86275e16f
+    secrets:
+      PGEDGE_REPO_CLIENT_CRT: ${{ secrets.PGEDGE_REPO_CLIENT_CRT }}
+      PGEDGE_REPO_CLIENT_KEY: ${{ secrets.PGEDGE_REPO_CLIENT_KEY }}
+
+  rag-deb:
+    name: "rag-deb: debian12-amd64 pgedge-rag-server2 2.0.0-1.bookworm (release)"
+    permissions: {contents: read}
+    uses: pgEdge/pgedge-pep-test/.github/workflows/pep-integration.yml@dde10a527dfae56a3c85e278efb460f86275e16f
+    with:
+      component: rag
+      package_name: pgedge-rag-server2
+      channel: release
+      expected_version: "2.0.0"
+      expected_buildnum: "1"
+      expected_deb: "2.0.0-1.bookworm"
+      container_alias: debian12-amd64   # certification counterpart (pipeline/pep_exec_catalog.json)
+      pg_major: "17"
+      family: deb
+      arch: amd64
+      scenario: certification
+      mode: observe
+      execution_mode: full
+      invocation_id: vdde10a5-rag-deb
+      pep_implementation_ref: dde10a527dfae56a3c85e278efb460f86275e16f
+    secrets:
+      PGEDGE_REPO_CLIENT_CRT: ${{ secrets.PGEDGE_REPO_CLIENT_CRT }}
+      PGEDGE_REPO_CLIENT_KEY: ${{ secrets.PGEDGE_REPO_CLIENT_KEY }}
+
+  spock-rpm:
+    name: "spock-rpm: oel9-amd64 PG17 pgedge-spock50_17 5.0.13-1.el9 (release)"
+    permissions: {contents: read}
+    uses: pgEdge/pgedge-pep-test/.github/workflows/pep-integration.yml@dde10a527dfae56a3c85e278efb460f86275e16f
+    with:
+      component: spock
+      package_name: pgedge-spock50_17
+      channel: release
+      expected_version: "5.0.13"
+      expected_buildnum: "1"
+      expected_rpm: "5.0.13-1.el9"
+      container_alias: oel9-amd64
+      pg_major: "17"
+      family: rpm
+      arch: amd64
+      scenario: certification
+      mode: observe
+      execution_mode: full
+      invocation_id: vdde10a5-spock-rpm
+      pep_implementation_ref: dde10a527dfae56a3c85e278efb460f86275e16f
+    secrets:
+      PGEDGE_REPO_CLIENT_CRT: ${{ secrets.PGEDGE_REPO_CLIENT_CRT }}
+      PGEDGE_REPO_CLIENT_KEY: ${{ secrets.PGEDGE_REPO_CLIENT_KEY }}
+
+  spock-deb:
+    name: "spock-deb: debian12-amd64 PG17 pgedge-postgresql-17-spock50 5.0.13-1.bookworm (release)"
+    permissions: {contents: read}
+    uses: pgEdge/pgedge-pep-test/.github/workflows/pep-integration.yml@dde10a527dfae56a3c85e278efb460f86275e16f
+    with:
+      component: spock
+      package_name: pgedge-postgresql-17-spock50
+      channel: release
+      expected_version: "5.0.13"
+      expected_buildnum: "1"
+      expected_deb: "5.0.13-1.bookworm"
+      container_alias: debian12-amd64   # certification counterpart (pipeline/pep_exec_catalog.json)
+      pg_major: "17"
+      family: deb
+      arch: amd64
+      scenario: certification
+      mode: observe
+      execution_mode: full
+      invocation_id: vdde10a5-spock-deb
+      pep_implementation_ref: dde10a527dfae56a3c85e278efb460f86275e16f
+    secrets:
+      PGEDGE_REPO_CLIENT_CRT: ${{ secrets.PGEDGE_REPO_CLIENT_CRT }}
+      PGEDGE_REPO_CLIENT_KEY: ${{ secrets.PGEDGE_REPO_CLIENT_KEY }}
+
+  # Preview with the pair passed anyway: PEP must withhold it (the run step sees it empty).
+  preview:
+    name: "preview: debian12-amd64 PG17 pgedge-postgresql-17-spock50 (pair passed, must be withheld)"
+    permissions: {contents: read}
+    uses: pgEdge/pgedge-pep-test/.github/workflows/pep-integration.yml@dde10a527dfae56a3c85e278efb460f86275e16f
+    with:
+      component: spock
+      package_name: pgedge-postgresql-17-spock50
+      channel: release
+      expected_version: "5.0.13"
+      expected_buildnum: "1"
+      expected_deb: "5.0.13-1.bookworm"
+      container_alias: debian12-amd64
+      pg_major: "17"
+      family: deb
+      arch: amd64
+      scenario: certification
+      mode: observe
+      execution_mode: preview
+      invocation_id: vdde10a5-preview
+      pep_implementation_ref: dde10a527dfae56a3c85e278efb460f86275e16f
+    secrets:
+      PGEDGE_REPO_CLIENT_CRT: ${{ secrets.PGEDGE_REPO_CLIENT_CRT }}
+      PGEDGE_REPO_CLIENT_KEY: ${{ secrets.PGEDGE_REPO_CLIENT_KEY }}
+
+  # Full run, no pair: infrastructure failure before any test.
+  missing:
+    name: "missing: debian12-amd64 PG17 pgedge-postgresql-17-spock50 (no pair)"
+    permissions: {contents: read}
+    uses: pgEdge/pgedge-pep-test/.github/workflows/pep-integration.yml@dde10a527dfae56a3c85e278efb460f86275e16f
+    with:
+      component: spock
+      package_name: pgedge-postgresql-17-spock50
+      channel: release
+      expected_version: "5.0.13"
+      expected_buildnum: "1"
+      expected_deb: "5.0.13-1.bookworm"
+      container_alias: debian12-amd64
+      pg_major: "17"
+      family: deb
+      arch: amd64
+      scenario: certification
+      mode: observe
+      execution_mode: full
+      invocation_id: vdde10a5-missing
+      pep_implementation_ref: dde10a527dfae56a3c85e278efb460f86275e16f
+
+  # Full run, certificate only: infrastructure failure before any test.
+  incomplete:
+    name: "incomplete: debian12-amd64 PG17 pgedge-postgresql-17-spock50 (certificate only)"
+    permissions: {contents: read}
+    uses: pgEdge/pgedge-pep-test/.github/workflows/pep-integration.yml@dde10a527dfae56a3c85e278efb460f86275e16f
+    with:
+      component: spock
+      package_name: pgedge-postgresql-17-spock50
+      channel: release
+      expected_version: "5.0.13"
+      expected_buildnum: "1"
+      expected_deb: "5.0.13-1.bookworm"
+      container_alias: debian12-amd64
+      pg_major: "17"
+      family: deb
+      arch: amd64
+      scenario: certification
+      mode: observe
+      execution_mode: full
+      invocation_id: vdde10a5-incomplete
+      pep_implementation_ref: dde10a527dfae56a3c85e278efb460f86275e16f
+    secrets:
+      PGEDGE_REPO_CLIENT_CRT: ${{ secrets.PGEDGE_REPO_CLIENT_CRT }}
+
+  # Full run, synthetic non-PEM literals (not credentials): pgedge-subscription-manager rejects
+  # them, which must be an infrastructure failure, and neither literal may reach a report.
+  rejected:
+    name: "rejected: debian12-amd64 PG17 pgedge-postgresql-17-spock50 (synthetic pair)"
+    permissions: {contents: read}
+    uses: pgEdge/pgedge-pep-test/.github/workflows/pep-integration.yml@dde10a527dfae56a3c85e278efb460f86275e16f
+    with:
+      component: spock
+      package_name: pgedge-postgresql-17-spock50
+      channel: release
+      expected_version: "5.0.13"
+      expected_buildnum: "1"
+      expected_deb: "5.0.13-1.bookworm"
+      container_alias: debian12-amd64
+      pg_major: "17"
+      family: deb
+      arch: amd64
+      scenario: certification
+      mode: observe
+      execution_mode: full
+      invocation_id: vdde10a5-rejected
+      pep_implementation_ref: dde10a527dfae56a3c85e278efb460f86275e16f
+    secrets:
+      PGEDGE_REPO_CLIENT_CRT: ${{ 'synthetic-validation-certificate c3ludGhldGljLWNlcnQ not-a-pem' }}
+      PGEDGE_REPO_CLIENT_KEY: ${{ 'synthetic-validation-key c3ludGhldGljLWtleQ not-a-pem' }}
+
+  assert:
+    name: assert validation evidence (8 legs)
+    needs: [rag-rpm, rag-deb, spock-rpm, spock-deb, preview, missing, incomplete, rejected]
+    if: ${{ always() }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: read       # the verifier script on this branch
+      actions: read        # run metadata (referenced_workflows), this attempt's jobs, called-job logs
+    env:
+      NEEDS_JSON: ${{ toJSON(needs) }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Check out the verifier
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          sparse-checkout: .github/validation
+          persist-credentials: false
+      - name: Download this run's summaries (current attempt only)
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131  # v7.0.0
+        with:
+          pattern: pep-summary-*-vdde10a5-*-r${{ github.run_number }}-a${{ github.run_attempt }}
+          path: summaries
+      # Expected identities, checksums and classifications live in the script, which is
+      # exercised offline against fixtures before this branch is pushed.
+      - name: Check every leg from evidence, not job colour
+        run: python3 .github/validation/verify_direct.py summaries

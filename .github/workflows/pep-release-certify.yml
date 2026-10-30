@@ -26,8 +26,11 @@
 #   * <family>_publication is that family's publication job result
 #     (success|failure|cancelled|skipped); it may be omitted only when the detector
 #     matrix has no cells for that family;
-#   * only the optional Docker Hub secrets are accepted; they are forwarded to
-#     pep-certify only for full (non-simulated) certification.
+#   * the only secrets accepted are the optional Docker Hub pair and the
+#     repository client certificate pair (PGEDGE_REPO_CLIENT_CRT/KEY), which
+#     full certification needs: a full run without it is an infrastructure
+#     failure. Both are forwarded to pep-certify only for full (non-simulated)
+#     certification.
 # A failed certification fails the caller's run, but never changes publication,
 # which has already happened.
 # =============================================================================

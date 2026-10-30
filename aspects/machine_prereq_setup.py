@@ -4,6 +4,8 @@ import sys
 import os
 import re
 
+from aspects import pgedge_client_cert
+
 # Default command executor for standalone execution
 def default_run(cmd):
     print(f"\n>>> Running: {cmd}")
@@ -50,7 +52,7 @@ def get_os_info():
     return os_id.lower(), major
 
 
-def setup_debian(os_id="", major=""):
+def setup_debian(os_id="", major="", target=None):
     print(f"\n=== Debian/Ubuntu Prerequisites (os={os_id or '?'}, major={major or '?'}) ===")
 
     # Pre-configure timezone to Asia/Karachi to prevent tzdata from prompting
@@ -90,14 +92,37 @@ def setup_debian(os_id="", major=""):
         # All Debian versions: sq is in the standard main repos
         run("DEBIAN_FRONTEND=noninteractive apt-get install -y sq")
 
-    # Add pgEdge repo
+    # Add pgEdge repo. downloads.pgedge.com, not apt.pgedge.com: the gated
+    # repository cannot serve the package that configures access to it.
+    #
+    # apt-get, not dpkg -i: the package depends on lsb-release, and dpkg leaves
+    # it unpacked-but-unconfigured when that is missing -- no sources file and
+    # no pgedge-subscription-manager. A trailing "|| true" would hide that and
+    # the failure would surface much later as "Unable to locate package".
     cmd = (
-        "curl -sSL https://apt.pgedge.com/repodeb/pgedge-release_latest_all.deb "
-        "-o /tmp/pgedge-release.deb && "
-        "sudo dpkg -i /tmp/pgedge-release.deb && "
-        "rm -f /tmp/pgedge-release.deb || true"
+        "set -e; d=$(mktemp -d); trap 'rm -rf \"$d\"' EXIT; "
+        "curl -fsSL https://downloads.pgedge.com/repodeb/pgedge-release_latest_all.deb "
+        "-o \"$d/pgedge-release.deb\"; "
+        "sudo apt-get install -y \"$d/pgedge-release.deb\""
     )
-    run(cmd)
+    # A nonzero status here means no sources file and no
+    # pgedge-subscription-manager; carrying on would report prerequisite
+    # success and fail much later with "Unable to locate package".
+    if run(cmd):
+        raise Exception("Failed to install the pgEdge repository package")
+
+    # The repository ships disabled and authenticates clients with mutual TLS.
+    # The pair never goes through run(): every executor here echoes the command
+    # it is given, which would put the private key in the logs.
+    crt, key = pgedge_client_cert.read_client_certificate()
+    if not (crt and key):
+        print(pgedge_client_cert.NO_CERTIFICATE_MESSAGE)
+    elif target is not None:
+        pgedge_client_cert.install_on_target(target, "ubuntu", crt, key)
+        print("Installed the pgEdge client certificate")
+    else:
+        pgedge_client_cert.install_locally("ubuntu", crt, key, sudo=True)
+        print("Installed the pgEdge client certificate")
 
 
 def disable_pgdg_repositories():
@@ -541,7 +566,7 @@ def install_prerequisites_on_container(container):
             # Ensure no background apt process holds the lock before setup_debian runs
             from aspects.configure_repository import _wait_for_apt_lock
             _wait_for_apt_lock(container)
-            setup_debian(os_id=os_id, major=major)
+            setup_debian(os_id=os_id, major=major, target=container)
         elif os_id in ["rhel", "redhat", "rhelserver"]:
             if major == "9":
                 setup_rhel9()

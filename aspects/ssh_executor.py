@@ -7,10 +7,31 @@ work unchanged against live SSH targets.
 """
 import io
 import os
+import shlex
+import socket
 import tarfile
 import time
 
 import paramiko
+
+
+class _Redacted(bytes):
+    """Bytes whose repr() hides them in a traceback through PEP's own frames."""
+    __slots__ = ()
+
+    def __repr__(self):
+        return "<redacted>"
+
+
+class RootWriteError(OSError):
+    """write_root_file failed. The message names the operation, path, host and
+    error class or exit status, never the data, and nothing is chained to it."""
+    payload_free = True
+
+
+class RootWriteTimeout(RuntimeError):
+    """write_root_file timed out; see RootWriteError."""
+    payload_free = True
 
 
 class SSHExecutor:
@@ -45,12 +66,14 @@ class SSHExecutor:
         """AWS instances are assumed to be running — mirrors container.status."""
         return "running"
 
-    def exec_run(self, command, user="root", timeout=300, **kwargs):
+    def exec_run(self, command, user="root", timeout=300, demux=False, **kwargs):
         """
         Execute a command on the remote host.
 
         Matches docker-py's container.exec_run() return value:
             (exit_code: int, output: bytes)
+        or, with demux=True, stdout and stderr kept apart (None when empty):
+            (exit_code: int, (stdout: bytes | None, stderr: bytes | None))
 
         The `user` parameter maps to sudo -u <user> or plain sudo for root,
         mirroring Docker's user= behaviour.
@@ -83,6 +106,8 @@ class SSHExecutor:
                 output = stdout.read()
                 err_output = stderr.read()
                 exit_code = stdout.channel.recv_exit_status()
+                if demux:
+                    return exit_code, (output or None, err_output or None)
                 if err_output:
                     output = output + err_output
                 return exit_code, output
@@ -156,6 +181,78 @@ class SSHExecutor:
                     sftp.putfo(f, remote_path)
         finally:
             sftp.close()
+
+    def write_root_file(self, path, data, mode, timeout=60):
+        """Write ``data`` to the single file ``path`` as root, with ``mode``.
+
+        For secrets such as the repository client key, which put_archive cannot
+        deliver: SFTP writes as the login user, so it cannot write a root-owned
+        directory, and where it could, the file would be the user's and readable
+        until a later chmod. Here the data goes on stdin to a root-owned file
+        that mktemp creates 0600 in the target's directory, then takes ``mode``
+        and replaces ``path`` with one rename, so no other user can read it at
+        any point. Neither the data nor anything derived from it is in the
+        command.
+
+        A failure raises RootWriteError or RootWriteTimeout, carrying the path,
+        host, and error class or exit status. They are raised after the
+        original error has been handled, so nothing is chained to them:
+        paramiko's frames hold the data (its Message repr() shows the packet
+        being sent), and its messages are not ours to vouch for. The data is
+        also <redacted> in this frame's own arguments.
+
+        ``path`` must be absolute and normalized, and must not be a directory,
+        so the one file it names is the only one written.
+        """
+        data = _Redacted(data)
+        if (not isinstance(path, str) or not path.startswith("/")
+                or os.path.normpath(path) != path or path == "/"
+                or any(c in path for c in "\0\n\r")):
+            raise ValueError(f"write_root_file needs an absolute, normalized path: {path!r}")
+        if isinstance(mode, bool) or not isinstance(mode, int) or not 0 <= mode <= 0o777:
+            raise ValueError(f"write_root_file needs a permission mode 0..0o777: {mode!r}")
+
+        # mv onto a directory (or a link to one) would move the file into it.
+        script = (
+            'set -e; umask 077; '
+            'if [ -d "$1" ]; then echo "$1 is a directory" >&2; exit 1; fi; '
+            't=$(mktemp "$(dirname "$1")/.pep-write.XXXXXX"); '
+            'trap \'rm -f "$t"\' EXIT; '
+            'cat > "$t"; chmod "$2" "$t"; mv -f "$t" "$1"; '
+            'trap - EXIT'
+        )
+        cmd = "sudo sh -c {} sh {} {:04o}".format(shlex.quote(script), shlex.quote(path), mode)
+
+        self._ensure_connected()
+        failure = channel = None
+        try:
+            stdin, stdout, stderr = self._client.exec_command(cmd, timeout=timeout)
+            channel = stdin.channel
+            stdin.write(data)
+            stdin.channel.shutdown_write()
+            # Read before waiting for the exit status, as exec_run does: the reads
+            # honour the channel timeout, recv_exit_status() does not.
+            stdout.channel.settimeout(timeout)
+            stdout.read()
+            err = stderr.read().decode(errors="replace").strip()
+            exit_code = stdout.channel.recv_exit_status()
+        except (TimeoutError, socket.timeout):
+            failure = RootWriteTimeout(
+                f"Writing {path} as root timed out after {timeout}s on {self._host}")
+        except Exception as exc:
+            failure = RootWriteError(
+                f"Writing {path} as root failed on {self._host}: {type(exc).__name__}")
+        if failure is not None:
+            # Raised here, outside the handler, so no traceback is chained to it.
+            try:
+                if channel is not None:
+                    channel.close()
+            except Exception:
+                pass
+            raise failure
+        if exit_code != 0:
+            raise RootWriteError(
+                f"Failed to write {path} as root on {self._host} (exit status {exit_code}): {err}")
 
     # ------------------------------------------------------------------
     # Connection management (internal)

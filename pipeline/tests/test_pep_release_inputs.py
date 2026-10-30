@@ -440,15 +440,20 @@ def test_adapter_calls_the_certifier_at_its_own_commit_with_its_existing_inputs(
     assert passed == _declared(CERTIFIER, "inputs")
 
 
-def test_only_docker_hub_secrets_are_forwarded_and_only_for_full_mode():
+def test_only_expected_secrets_are_forwarded_and_only_for_full_mode():
+    # DockerHub creds, plus the client certificate the gated pgEdge repositories
+    # require. Every one stays gated on full mode: a preview installs nothing and
+    # must never receive credentials.
+    expected = ["DOCKERHUB_USERNAME", "DOCKERHUB_TOKEN",
+                "PGEDGE_REPO_CLIENT_CRT", "PGEDGE_REPO_CLIENT_KEY"]
     assert "secrets: inherit" not in ADAPTER
-    assert _declared(ADAPTER, "secrets") == ["DOCKERHUB_USERNAME", "DOCKERHUB_TOKEN"]
+    assert _declared(ADAPTER, "secrets") == expected
     forwarded = _job(ADAPTER, "certify").split("    secrets:\n", 1)[1]
-    assert re.findall(r"^      ([A-Z_]+):", forwarded, re.M) == ["DOCKERHUB_USERNAME", "DOCKERHUB_TOKEN"]
-    for s in ("DOCKERHUB_USERNAME", "DOCKERHUB_TOKEN"):
+    assert re.findall(r"^      ([A-Z_]+):", forwarded, re.M) == expected
+    for s in expected:
         want = r"^      %s:\s+\$\{\{ needs\.normalize\.outputs\.execution_mode == 'full' && secrets\.%s \|\| '' \}\}$" % (s, s)
         assert re.search(want, forwarded, re.M), s
-    assert len(re.findall(r"secrets\.", ADAPTER)) == 2
+    assert len(re.findall(r"secrets\.", ADAPTER)) == len(expected)
 
 
 def test_summary_always_runs_and_cannot_change_the_outcome():

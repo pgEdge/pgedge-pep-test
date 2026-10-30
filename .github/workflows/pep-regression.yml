@@ -279,6 +279,10 @@ jobs:
         if: ${{ inputs.execution_mode == 'full' }}
         shell: bash
         env:
+          # The pgEdge repositories authenticate clients with mutual TLS; the
+          # aspects read these and hand them to pgedge-subscription-manager.
+          PGEDGE_REPO_CLIENT_CRT: ${{ secrets.PGEDGE_REPO_CLIENT_CRT }}
+          PGEDGE_REPO_CLIENT_KEY: ${{ secrets.PGEDGE_REPO_CLIENT_KEY }}
           IN_COMPONENTS: ${{ needs.plan.outputs.components }}
           IN_REPO:       ${{ inputs.repo       || 'release' }}
           CONTAINERS_OVERRIDE_INPUT: ${{ inputs.containers }}

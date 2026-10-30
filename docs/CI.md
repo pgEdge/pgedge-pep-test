@@ -472,7 +472,7 @@ The gate also refuses a completed result whose test runs do not all carry a matc
 - **Production gating is deferred.** `mode=gate` exists but has not been run on live CI; the POC runs `observe`.
 - **Single target per call**, and L2 requires explicit `expected_*` strings (no automatic derivation from buildnum/tag yet).
 - The live full-mode path has been validated for a **DEB** target; the RPM full-mode path is covered by unit tests but not yet run live.
-- **Repository access is unauthenticated.** Access restrictions and client certificates for the package repositories are planned but not enforced. Rolling them out is a shared infrastructure change across PEP and its calling workflows; PEP has no certificate handling today.
+- **Repository access needs a client certificate.** The pgEdge repositories authenticate clients with mutual TLS, and `pgedge-release` ships its definitions disabled. PEP installs the pair through `pgedge-subscription-manager` when `PGEDGE_REPO_CLIENT_CRT` and `PGEDGE_REPO_CLIENT_KEY` are supplied; without them the repositories stay disabled, so no target package from the gated repositories installs. The `pgedge-release` bootstrap package itself still does: it comes from `downloads.pgedge.com`, which is ungated, because the gated repositories cannot serve what configures access to them. A calling workflow has to pass both for a full run. A full run without the complete pair does not start its tests and is reported as an infrastructure failure, as is one whose certificate install or first refresh of the enabled repositories fails; later package failures stay product results, and a preview needs no certificate. Over SSH (`--target aws`) the pair is written as root from stdin, the key created `0600` before its first byte, never through SFTP.
 
 The next step is a real cross-repo caller in a component's release pipeline (report-only), which exercises this workflow end-to-end from the publishing side.
 
@@ -502,7 +502,16 @@ A release pipeline that builds and publishes packages calls `.github/workflows/p
     secrets:            # optional; withheld on simulated runs, and PEP forwards them only for full certification
       DOCKERHUB_USERNAME: ${{ needs.determine-repo-type.outputs.simulated == 'false' && secrets.DOCKERHUB_USERNAME || '' }}
       DOCKERHUB_TOKEN:    ${{ needs.determine-repo-type.outputs.simulated == 'false' && secrets.DOCKERHUB_TOKEN || '' }}
+      # The gated repositories; without these a full run cannot install its target packages.
+      PGEDGE_REPO_CLIENT_CRT: ${{ needs.determine-repo-type.outputs.simulated == 'false' && secrets.PGEDGE_REPO_CLIENT_CRT || '' }}
+      PGEDGE_REPO_CLIENT_KEY: ${{ needs.determine-repo-type.outputs.simulated == 'false' && secrets.PGEDGE_REPO_CLIENT_KEY || '' }}
 ```
+
+!!! note "The pin has to carry the secrets"
+    A reusable workflow rejects a secret it does not declare, so the two
+    repository secrets above only work once `v1_STABLE` points at a commit that
+    declares them. Until then a caller passes the Docker Hub pair alone, and a
+    full run leaves the gated repositories disabled.
 
 Each package job also keeps its `[pep-cell:<cell_id>]` name marker and its `pep-package-receipt` step, pinned to a full commit SHA, so evidence is recorded where each package is built. The receipt pin does not have to match the commit `v1_STABLE` points to (see [Stable channel](#stable-channel-v1_stable)).
 
@@ -529,7 +538,7 @@ The adapter validates the facts before anything runs (`pipeline/pep_release_inpu
 - `simulated` must be exactly `true` or `false`. Only `true` selects preview (a dry run); `false` selects full certification.
 - The identity values must be nonblank, without surrounding whitespace or control characters. `enforcement` is `observe` (default) or `gate`.
 
-The adapter calls `pep-certify.yml` through a relative path, so it runs at the adapter's own commit: the caller's one reference selects the adapter, the certifier and everything they run, and the commit it resolves to is recorded for the run. Only the Docker Hub secrets are accepted. They are forwarded explicitly, and only for full certification. The adapter passes through all of `pep-certify.yml`'s outputs.
+The adapter calls `pep-certify.yml` through a relative path, so it runs at the adapter's own commit: the caller's one reference selects the adapter, the certifier and everything they run, and the commit it resolves to is recorded for the run. Only the Docker Hub credentials and the repository client certificate are accepted. They are forwarded explicitly, and only for full certification. The adapter passes through all of `pep-certify.yml`'s outputs.
 
 **Failure behavior.** Certification runs after publication and never changes it. A rejected input fails the adapter's input job, so the certify job is skipped. An infrastructure or incomplete result, a package-digest problem, or package evidence that capture rejected as invalid fails the certify job. Either way the caller's run fails, even under `observe`. Product test failures and coverage gaps, including a missing receipt, are reported under `observe` without failing it. In every case, including rejected inputs, the summary job writes the actual per-family publication results as passed in, and the certification outcome.
 

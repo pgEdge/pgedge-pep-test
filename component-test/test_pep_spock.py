@@ -457,8 +457,11 @@ def test_verify_bundled_files(container_name, container_type):
         print(f"✅ Bundled files verified for {spock_package}")
 
     except Exception as e:
-        # No expected-output reference for this spock major yet -> skip gracefully
-        if "No expected file found" in str(e):
+        # No expected-output reference for this spock major yet -> a standalone run skips
+        # gracefully. In integration mode it fails: skips are reported separately, but the
+        # overall verdict can still pass with this verification skipped, so the requested
+        # release package would never be compared.
+        if "No expected file found" in str(e) and INTEGRATION_REQUEST is None:
             pytest.skip(str(e))
         pytest.fail(f"Failed to verify bundled files: {str(e)}")
 

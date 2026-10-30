@@ -34,6 +34,9 @@ on:
     secrets:
       DOCKERHUB_USERNAME: {required: false}   # optional; only full-mode pull rate limits
       DOCKERHUB_TOKEN:    {required: false}
+      # mTLS for the gated pgEdge repositories; only full mode installs anything.
+      PGEDGE_REPO_CLIENT_CRT: {required: false}
+      PGEDGE_REPO_CLIENT_KEY: {required: false}
     outputs:
       certification_conclusion: {description: "success|failure (policy decision)", value: "${{ jobs.aggregate.outputs.workflow_conclusion }}"}
       certification_state:      {description: "pass|fail|incomplete|preview",        value: "${{ jobs.aggregate.outputs.certification_state }}"}
@@ -250,6 +253,8 @@ jobs:
     secrets:
       DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
       DOCKERHUB_TOKEN:    ${{ secrets.DOCKERHUB_TOKEN }}
+      PGEDGE_REPO_CLIENT_CRT: ${{ secrets.PGEDGE_REPO_CLIENT_CRT }}
+      PGEDGE_REPO_CLIENT_KEY: ${{ secrets.PGEDGE_REPO_CLIENT_KEY }}
 
   # --- 4. aggregate: collect -> reduce -> decide -> emit -> upload (evidence only) ---
   aggregate:

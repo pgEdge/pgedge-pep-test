@@ -28,16 +28,21 @@ _LISTING_FIELDS = ("id", "name", "expired", "size_in_bytes")
 
 
 def list_run_artifacts(transport, repo, run_id):
-    """Every artifact of the run, in API order, reduced to the allowlisted fields."""
+    """Every artifact of the run, in API order, reduced to the allowlisted fields.
+
+    A non-object entry keeps its place as ``None``: the collector counts it as an invalid
+    entry and fails closed, so malformed listing data never silently disappears. Its
+    content is not copied, so the listing still carries only allowlisted fields."""
     pages = IO._list_pages(transport, lambda p: IO._artifacts_url(repo, run_id, p), "artifacts")
-    return [{k: art.get(k) for k in _LISTING_FIELDS}
-            for page in pages for art in page["artifacts"] if isinstance(art, dict)]
+    return [{k: art.get(k) for k in _LISTING_FIELDS} if isinstance(art, dict) else None
+            for page in pages for art in page["artifacts"]]
 
 
 def download_ids(listing, name_prefix):
     """Ids of the non-expired artifacts whose name starts with ``name_prefix``."""
     return [art["id"] for art in listing
-            if isinstance(art.get("name"), str) and art["name"].startswith(name_prefix)
+            if isinstance(art, dict)
+            and isinstance(art.get("name"), str) and art["name"].startswith(name_prefix)
             and art.get("expired") is not True
             and isinstance(art.get("id"), int) and not isinstance(art.get("id"), bool)]
 
@@ -68,6 +73,10 @@ def main(argv=None, env=None):
         f.write("download_ids=%s\n" % ",".join(str(i) for i in ids))
     print("Prepared listing with %d artifact(s); download ids: %s"
           % (len(listing), ",".join(str(i) for i in ids) or "<none>"))
+    malformed = sum(1 for art in listing if art is None)
+    if malformed:
+        print("artifact listing: %d non-object entr%s kept as invalid placeholders"
+              % (malformed, "y" if malformed == 1 else "ies"), file=sys.stderr)
     return 0
 
 

@@ -44,6 +44,12 @@ on:
       # provenance are preserved and are independent of any token.
       DOCKERHUB_USERNAME: {required: false}   # optional; full-mode pull rate limits
       DOCKERHUB_TOKEN:    {required: false}
+      # The pgEdge repositories authenticate clients with mutual TLS. Optional:
+      # preview mode installs nothing, so a caller that only previews needs no
+      # certificate; a full run without the complete pair runs no tests and is
+      # reported as an infrastructure failure.
+      PGEDGE_REPO_CLIENT_CRT: {required: false}
+      PGEDGE_REPO_CLIENT_KEY: {required: false}
     outputs:
       execution_status:  {value: "${{ jobs.run.outputs.execution_status }}"}
       test_verdict:      {value: "${{ jobs.run.outputs.test_verdict }}"}
@@ -221,11 +227,43 @@ jobs:
         continue-on-error: true
         run: docker version
         # A failed preflight is classified as setup/infra in the Summarize step.
+      # A full run installs from the gated pgEdge repositories, which stay disabled
+      # without the client certificate, so every install would fail and, under
+      # observe, read as a product failure. Without a complete pair the framework
+      # does not run and Summarize reports an infrastructure failure. Preview
+      # installs nothing and needs no certificate. Only presence is checked;
+      # nothing about the values is printed.
+      - name: '[repo-auth] check client certificate'
+        id: repo_auth
+        if: ${{ inputs.execution_mode == 'full' }}
+        env:
+          PGEDGE_REPO_CLIENT_CRT: ${{ secrets.PGEDGE_REPO_CLIENT_CRT }}
+          PGEDGE_REPO_CLIENT_KEY: ${{ secrets.PGEDGE_REPO_CLIENT_KEY }}
+        run: |
+          crt="${PGEDGE_REPO_CLIENT_CRT//[[:space:]]/}"
+          key="${PGEDGE_REPO_CLIENT_KEY//[[:space:]]/}"
+          if [[ -n "$crt" && -n "$key" ]]; then state=complete
+          elif [[ -n "$crt" || -n "$key" ]]; then state=incomplete
+          else state=missing
+          fi
+          echo "state=$state" >> "$GITHUB_OUTPUT"
+          echo "[repo-auth] client certificate: $state"
       - name: Run framework (preview or full)
         id: fw
-        if: ${{ steps.preflight.outputs.rc == '0' }}   # skip when execution_mode is invalid
+        # Skip when execution_mode is invalid, and a full run without a complete
+        # client certificate pair (Summarize reports it as infrastructure).
+        if: ${{ steps.preflight.outputs.rc == '0' && (inputs.execution_mode != 'full' || steps.repo_auth.outputs.state == 'complete') }}
         continue-on-error: true          # handle framework failure -> summarize anyway
         env:                             # pass inputs via env + build a Bash array (injection-safe)
+          # The pgEdge repositories authenticate clients with mutual TLS; the
+          # aspects read these and hand them to pgedge-subscription-manager.
+          # Only for full mode: a preview installs nothing, so neither the
+          # dry-run framework nor its children should ever see the key.
+          PGEDGE_REPO_CLIENT_CRT: ${{ inputs.execution_mode == 'full' && secrets.PGEDGE_REPO_CLIENT_CRT || '' }}
+          PGEDGE_REPO_CLIENT_KEY: ${{ inputs.execution_mode == 'full' && secrets.PGEDGE_REPO_CLIENT_KEY || '' }}
+          # Where the aspects record a failed certificate or repository setup (one
+          # word, never a message); Summarize reports it as infrastructure.
+          PEP_REPO_AUTH_FAILURE_FILE: ${{ github.workspace }}/test-logs/repo-auth-failure
           IN_PG: ${{ inputs.pg_major }}
           IN_FAMILY: ${{ inputs.family }}
           IN_ARCH: ${{ inputs.arch }}
@@ -270,6 +308,7 @@ jobs:
           # The time-limit wrapper runs the framework in its own process group, stops the
           # group at the limit, and appends timed_out=true|false to $GITHUB_OUTPUT, so a
           # timeout is never inferred from an exit code.
+          rm -f "$PEP_REPO_AUTH_FAILURE_FILE"   # only this run's setup failures count
           set +e
           python3 pipeline/pep_time_limit.py --limit-seconds "$FRAMEWORK_LIMIT_SECONDS" --grace-seconds 120 --outcome-file "$GITHUB_OUTPUT" -- ./run_pep_tf.sh "${args[@]}"
           rc=$?
@@ -292,6 +331,7 @@ jobs:
           FW_CODE: ${{ steps.fw.outputs.exit_code }}   # real script exit code (issue #10/#12)
           FW_TIMED_OUT: ${{ steps.fw.outputs.timed_out }}   # "true" only when the time limit ended the framework
           DOCKER_OUTCOME: ${{ steps.docker.outcome }}
+          REPO_AUTH_STATE: ${{ steps.repo_auth.outputs.state }}   # complete|incomplete|missing (full mode only)
           SETUP_OUTCOME: ${{ steps.setup_python.outcome }}
           PIP_OUTCOME: ${{ steps.pip.outcome }}
           LOGIN_OUTCOME: ${{ steps.dockerhub_login.outcome }}
@@ -364,6 +404,15 @@ jobs:
             args+=( --infra-error "dockerhub login failed (setup)" )
           elif [ "$DOCKER_OUTCOME" = "failure" ]; then
             args+=( --infra-error "docker preflight failed (setup)" )
+          elif [ "$IN_EXEC" = "full" ] && [ "$REPO_AUTH_STATE" = "missing" ]; then
+            # Known before any test: without the full client certificate pair the
+            # gated repositories stay disabled. The framework did not run, so a
+            # request it would have rejected (exit 3) is not reported here;
+            # pep-certify validates requests before calling this workflow. (An
+            # empty state means the check never ran and falls through below.)
+            args+=( --infra-error "repository client certificate not supplied (setup)" )
+          elif [ "$IN_EXEC" = "full" ] && [ "$REPO_AUTH_STATE" = "incomplete" ]; then
+            args+=( --infra-error "repository client certificate incomplete: certificate or key missing (setup)" )
           elif [ "$FW_TIMED_OUT" = "true" ]; then
             # The time limit, not a test, ended the framework -> infra, BOTH modes.
             # Only the wrapper's explicit flag means "timed out"; any other exit
@@ -381,6 +430,17 @@ jobs:
           elif [ "$IN_EXEC" != "full" ]; then
             args+=( --preview )                       # preview only reached on a clean dry-run
           # ---- FULL mode, clean script exit ----
+          elif [ -f test-logs/repo-auth-failure ]; then
+            # The aspects recorded a missing pair, a failed certificate install or
+            # a failed first refresh after enabling it (a fixed word; the details
+            # are in the test logs). Not a product failure, though the tests that
+            # followed it failed. A later package failure is not marked.
+            case "$(head -n 1 test-logs/repo-auth-failure)" in
+              missing)     args+=( --infra-error "repository client certificate not supplied (setup)" ) ;;
+              certificate) args+=( --infra-error "repository client certificate could not be installed (setup)" ) ;;
+              repository)  args+=( --infra-error "package index refresh failed after enabling the client certificate (setup)" ) ;;
+              *)           args+=( --infra-error "repository authentication setup failed (setup)" ) ;;
+            esac
           elif [ ! -f test-logs/current-run.json ]; then
             args+=( --infra-error "current-run manifest missing (bridge did not run)" )
           elif [ ! -f test-logs/identity-evidence.json ]; then

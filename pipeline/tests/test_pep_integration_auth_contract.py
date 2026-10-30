@@ -112,10 +112,14 @@ class PublicAuthContract(unittest.TestCase):
         declared = _declared_call_secrets(self.integration)
         self.assertNotIn("pep_read_token", declared,
                          f"pep_read_token must not be a declared secret; got {sorted(declared)}")
-        allowed = {"DOCKERHUB_USERNAME", "DOCKERHUB_TOKEN"}
+        # The gated pgEdge repositories authenticate clients with mutual TLS, so
+        # full mode needs that pair as well. Both stay optional: preview installs
+        # nothing and a caller that only previews passes neither.
+        allowed = {"DOCKERHUB_USERNAME", "DOCKERHUB_TOKEN",
+                   "PGEDGE_REPO_CLIENT_CRT", "PGEDGE_REPO_CLIENT_KEY"}
         self.assertTrue(declared <= allowed,
                         f"unexpected declared secret(s): {sorted(declared - allowed)} "
-                        f"(only optional DockerHub creds are allowed)")
+                        f"(only the optional DockerHub and repo-client creds are allowed)")
 
     def test_selftest_callers_do_not_pass_read_token(self):
         # A future caller MAY carry a `secrets:` block (e.g. DockerHub); what is

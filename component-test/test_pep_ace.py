@@ -81,12 +81,6 @@ _ace_spock_guc = {
     "track_commit_timestamp": "on",
 }
 
-# PG >= 16.15 / 17.11 / 18.5 / 19.0beta3 require logical decoding output plugins
-# to be allow-listed before they can be loaded. ACE diffs across cross-wired
-# n1/n2/n3 nodes, so spock_output must be permitted. Returns {} on older point
-# releases, which do not recognise the GUC.
-_ace_spock_guc.update(pg_server_management.output_plugin_libraries_guc())
-
 
 def get_container_config(container_type):
     """Get configuration based on container type (rhel or deb)"""
@@ -568,6 +562,15 @@ def test_ace_functional_setup_cluster(container_name, container_type):
     except Exception as e:
         pytest.fail(f"Failed to install spock/server packages for ACE cluster: {str(e)}")
 
+    # PG >= 16.15 / 17.11 / 18.5 / 19.0beta3 require logical decoding output
+    # plugins to be allow-listed before they can be loaded. ACE diffs across
+    # cross-wired n1/n2/n3 nodes, so spock_output must be permitted. Returns {}
+    # on older point releases, which do not recognise the GUC. Decided by the
+    # server just installed above, not the configured PG_VERSION.
+    node_guc = dict(_ace_spock_guc)
+    node_guc.update(
+        pg_server_management.output_plugin_libraries_guc_for_server(container, pgbin, pguser))
+
     # Initialize nodes n1, n2, n3
     for node_num in range(1, 4):
         node_name = f"n{node_num}"
@@ -589,7 +592,7 @@ def test_ace_functional_setup_cluster(container_name, container_type):
         )
 
         success, _, message = pg_server_management.init_cluster(
-            container, pgbin, node_pgdata, pguser, _ace_spock_guc
+            container, pgbin, node_pgdata, pguser, node_guc
         )
         assert success, f"Failed to init {node_name}: {message}"
 

@@ -17,8 +17,15 @@ import re
 # cross-wired (2+ node) Spock and zodan clusters.
 #
 # Earlier point releases do not recognise the GUC at all — setting it there
-# makes the server fail to start — so every caller must gate on the running
-# PG_VERSION rather than applying it unconditionally.
+# makes the server fail to start — so every caller must gate on the server it
+# is configuring rather than applying it unconditionally.
+#
+# That means the version reported by that server's own binary
+# (output_plugin_libraries_guc_for_server), read after the server is
+# installed. Never the configured PG_VERSION: a channel can serve older point
+# releases than configuration/configN.env names (daily served 16.13 / 17.9 /
+# 18.3 while the configs said 16.15 / 17.11 / 18.6, so no node started). Nor
+# a pg_config on PATH: with two majors installed it reports the newer one.
 
 # Minimum point release per major version that introduced the GUC.
 OUTPUT_PLUGIN_LIBRARIES_MIN_VERSION = {
@@ -60,23 +67,22 @@ def parse_pg_version(version):
     return (major, minor, stage_rank, stage_num)
 
 
-def requires_output_plugin_libraries(pg_version=None):
+def requires_output_plugin_libraries(pg_version):
     """Return True when the given PostgreSQL version needs output_plugin_libraries.
 
     Args:
-        pg_version: Version string such as "18.5". Defaults to the PG_VERSION
-            environment variable.
+        pg_version: Version string such as "18.5" or "19rc1", as reported by the
+            server being configured (see server_version).
 
     Returns:
         bool: True when the GUC exists and must be set for spock_output to load.
-    """
-    if pg_version is None:
-        pg_version = os.getenv("PG_VERSION", "")
 
+    Raises:
+        ValueError: If the version cannot be parsed.
+    """
     parsed = parse_pg_version(pg_version)
     if parsed is None:
-        # Unparseable version — don't risk emitting a GUC the server may reject.
-        return False
+        raise ValueError(f"cannot parse PostgreSQL version {pg_version!r}")
 
     major = parsed[0]
     known = sorted(OUTPUT_PLUGIN_LIBRARIES_MIN_VERSION)
@@ -94,17 +100,15 @@ def requires_output_plugin_libraries(pg_version=None):
     return parsed >= parse_pg_version(minimum)
 
 
-def output_plugin_libraries_guc(pg_version=None, libraries=None, quoted=True):
+def output_plugin_libraries_guc(pg_version, libraries=None, quoted=True):
     """Build the output_plugin_libraries GUC entry for a cluster's postgresql.conf.
 
-    Returns an empty dict on PostgreSQL versions that predate the GUC, so it
-    can be merged into a guc_parameters dict unconditionally:
-
-        guc_parameters = {"shared_preload_libraries": "'spock'", ...}
-        guc_parameters.update(pg_server_management.output_plugin_libraries_guc())
+    Returns an empty dict on PostgreSQL versions that predate the GUC. Callers
+    configuring a cluster use output_plugin_libraries_guc_for_server, which
+    reads the version from the server itself.
 
     Args:
-        pg_version: Version string; defaults to the PG_VERSION env var.
+        pg_version: Version string reported by the server being configured.
         libraries: Comma-separated plugin list; defaults to
             OUTPUT_PLUGIN_LIBRARIES env var, then the pgoutput/test_decoding/
             spock_output default.
@@ -121,6 +125,63 @@ def output_plugin_libraries_guc(pg_version=None, libraries=None, quoted=True):
         libraries = os.getenv("OUTPUT_PLUGIN_LIBRARIES", DEFAULT_OUTPUT_PLUGIN_LIBRARIES)
 
     return {"output_plugin_libraries": f"'{libraries}'" if quoted else libraries}
+
+
+class ServerVersionError(Exception):
+    """The PostgreSQL server's own binary did not report a usable version."""
+
+
+def server_version(container, pgbin, pguser):
+    """Return the version of the PostgreSQL server in pgbin, as its binary reports it.
+
+    Runs `<pgbin>/postgres --version` in the container, so the answer is about
+    the exact server a cluster is created and started with. Call it after the
+    server is installed (or upgraded).
+
+    Args:
+        container: Docker container object with exec_run method
+        pgbin: Path to that server's binaries (e.g. "/usr/pgsql-18/bin")
+        pguser: User to run the binary as
+
+    Returns:
+        str: The version, e.g. "18.3", "16.15", "19rc1".
+
+    Raises:
+        ServerVersionError: If the binary fails or reports no parseable version.
+            There is deliberately no fallback to the configured PG_VERSION.
+    """
+    command = f"{pgbin.rstrip('/')}/postgres --version"
+    exit_code, output = container.exec_run(command, user=pguser)
+    text = output.decode(errors="replace").strip() if output else ""
+    match = re.search(r"\(PostgreSQL\)\s+(\d+(?:\.\d+)?(?:(?:beta|rc)\d+)?)\b", text)
+    if exit_code != 0 or not match or parse_pg_version(match.group(1)) is None:
+        reason = f"exit {exit_code}" if exit_code != 0 else "no PostgreSQL version in its output"
+        raise ServerVersionError(
+            f"Could not determine the PostgreSQL server version from `{command}` ({reason}): "
+            f"{text[:300]!r}. The configured PG_VERSION is not used as a fallback; "
+            f"check that the server is installed at {pgbin}."
+        )
+    return match.group(1)
+
+
+def output_plugin_libraries_guc_for_server(container, pgbin, pguser, libraries=None, quoted=True):
+    """output_plugin_libraries for the server in pgbin, decided by its own version.
+
+    Returns an empty dict when that server predates the GUC, so it can be merged
+    into a guc_parameters dict unconditionally:
+
+        guc_parameters = {"shared_preload_libraries": "'spock'", ...}
+        guc_parameters.update(
+            pg_server_management.output_plugin_libraries_guc_for_server(container, pgbin, pguser))
+
+    Raises:
+        ServerVersionError: See server_version.
+    """
+    version = server_version(container, pgbin, pguser)
+    guc = output_plugin_libraries_guc(version, libraries=libraries, quoted=quoted)
+    print(f"PostgreSQL server at {pgbin.rstrip('/')}: {version}; output_plugin_libraries "
+          f"{'set' if guc else 'not set (this release predates it)'}")
+    return guc
 
 
 def execute_psql_query(container, pgbin, pgport, pguser, query, dbname="postgres"):
@@ -269,6 +330,34 @@ def init_cluster(container, pgbin, pgdata, pguser, guc_parameters=None,
     return True, config_content, message
 
 
+_LOG_TAIL_LINES = 20
+_LOG_LINE_MAX = 300
+_CONTROL_CHARS = re.compile(r"\x1b\[[0-9;]*[A-Za-z]|[\x00-\x08\x0b-\x1f\x7f]")
+_PASSWORD_VALUE = re.compile(r"(?i)\b(\w*password)\s*=\s*\S+")
+
+
+def _server_log_tail(container, pgdata, pguser):
+    """The last lines of a server's logfile, sanitized for a failure message.
+
+    pg_ctl only says "could not start server"; the reason is in the log. The
+    tail is cut to a few short lines, control characters are removed and
+    password values redacted. Returns "" when the log cannot be read.
+    """
+    logfile = f"{pgdata}/logfile"
+    try:
+        exit_code, output = container.exec_run(f"tail -n {_LOG_TAIL_LINES} {logfile}", user=pguser)
+    except Exception:
+        return ""
+    text = output.decode(errors="replace") if output else ""
+    if exit_code != 0 or not text.strip():
+        return ""
+    lines = []
+    for line in text.splitlines()[-_LOG_TAIL_LINES:]:
+        line = _PASSWORD_VALUE.sub(r"\1=<redacted>", _CONTROL_CHARS.sub("", line))
+        lines.append(line if len(line) <= _LOG_LINE_MAX else line[:_LOG_LINE_MAX] + " …")
+    return f"\n--- last {len(lines)} lines of {logfile} ---\n" + "\n".join(lines)
+
+
 def start_server(container, pgbin, pgdata, pgport, pguser):
     """
     Start a PostgreSQL server.
@@ -307,7 +396,8 @@ def start_server(container, pgbin, pgdata, pgport, pguser):
     )
 
     if exit_code != 0:
-        raise Exception(f"pg_ctl start failed: {output.decode()}")
+        raise Exception(f"pg_ctl start failed: {output.decode()}"
+                        f"{_server_log_tail(container, pgdata, pguser)}")
 
     server_output = output.decode()
     print(f" PostgreSQL server started successfully")

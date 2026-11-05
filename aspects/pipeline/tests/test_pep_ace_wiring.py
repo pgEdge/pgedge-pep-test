@@ -19,6 +19,8 @@ import importlib.util
 import itertools
 import json
 import os
+import shutil
+import subprocess
 import sys
 
 import docker
@@ -443,7 +445,7 @@ def test_ace_init_commands_must_succeed_and_create_their_files(monkeypatch, env)
     monkeypatch.setattr(m, "client", _Client(c))
     assert outcome(m.test_ace_functional_create_config, "x", "rhel") == ("passed", "")
     scripts = [cmd[-1] for cmd in c.cmds if cmd[0] == "bash"]
-    reset = next(i for i, s in enumerate(scripts) if s.startswith("rm -rf "))
+    reset = next(i for i, s in enumerate(scripts) if "rm -rf -- " in s)
     cluster = next(i for i, s in enumerate(scripts) if " cluster init " in s)
     config = next(i for i, s in enumerate(scripts) if " config init " in s)
     assert reset < cluster < config                       # a fresh work directory first
@@ -537,9 +539,9 @@ def _report(counts=None, **summary):
     return {"diffs": {}, "summary": s}
 
 
-def _diff_responder(reports, run_rc=0, leftover=""):
+def _diff_responder(reports, run_rc=0, leftover="", reset_rc=0):
     """bash/cat answers for the table-diff step. ``reports`` maps file name -> JSON text written
-    by the run; ``leftover`` is what the directory listing shows right after the reset."""
+    by the run; ``leftover`` is what the reset prints (the directory listing right after it)."""
     state = {"ran": False}
 
     def respond(cmd):
@@ -547,8 +549,8 @@ def _diff_responder(reports, run_rc=0, leftover=""):
             name = os.path.basename(cmd[1])
             return (0, reports[name]) if state["ran"] and name in reports else (1, "No such file")
         script = cmd[-1]
-        if script.startswith("rm -rf "):
-            return 0, leftover
+        if "rm -rf -- " in script:
+            return reset_rc, leftover
         if " table-diff " in script:
             state["ran"] = True
             return run_rc, "TABLES DO NOT MATCH\n"
@@ -571,7 +573,7 @@ def test_table_diff_reads_the_one_fresh_report_and_its_counts(monkeypatch, env):
         {"public_n1_diffs-20261105120000.json": json.dumps(_report())}))
     assert res == ("passed", "")
     scripts = [cmd[-1] for cmd in c.cmds if cmd[0] == "bash"]
-    assert scripts[0].startswith("rm -rf ") and " table-diff " in scripts[1]
+    assert "rm -rf -- /tmp/ace-pep/table-diff " in scripts[0] and " table-diff " in scripts[1]
     assert "cd " in scripts[1] and "ACE_CONFIG=" in scripts[1] and "PGSERVICEFILE=" in scripts[1]
 
 
@@ -593,3 +595,105 @@ def test_table_diff_reads_the_one_fresh_report_and_its_counts(monkeypatch, env):
 def test_table_diff_fails_a_wrong_missing_or_stale_report(monkeypatch, reports, leftover, run_rc, msg):
     (status, text), _ = _diff_outcome(monkeypatch, _GA_RPM, _diff_responder(reports, run_rc, leftover))
     assert status == "failed" and msg in text, text
+
+
+def test_table_diff_stops_when_the_reset_refuses_a_symbolic_link(monkeypatch):
+    (status, text), c = _diff_outcome(monkeypatch, _GA_RPM, _diff_responder(
+        {"public_n1_diffs-1.json": json.dumps(_report())}, reset_rc=3,
+        leftover="refusing to empty /tmp/ace-pep/table-diff: /tmp/ace-pep is a symbolic link\n"))
+    assert status == "failed" and "symbolic link" in text
+    assert not any(" table-diff " in cmd[-1] for cmd in c.cmds if cmd[0] == "bash")
+
+
+# --------------------------------------------------------------------------- work-directory boundary
+# The functional steps empty the work directory with rm -rf, so ACE_WORK_DIR must name a clearly
+# test-owned directory: /tmp would also delete the nodes' data directories (/tmp/n1..n3).
+@pytest.mark.parametrize("value,expected", [
+    (None, "/tmp/ace-pep"), ("", "/tmp/ace-pep"), ("/tmp/ace-pep/", "/tmp/ace-pep"),
+    ("/tmp/ace-pep-run1", "/tmp/ace-pep-run1"), ("/var/tmp/ace-pep.2", "/var/tmp/ace-pep.2"),
+], ids=["default", "empty", "trailing-slash", "suffix", "other-parent"])
+def test_a_dedicated_ace_pep_work_directory_is_accepted(monkeypatch, value, expected):
+    m = load(monkeypatch, dict(_STANDALONE, ACE_WORK_DIR=value))
+    assert (m.ace_work_dir, m.ACE_WORK_DIR_PROBLEM) == (expected, None)
+    assert m.ace_table_diff_dir == expected + "/table-diff"
+
+
+_UNSAFE_WORK_DIRS = [
+    "/tmp", "/", "/var/lib/postgresql", "/home", "tmp/ace-pep", "ace-pep", "/tmp/n1", "/tmp/n1/ace-pep",
+    "/tmp/ace-pep/..", "/tmp/../tmp/ace-pep", "/tmp/./ace-pep", "//tmp/ace-pep", "/tmp//ace-pep",
+    "/tmp/my-ace-pep", "/tmp/ace-pep x", "/tmp/ace-pep;rm -rf /", "/tmp/$HOME/ace-pep", "/tmp/ace-pep\n",
+    "/tmp/*/ace-pep",
+]
+
+
+@pytest.mark.parametrize("value", _UNSAFE_WORK_DIRS, ids=[repr(v) for v in _UNSAFE_WORK_DIRS])
+def test_an_unsafe_work_directory_is_refused(monkeypatch, value):
+    m = load(monkeypatch, dict(_STANDALONE, ACE_WORK_DIR=value))
+    assert m.ACE_WORK_DIR_PROBLEM and "ACE_WORK_DIR" in m.ACE_WORK_DIR_PROBLEM
+
+
+@pytest.mark.parametrize("value", ["/tmp", "/", "/tmp/n1"], ids=["tmp", "root", "node-data"])
+@pytest.mark.parametrize("test", ["test_ace_functional_create_config", "test_ace_table_diff",
+                                  "test_ace_mtree_init"], ids=["create-config", "table-diff", "mtree"])
+@pytest.mark.parametrize("env", [_STANDALONE, _GA_RPM], ids=["standalone", "integration"])
+def test_an_unsafe_work_directory_fails_before_any_container_command(monkeypatch, value, test, env):
+    m = load(monkeypatch, dict(env, ACE_WORK_DIR=value))
+    c = _Container(_nothing)
+    monkeypatch.setattr(m, "client", _Client(c))
+    status, msg = outcome(getattr(m, test), "x", "rhel")
+    assert status == "failed" and "ACE_WORK_DIR" in msg
+    assert c.cmds == []                                   # nothing ran, so nothing was deleted
+
+
+def test_the_reset_refuses_a_path_outside_the_work_directory(monkeypatch):
+    m = load(monkeypatch, _STANDALONE)
+    c = _Container(_nothing)
+    for path in ("/tmp", "/tmp/ace-pep-other", "/tmp/ace-pep/../n1", "/tmp/n1"):
+        with pytest.raises(AssertionError, match="outside the ACE work directory"):
+            m._reset_test_dir(c, path)
+    assert c.cmds == []
+
+
+class _LocalBash:
+    """A real seam: runs the reset's `bash -c` script on this machine (nothing else is allowed)."""
+    status = "running"
+
+    def __init__(self):
+        self.cmds = []
+
+    def exec_run(self, cmd, user=None, **kwargs):
+        self.cmds.append(cmd)
+        if cmd[:2] != ["bash", "-c"] or len(cmd) != 3:
+            return 1, b"unexpected command"
+        p = subprocess.run(cmd, capture_output=True, timeout=30)
+        return p.returncode, p.stdout + p.stderr
+
+
+def test_the_real_reset_empties_only_the_work_directory_and_never_follows_a_link(monkeypatch, tmp_path):
+    work, sibling, target = tmp_path / "ace-pep", tmp_path / "n1", tmp_path / "elsewhere"
+    for d in (work, sibling, target):
+        d.mkdir()
+        (d / "keep.txt").write_text("x")
+    m = load(monkeypatch, dict(_STANDALONE, ACE_WORK_DIR=str(work)))
+    assert m.ACE_WORK_DIR_PROBLEM is None
+    sh = _LocalBash()
+
+    ec, out = m._reset_test_dir(sh, m.ace_work_dir)             # emptied and recreated
+    assert (ec, out) == (0, b"") and list(work.iterdir()) == []
+    (work / "table-diff").mkdir()
+    (work / "table-diff" / "public_n1_diffs-old.json").write_text("{}")
+    (work / "pg_service.conf").write_text("x")
+    ec, out = m._reset_test_dir(sh, m.ace_table_diff_dir)       # only the report directory
+    assert (ec, out) == (0, b"") and sorted(p.name for p in work.iterdir()) == ["pg_service.conf", "table-diff"]
+    assert list((work / "table-diff").iterdir()) == []
+    assert (sibling / "keep.txt").exists() and (target / "keep.txt").exists()
+
+    (work / "table-diff").rmdir()
+    (work / "table-diff").symlink_to(target)                    # a link where the report directory goes
+    ec, out = m._reset_test_dir(sh, m.ace_table_diff_dir)
+    assert ec != 0 and b"symbolic link" in out and (target / "keep.txt").exists()
+    shutil.rmtree(work)
+    work.symlink_to(target)                                     # the work directory itself is a link
+    for path in (m.ace_work_dir, m.ace_table_diff_dir):
+        ec, out = m._reset_test_dir(sh, path)
+        assert ec != 0 and b"symbolic link" in out and work.is_symlink() and (target / "keep.txt").exists()

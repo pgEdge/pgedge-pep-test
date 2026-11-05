@@ -109,18 +109,54 @@ ACE_CERT_SPOCK_SERIES = "50"
 ace_spock_major = (ACE_CERT_SPOCK_SERIES if INTEGRATION_REQUEST is not None
                    else os.getenv("SPOCK_MAJOR", "50"))
 
-# Every functional run works in a fresh directory: test_ace_functional_create_config
-# recreates it, so ACE's init commands never meet an earlier run's files, and
-# test_ace_table_diff reads a report only from an emptied subdirectory.
-ace_work_dir = os.getenv("ACE_WORK_DIR", "/tmp/ace-pep").rstrip("/")
-ace_pg_service_path = f"{ace_work_dir}/pg_service.conf"
-ace_config_path = f"{ace_work_dir}/ace.yaml"
-ace_table_diff_dir = f"{ace_work_dir}/table-diff"
-
 # The seeded data. n1 gets the initial rows, which replicate to n2 and n3; then, with
 # every subscription disabled, each node inserts its own rows, continuing the same id
 # sequence from the initial rows (label, count).
 ACE_NODES = ("n1", "n2", "n3")
+
+
+def _node_pgdata(node):
+    return f"/tmp/{node}"
+
+
+# Every functional run works in a fresh directory: test_ace_functional_create_config
+# recreates it, so ACE's init commands never meet an earlier run's files, and
+# test_ace_table_diff reads a report only from an emptied subdirectory. Emptying it
+# uses rm -rf, so ACE_WORK_DIR must name a clearly test-owned directory
+# (ace_work_dir_problem); an unset or empty value means the default.
+_ACE_WORK_DIR_NAME = re.compile(r"ace-pep[A-Za-z0-9._-]*")
+_SAFE_PATH_PART = re.compile(r"[A-Za-z0-9._-]+")
+
+
+def ace_work_dir_problem(path):
+    """Why ``path`` is not a safe ACE work directory, or None. It must be an absolute,
+    normalized path of plain characters (letters, digits, ".", "_", "-") whose last
+    component starts with "ace-pep", and it must not overlap a node's data directory.
+    So /tmp, /, a relative path, a path through "." or "..", or a path with shell or
+    glob characters is refused before anything is deleted."""
+    if not path.startswith("/"):
+        return f"ACE_WORK_DIR {path!r} must be an absolute path"
+    parts = path.split("/")[1:]
+    if not all(_SAFE_PATH_PART.fullmatch(part) and part not in (".", "..") for part in parts):
+        return (f"ACE_WORK_DIR {path!r} must be a normalized path of letters, digits, '.', '_' "
+                f"and '-' (no '.', '..', '//' or other characters)")
+    if not _ACE_WORK_DIR_NAME.fullmatch(parts[-1]):
+        return (f"ACE_WORK_DIR {path!r} must end in a directory named ace-pep*, so only a "
+                f"test-owned directory is ever deleted")
+    for node in ACE_NODES:
+        pgdata = _node_pgdata(node)
+        if path == pgdata or path.startswith(pgdata + "/") or pgdata.startswith(path + "/"):
+            return f"ACE_WORK_DIR {path!r} overlaps the {node} data directory {pgdata}"
+    return None
+
+
+_ace_work_dir_env = os.getenv("ACE_WORK_DIR") or "/tmp/ace-pep"
+ace_work_dir = _ace_work_dir_env.rstrip("/") or _ace_work_dir_env
+ACE_WORK_DIR_PROBLEM = ace_work_dir_problem(ace_work_dir)
+ace_pg_service_path = f"{ace_work_dir}/pg_service.conf"
+ace_config_path = f"{ace_work_dir}/ace.yaml"
+ace_table_diff_dir = f"{ace_work_dir}/table-diff"
+
 SEED_INITIAL_ROWS = 10
 SEED_LOCAL_ROWS = {"n1": ("n1_load", 100), "n2": ("n2_divergent", 5), "n3": ("n3_divergent", 5)}
 # How long the initial replication may take to reach n2 and n3.
@@ -307,8 +343,33 @@ def _sh(container, script):
     return container.exec_run(["bash", "-c", script], user="root")
 
 
+def _require_safe_work_dir():
+    """Fail the step, before anything runs in the container, when ACE_WORK_DIR is unsafe."""
+    if ACE_WORK_DIR_PROBLEM is not None:
+        pytest.fail(ACE_WORK_DIR_PROBLEM)
+
+
+def _reset_test_dir(container, path):
+    """Empty and recreate ``path``, which must be the validated work directory or a directory
+    inside it, and return ``(exit_code, output)``; the output lists anything still there. The
+    script refuses (exit 3) when the work directory or ``path`` is a symbolic link, so the
+    deletion can never follow a link out of the test-owned directory."""
+    _require_safe_work_dir()
+    child = path[len(ace_work_dir) + 1:] if path.startswith(ace_work_dir + "/") else None
+    inside = path == ace_work_dir or (
+        child is not None and _SAFE_PATH_PART.fullmatch(child) is not None and child not in (".", ".."))
+    assert inside, f"refusing to empty {path!r}: it is outside the ACE work directory {ace_work_dir}"
+    quoted = shlex.quote(path)
+    links = " ".join(shlex.quote(p) for p in dict.fromkeys([ace_work_dir, path]))
+    return _sh(container,
+               f"for p in {links}; do if [ -L \"$p\" ]; then "
+               f"echo \"refusing to empty {path}: $p is a symbolic link\"; exit 3; fi; done; "
+               f"rm -rf -- {quoted} && mkdir -p -- {quoted} && ls -A -- {quoted}")
+
+
 def _ace(container, args, cwd):
     """Run `ace <args>` from ``cwd`` with this run's configuration and service file."""
+    _require_safe_work_dir()
     return _sh(container,
                f"cd {shlex.quote(cwd)} && ACE_CONFIG={shlex.quote(ace_config_path)} "
                f"PGSERVICEFILE={shlex.quote(ace_pg_service_path)} {ACE_BINARY} {args}")
@@ -890,7 +951,7 @@ def test_ace_functional_setup_cluster(container_name, container_type):
     for node_num in range(1, 4):
         node_name = f"n{node_num}"
         node_port = ace_base_port + node_num - 1
-        node_pgdata = f"/tmp/{node_name}"
+        node_pgdata = _node_pgdata(node_name)
 
         print(f"\n▶️  Initializing {node_name} (port {node_port})")
 
@@ -1081,6 +1142,7 @@ def test_ace_functional_create_config(container_name, container_type):
     if not container_name:
         pytest.skip("No container defined in env")
 
+    _require_safe_work_dir()
     container = _running_container(container_name)
 
     pguser = _ace_pguser(container_type)
@@ -1093,9 +1155,10 @@ def test_ace_functional_create_config(container_name, container_type):
     print(f"\n--- ACE: Creating configuration files in {ace_work_dir} ---")
 
     # A fresh, empty work directory, so neither init command meets an earlier run's file.
-    exit_code, output = _sh(container, f"rm -rf {shlex.quote(ace_work_dir)} && "
-                                       f"mkdir -p {shlex.quote(ace_work_dir)}")
-    assert exit_code == 0, f"Failed to create the work directory {ace_work_dir}: {output.decode()}"
+    exit_code, output = _reset_test_dir(container, ace_work_dir)
+    leftover = output.decode().strip()
+    assert exit_code == 0 and not leftover, (
+        f"Failed to create an empty work directory {ace_work_dir} (exit {exit_code}): {leftover!r}")
 
     # ace cluster init writes ACE's sample service file. It must succeed on the fresh
     # path; this run's three nodes then replace the sample entries.
@@ -1168,6 +1231,7 @@ def test_ace_table_diff(container_name, container_type):
     if not container_name:
         pytest.skip("No container defined in env")
 
+    _require_safe_work_dir()
     container = _running_container(container_name)
 
     print(f"\n--- ACE: Running table-diff on public.n1 "
@@ -1177,7 +1241,7 @@ def test_ace_table_diff(container_name, container_type):
     # report. The report is read only from a directory emptied right before this run, so a
     # report left by an earlier run (same public_n1_diffs-*.json pattern) can never be read.
     report_dir = shlex.quote(ace_table_diff_dir)
-    exit_code, output = _sh(container, f"rm -rf {report_dir} && mkdir -p {report_dir} && ls -A {report_dir}")
+    exit_code, output = _reset_test_dir(container, ace_table_diff_dir)
     leftover = output.decode().strip()
     assert exit_code == 0 and not leftover, (
         f"the report directory {ace_table_diff_dir} is not empty after resetting it "
@@ -1299,7 +1363,7 @@ def test_ace_functional_cleanup(container_name, container_type):
 
     for node_num in range(1, 4):
         node_name = f"n{node_num}"
-        node_pgdata = f"/tmp/{node_name}"
+        node_pgdata = _node_pgdata(node_name)
         node_port = ace_base_port + node_num - 1
 
         success, _, message = pg_server_management.stop_server(

@@ -9,11 +9,12 @@ ACE prints "ace version <tag without v>" on stdout (3.0.0, 3.0.0-rc.3). Covers t
 an exact match on every channel, so a GA expectation rejects RC, dirty and development builds; an
 explicitly requested pre-release; the version read from stdout only; and missing, malformed or
 ambiguous output rejected. Also covers the existing package check against the 3.0.0-rc.3 RPM and
-DEB packages published in staging, the version the configs expect after their default upgrade.
+DEB packages published in staging, and against the released 3.0.0 packages the configs expect.
 """
 import importlib.util
 import itertools
 import os
+import re
 import sys
 
 import docker
@@ -166,3 +167,31 @@ def test_the_package_check_rejects_ga_and_release_packages_for_an_rc3_expectatio
     outcome = run(mod, _PackageContainer(family, installed), "test_component_package_version",
                   container_type)[0]
     assert outcome == "failed"
+
+
+# ACE 3.0.0 is final and the newest pgedge-ace in release, staging and daily, so every standalone
+# config expects it whether or not its default UPGRADE to staging runs.
+_CONFIG_DIR = os.path.join(os.path.dirname(__file__), "..", "..", "configuration")
+
+
+def test_every_config_expects_the_released_ace_3_0_0():
+    names = sorted(n for n in os.listdir(_CONFIG_DIR) if re.fullmatch(r"config\d+\.env", n))
+    assert names
+    for name in names:
+        with open(os.path.join(_CONFIG_DIR, name)) as f:
+            found = re.findall(r"^export PGEDGE_ACE_VERSION=(\S*)$", f.read(), re.M)
+        assert found == ["3.0.0"], name
+
+
+# pgedge-ace 3.0.0 as published on every native ACE platform: RPM release 1.el9/1.el10, DEB 3.0.0-1.
+@pytest.mark.parametrize("family,container_type,installed", [
+    ("rpm", "rhel", "3.0.0-1.el9"), ("rpm", "rhel", "3.0.0-1.el10"),
+    ("deb", "deb", "3.0.0-1.jammy"), ("deb", "deb", "3.0.0-1.noble"), ("deb", "deb", "3.0.0-1.resolute"),
+    ("deb", "deb", "3.0.0-1.bookworm"), ("deb", "deb", "3.0.0-1.trixie"),
+])
+def test_the_package_check_accepts_the_released_3_0_0_packages(monkeypatch, family, container_type,
+                                                                 installed):
+    mod = load(monkeypatch, "3.0.0", "release")
+    outcome = run(mod, _PackageContainer(family, installed), "test_component_package_version",
+                  container_type)[0]
+    assert outcome == "passed"

@@ -163,6 +163,17 @@ def test_pg_decoupled_expands_across_supported_majors():
     assert sorted(i["pg_major"] for i in plan["matrix"]["include"]) == ["16", "17", "18"]
 
 
+def test_ace_is_planned_like_rag_on_every_supported_major_with_its_release_facts():
+    plan = build([cell("c", [target("deb", "bookworm", "arm64", package="pgedge-ace", logical="ace",
+                                    version="3.0.0", cell_id="c")])],
+                 plats=enabled(("deb", "arm64", "debian12")), component="ace", version="3.0.0", tag="v3.0.0")
+    incl = plan["matrix"]["include"]
+    assert plan["coverage_gaps"] == [] and sorted(i["pg_major"] for i in incl) == ["16", "17", "18"]
+    assert all((i["component"], i["package_name"], i["effective_tag"], i["expected_deb"], i["expected_binary"])
+               == ("ace", "pgedge-ace", "v3.0.0", "3.0.0-1.bookworm", "") for i in incl)
+    _assert_ids_workflow_valid(plan)
+
+
 def test_pg_coupled_stays_on_build_major():
     plan = build([cell("c", [target("rpm", "el-9", "amd64", pg_coupled=True, build_pg_major="17", cell_id="c")])])
     assert [i["pg_major"] for i in plan["matrix"]["include"]] == ["17"]

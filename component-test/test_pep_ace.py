@@ -1,5 +1,8 @@
+import importlib.util as _ilu
+import json
 import os
 import re
+import shlex
 import sys
 import subprocess
 import time
@@ -14,8 +17,29 @@ from dotenv import load_dotenv
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 from aspects import configure_repository, package_management, machine_cleanup, machine_prereq_setup, file_management, container_management, pg_server_management
 
+
+def _load_util(name):
+    """Load a shared integration helper from aspects/pipeline/ by path (no package
+    __init__ there), so these imports work however this file is loaded."""
+    spec = _ilu.spec_from_file_location(
+        name, os.path.join(os.path.dirname(__file__), '..', 'aspects', 'pipeline', name + '.py'))
+    mod = _ilu.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+# The shared integration-mode install/identity steps, and through them the request contract
+# (the same ones the RAG and Spock tests use).
+pep_integration_mode = _load_util('pep_integration_mode')
+pep_request_env = pep_integration_mode.pep_request_env
+
 load_dotenv()
 client = docker.from_env()
+
+# Integration request built from the PEP_* env contract (validated by normalize_request against the
+# shared component policy, which maps ace to pgedge-ace). None in standalone mode, which keeps the
+# standalone options below (ACE_PACKAGE, PLATFORM_FILTER, SPOCK_MAJOR, PGEDGE_ACE_VERSION) unchanged.
+INTEGRATION_REQUEST = pep_request_env.build_request_from_env()
 
 # Load values from env
 rhel_containers = [c.strip() for c in os.getenv("CONTAINERS", "").split(",") if c.strip()]
@@ -24,8 +48,10 @@ deb_containers = [c.strip() for c in os.getenv("DEB_CONTAINERS", "").split(",") 
 # Combine all containers with their type
 all_containers = [(c, "rhel") for c in rhel_containers] + [(c, "deb") for c in deb_containers]
 
-# Filter containers based on platform filter (if set)
-platform_filter = os.getenv("PLATFORM_FILTER", "").lower()
+# Filter containers based on platform filter (if set). In integration mode the request family is
+# authoritative and overrides any configured PLATFORM_FILTER.
+platform_filter = (INTEGRATION_REQUEST["family"] if INTEGRATION_REQUEST is not None
+                   else os.getenv("PLATFORM_FILTER", "").lower())
 if platform_filter == "rpm":
     all_containers = [(c, t) for c, t in all_containers if t == "rhel"]
 elif platform_filter == "deb":
@@ -56,6 +82,12 @@ deb_bundled_files = os.getenv(
     "/usr/bin/ace"
 ).split(",")
 
+# In integration mode the package under test is exactly the requested (validated) package.
+if INTEGRATION_REQUEST is not None:
+    rhel_ace_package = deb_ace_package = INTEGRATION_REQUEST["package_name"]
+
+ACE_BINARY = "/usr/bin/ace"
+
 # Decoupled components SBOM path
 decoupled_sbom_path = os.getenv("DECOUPLED_COMPONENTS_SBOM", "")
 
@@ -69,8 +101,66 @@ ace_deb_pgbin = os.getenv("DEB_PG_BIN_PATH", f"/usr/lib/postgresql/{ace_pg_major
 
 # Spock major used to build the ACE functional cluster. pgedge-ace does not pull
 # in PostgreSQL; installing spock provides the server (and the postgres OS user)
-# plus the replication engine ACE diffs against.
-ace_spock_major = os.getenv("SPOCK_MAJOR", "50")
+# plus the replication engine ACE diffs against. Standalone selects it with
+# SPOCK_MAJOR (default 50). Release certification uses Spock 5 from the request's
+# channel and never SPOCK_MAJOR, so an inherited value cannot change what is
+# certified; the installed versions are recorded (record_prerequisite_versions).
+ACE_CERT_SPOCK_SERIES = "50"
+ace_spock_major = (ACE_CERT_SPOCK_SERIES if INTEGRATION_REQUEST is not None
+                   else os.getenv("SPOCK_MAJOR", "50"))
+
+# The seeded data. n1 gets the initial rows, which replicate to n2 and n3; then, with
+# every subscription disabled, each node inserts its own rows, continuing the same id
+# sequence from the initial rows (label, count).
+ACE_NODES = ("n1", "n2", "n3")
+
+
+def _node_pgdata(node):
+    return f"/tmp/{node}"
+
+
+# Every functional run works in a fresh directory: test_ace_functional_create_config
+# recreates it, so ACE's init commands never meet an earlier run's files, and
+# test_ace_table_diff reads a report only from an emptied subdirectory. Emptying it
+# uses rm -rf, so ACE_WORK_DIR must name a clearly test-owned directory
+# (ace_work_dir_problem); an unset or empty value means the default.
+_ACE_WORK_DIR_NAME = re.compile(r"ace-pep[A-Za-z0-9._-]*")
+_SAFE_PATH_PART = re.compile(r"[A-Za-z0-9._-]+")
+
+
+def ace_work_dir_problem(path):
+    """Why ``path`` is not a safe ACE work directory, or None. It must be an absolute,
+    normalized path of plain characters (letters, digits, ".", "_", "-") whose last
+    component starts with "ace-pep", and it must not overlap a node's data directory.
+    So /tmp, /, a relative path, a path through "." or "..", or a path with shell or
+    glob characters is refused before anything is deleted."""
+    if not path.startswith("/"):
+        return f"ACE_WORK_DIR {path!r} must be an absolute path"
+    parts = path.split("/")[1:]
+    if not all(_SAFE_PATH_PART.fullmatch(part) and part not in (".", "..") for part in parts):
+        return (f"ACE_WORK_DIR {path!r} must be a normalized path of letters, digits, '.', '_' "
+                f"and '-' (no '.', '..', '//' or other characters)")
+    if not _ACE_WORK_DIR_NAME.fullmatch(parts[-1]):
+        return (f"ACE_WORK_DIR {path!r} must end in a directory named ace-pep*, so only a "
+                f"test-owned directory is ever deleted")
+    for node in ACE_NODES:
+        pgdata = _node_pgdata(node)
+        if path == pgdata or path.startswith(pgdata + "/") or pgdata.startswith(path + "/"):
+            return f"ACE_WORK_DIR {path!r} overlaps the {node} data directory {pgdata}"
+    return None
+
+
+_ace_work_dir_env = os.getenv("ACE_WORK_DIR") or "/tmp/ace-pep"
+ace_work_dir = _ace_work_dir_env.rstrip("/") or _ace_work_dir_env
+ACE_WORK_DIR_PROBLEM = ace_work_dir_problem(ace_work_dir)
+ace_pg_service_path = f"{ace_work_dir}/pg_service.conf"
+ace_config_path = f"{ace_work_dir}/ace.yaml"
+ace_table_diff_dir = f"{ace_work_dir}/table-diff"
+
+SEED_INITIAL_ROWS = 10
+SEED_LOCAL_ROWS = {"n1": ("n1_load", 100), "n2": ("n2_divergent", 5), "n3": ("n3_divergent", 5)}
+# How long the initial replication may take to reach n2 and n3.
+ace_seed_timeout = float(os.getenv("ACE_SEED_TIMEOUT", "120"))
 
 _ace_spock_guc = {
     "shared_preload_libraries": "'spock'",
@@ -128,6 +218,263 @@ def _ace_spock_packages(container_type):
         ]
 
 
+def get_ace_prerequisites(container_type):
+    """Integration mode: the PostgreSQL server and Spock 5 packages the functional cluster needs,
+    for the request's PG major, from the same channel with no version pin. They are installed
+    BEFORE the pinned ACE package so installing them can never replace it. The RPM server is
+    named explicitly so a missing server is reported as a prerequisite failure."""
+    pg = ace_pg_major_version
+    if container_type == "rhel":
+        return [f"pgedge-postgresql{pg}-server", f"pgedge-postgresql{pg}-contrib",
+                f"pgedge-spock{ace_spock_major}_{pg}"]
+    return [f"pgedge-postgresql-{pg}", f"pgedge-postgresql-{pg}-spock{ace_spock_major}"]
+
+
+def _cluster_prerequisites_to_install(container_type):
+    """Packages test_ace_functional_setup_cluster installs: the standalone Spock set, or nothing in
+    integration mode, where test_component_install already installed them before the pinned ACE."""
+    return [] if INTEGRATION_REQUEST is not None else _ace_spock_packages(container_type)
+
+
+def record_prerequisite_versions(container, container_type):
+    """Integration mode, audit only: the installed versions of the PostgreSQL/Spock prerequisites
+    and of the requested ACE package, printed and written to PEP_PREREQ_OUT. Never part of the
+    verdict."""
+    names = get_ace_prerequisites(container_type) + [INTEGRATION_REQUEST["package_name"]]
+    versions = {n: package_management.query_installed_version(container, n) for n in names}
+    out = os.getenv("PEP_PREREQ_OUT", "test-logs/prerequisite-versions.json")
+    Path(out).parent.mkdir(parents=True, exist_ok=True)
+    Path(out).write_text(json.dumps({"channel": repo, "pg_major": ace_pg_major_version,
+                                     "spock_series": ace_spock_major,
+                                     "requested_package": INTEGRATION_REQUEST["package_name"],
+                                     "installed_versions": versions}, indent=2, sort_keys=True) + "\n")
+    for n, v in versions.items():
+        print(f"   installed {n} = {v}")
+    return versions
+
+
+# A release tag: v<major>.<minor>.<patch>, optionally -<suffix> (rc.1, beta.2, test1).
+_ACE_TAG = re.compile(r"v(\d+\.\d+\.\d+)(?:-([0-9A-Za-z]+(?:\.[0-9A-Za-z]+)*))?")
+
+
+def expected_ace_binary_version(request):
+    """``(version, problems)``: the version `ace --version` must print for ``request``, or None with
+    the reasons it cannot be derived.
+
+    ACE's release build stamps the binary with its tag without the leading "v", prerelease
+    punctuation kept (v3.0.0 -> 3.0.0, v3.0.1-rc.1 -> 3.0.1-rc.1), so the expectation is the
+    request's effective tag without the "v". The other release facts in the request must agree with
+    that tag under the pgEdge release-tag rules: version = the tag's x.y.z; build number =
+    <suffix without dots>_1, or 1 for a final release; RPM <version>-<build number>.<dist>; DEB
+    <version>[~<suffix without dots>]-1.<codename>. A request whose facts disagree is reported, not
+    trusted."""
+    tag = request.get("effective_tag")
+    if not tag:
+        return None, ["effective_tag is required to derive the expected ace version"]
+    match = _ACE_TAG.fullmatch(tag)
+    if not match:
+        return None, [f"effective_tag {tag!r} is not v<major>.<minor>.<patch>[-<suffix>]"]
+    base, suffix = match.group(1), match.group(2)
+    compact = suffix.replace(".", "") if suffix else None
+    buildnum = f"{compact}_1" if suffix else "1"
+    deb_upstream = f"{base}~{compact}" if suffix else base
+    problems = []
+    if base != request.get("expected_version"):
+        problems.append(f"effective_tag {tag!r} does not match expected_version "
+                        f"{request.get('expected_version')!r}")
+    if request.get("expected_buildnum") is not None and request["expected_buildnum"] != buildnum:
+        problems.append(f"expected_buildnum {request['expected_buildnum']!r} does not match "
+                        f"effective_tag {tag!r} (expected {buildnum!r})")
+    rpm = request.get("expected_rpm")
+    if rpm is not None and not re.fullmatch(re.escape(f"{base}-{buildnum}.") + r"[0-9A-Za-z_+]+", rpm):
+        problems.append(f"expected_rpm {rpm!r} does not match effective_tag {tag!r} "
+                        f"(expected {base}-{buildnum}.<dist>)")
+    deb = request.get("expected_deb")
+    if deb is not None and not re.fullmatch(re.escape(f"{deb_upstream}-1.") + r"[0-9A-Za-z+~]+", deb):
+        problems.append(f"expected_deb {deb!r} does not match effective_tag {tag!r} "
+                        f"(expected {deb_upstream}-1.<codename>)")
+    if problems:
+        return None, problems
+    return tag[1:], []
+
+
+def ace_binary_owners(container, container_type):
+    """``(owners, raw)``: the packages the package manager says own /usr/bin/ace (sorted; [] when it
+    is unowned or the query fails) and the raw answer."""
+    if container_type == "rhel":
+        cmd = ["rpm", "-qf", "--queryformat", "%{NAME}\\n", ACE_BINARY]
+    else:
+        cmd = ["dpkg-query", "-S", ACE_BINARY]
+    exit_code, output = container.exec_run(cmd, user="root")
+    raw = output.decode().strip()
+    if exit_code != 0:
+        return [], raw
+    if container_type == "rhel":
+        return sorted({line.strip() for line in raw.splitlines() if line.strip()}), raw
+    owners = set()
+    for line in raw.splitlines():
+        packages, sep, path = line.partition(": ")
+        if sep and path.strip() == ACE_BINARY:
+            owners.update(p.strip().split(":", 1)[0] for p in packages.split(","))
+    return sorted(owners), raw
+
+
+def _skip_or_fail(reason):
+    """A standalone run skips when an input is missing. In integration mode the check fails
+    instead: skips are reported separately, but the certification verdict could still pass with
+    the check skipped."""
+    if INTEGRATION_REQUEST is not None:
+        pytest.fail(reason)
+    pytest.skip(reason)
+
+
+def _running_container(container_name):
+    """The named container, which must be running. A missing container skips a standalone run
+    and fails an integration run."""
+    try:
+        container = client.containers.get(container_name)
+    except docker.errors.NotFound:
+        _skip_or_fail(f"Container {container_name} not found or not running.")
+    assert container.status == "running"
+    return container
+
+
+def _sh(container, script):
+    return container.exec_run(["bash", "-c", script], user="root")
+
+
+def _require_safe_work_dir():
+    """Fail the step, before anything runs in the container, when ACE_WORK_DIR is unsafe."""
+    if ACE_WORK_DIR_PROBLEM is not None:
+        pytest.fail(ACE_WORK_DIR_PROBLEM)
+
+
+def _reset_test_dir(container, path):
+    """Empty and recreate ``path``, which must be the validated work directory or a directory
+    inside it, and return ``(exit_code, output)``; the output lists anything still there. The
+    script refuses (exit 3) when the work directory or ``path`` is a symbolic link, so the
+    deletion can never follow a link out of the test-owned directory."""
+    _require_safe_work_dir()
+    child = path[len(ace_work_dir) + 1:] if path.startswith(ace_work_dir + "/") else None
+    inside = path == ace_work_dir or (
+        child is not None and _SAFE_PATH_PART.fullmatch(child) is not None and child not in (".", ".."))
+    assert inside, f"refusing to empty {path!r}: it is outside the ACE work directory {ace_work_dir}"
+    quoted = shlex.quote(path)
+    links = " ".join(shlex.quote(p) for p in dict.fromkeys([ace_work_dir, path]))
+    return _sh(container,
+               f"for p in {links}; do if [ -L \"$p\" ]; then "
+               f"echo \"refusing to empty {path}: $p is a symbolic link\"; exit 3; fi; done; "
+               f"rm -rf -- {quoted} && mkdir -p -- {quoted} && ls -A -- {quoted}")
+
+
+def _ace(container, args, cwd):
+    """Run `ace <args>` from ``cwd`` with this run's configuration and service file."""
+    _require_safe_work_dir()
+    return _sh(container,
+               f"cd {shlex.quote(cwd)} && ACE_CONFIG={shlex.quote(ace_config_path)} "
+               f"PGSERVICEFILE={shlex.quote(ace_pg_service_path)} {ACE_BINARY} {args}")
+
+
+def _assert_file_written(container, path, command):
+    exit_code, output = _sh(container, f"test -s {shlex.quote(path)}")
+    assert exit_code == 0, f"{command} reported success but {path} is missing or empty"
+
+
+def _node_port(node):
+    return ace_base_port + ACE_NODES.index(node)
+
+
+def _psql(container, node, pguser, sql, tuples=False):
+    cmd = ["psql", "-h", "localhost", "-p", str(_node_port(node)), "-U", pguser, "-d", "postgres"]
+    if tuples:
+        cmd += ["-t", "-A", "-F", "|"]
+    return container.exec_run(cmd + ["-c", sql], user="root")
+
+
+def expected_seed_after_setup():
+    """{node: {label: rows}} once the initial rows have replicated."""
+    return {node: {"initial_row": SEED_INITIAL_ROWS} for node in ACE_NODES}
+
+
+def expected_seed_after_divergence():
+    """{node: {label: rows}} once every node has inserted its own rows."""
+    return {node: {"initial_row": SEED_INITIAL_ROWS, label: count}
+            for node, (label, count) in SEED_LOCAL_ROWS.items()}
+
+
+def expected_table_diff_counts():
+    """table-diff's diff_rows_count for the seeded data, per sorted node pair. ACE counts a row
+    found on one node only once, and a row whose id exists on both nodes with different data once.
+    Each node's own rows continue the same id sequence, so two nodes differ in max(their own row
+    counts) rows: n1/n2 = n1/n3 = 100 and n2/n3 = 5."""
+    counts = {}
+    for i, a in enumerate(ACE_NODES):
+        for b in ACE_NODES[i + 1:]:
+            counts[f"{a}/{b}"] = max(SEED_LOCAL_ROWS[a][1], SEED_LOCAL_ROWS[b][1])
+    return counts
+
+
+# The rows of public.n1 per label (the data without its trailing _<n>).
+_LABEL_COUNTS_SQL = ("SELECT regexp_replace(data, '_[0-9]+$', ''), count(*) "
+                     "FROM public.n1 GROUP BY 1 ORDER BY 1;")
+
+
+def node_label_counts(container, node, pguser):
+    """``(counts, raw)``: {label: rows} of public.n1 on ``node``, or None when the query fails."""
+    exit_code, output = _psql(container, node, pguser, _LABEL_COUNTS_SQL, tuples=True)
+    raw = output.decode().strip()
+    if exit_code != 0:
+        return None, raw
+    counts = {}
+    for line in raw.splitlines():
+        label, sep, rows = line.rpartition("|")
+        if not sep or not rows.strip().isdigit():
+            return None, raw
+        counts[label] = int(rows)
+    return counts, raw
+
+
+def wait_for_seed(container, pguser, expected, timeout=0.0, interval=3.0):
+    """Wait until public.n1 on every node in ``expected`` holds exactly the expected rows per label
+    and return them; raise AssertionError naming the nodes that differ once ``timeout`` passes."""
+    deadline = time.monotonic() + timeout
+    while True:
+        observed = {}
+        for node in expected:
+            counts, raw = node_label_counts(container, node, pguser)
+            observed[node] = counts if counts is not None else f"query failed: {raw}"
+        if observed == expected:
+            return observed
+        if time.monotonic() >= deadline:
+            wrong = sorted(node for node in expected if observed[node] != expected[node])
+            raise AssertionError(
+                "public.n1 does not hold the seeded rows on " + ", ".join(wrong) + ": " +
+                "; ".join(f"{node} expected {expected[node]}, found {observed[node]}" for node in wrong))
+        time.sleep(interval)
+
+
+def table_diff_report_problems(report):
+    """Why a table-diff JSON report does not show exactly the seeded differences ([] if it does)."""
+    if not isinstance(report, dict) or not isinstance(report.get("summary"), dict):
+        return ["the report has no summary object"]
+    summary = report["summary"]
+    problems = []
+    if (summary.get("schema"), summary.get("table")) != ("public", "n1"):
+        problems.append(f"the report is for {summary.get('schema')}.{summary.get('table')}, not public.n1")
+    if sorted(summary.get("nodes") or []) != list(ACE_NODES):
+        problems.append(f"the report compares nodes {summary.get('nodes')}, not {list(ACE_NODES)}")
+    if summary.get("incomplete_pairs"):
+        problems.append(f"the comparison was incomplete for {summary['incomplete_pairs']}, "
+                        f"so its counts are only lower bounds")
+    if summary.get("diff_row_limit_reached"):
+        problems.append("the diff row limit was reached, so the counts are truncated")
+    expected = expected_table_diff_counts()
+    if summary.get("diff_rows_count") != expected:
+        problems.append(f"diff_rows_count is {summary.get('diff_rows_count')}, "
+                        f"expected {expected} from the seeded rows")
+    return problems
+
+
 # ============================================================================
 # Test Functions
 # ============================================================================
@@ -165,12 +512,7 @@ def test_configure_repository(container_name, container_type):
     if not container_name:
         pytest.skip("No container defined in env")
 
-    try:
-        container = client.containers.get(container_name)
-    except docker.errors.NotFound:
-        pytest.skip(f"Container {container_name} not found or not running.")
-
-    assert container.status == "running"
+    container = _running_container(container_name)
 
     print(f"\n--- Configuring repository in {container_name} ---")
 
@@ -195,12 +537,32 @@ def test_component_install(container_name, container_type):
     config = get_container_config(container_type)
     ace_package = config["ace_package"]
 
-    try:
-        container = client.containers.get(container_name)
-    except docker.errors.NotFound:
-        pytest.skip(f"Container {container_name} not found or not running.")
+    container = _running_container(container_name)
 
-    assert container.status == "running"
+    if INTEGRATION_REQUEST is not None:
+        # The PostgreSQL/Spock prerequisites first, from the request's channel, then the requested
+        # ACE package last, exactly as the request decides (pinned + checksum evidence), so no later
+        # install can replace it.
+        prerequisites = get_ace_prerequisites(container_type)
+        print(f"\n--- Installing PostgreSQL {ace_pg_major_version} / Spock {ace_spock_major} "
+              f"prerequisites on {container_name}: {', '.join(prerequisites)} ---")
+        try:
+            success, platform, message = package_management.install_package(
+                container=container,
+                package_name=prerequisites,
+                pg_major_version=ace_pg_major_version,
+                install_pg_server=False
+            )
+        except Exception as e:
+            success, message = False, str(e)
+        if not success:
+            pytest.fail(f"PostgreSQL {ace_pg_major_version} / Spock {ace_spock_major} prerequisites "
+                        f"unavailable from the {repo!r} channel ({', '.join(prerequisites)}); "
+                        f"{ace_package} was not installed: {message}")
+        print(f"\n--- Installing requested {ace_package} on {container_name} ---")
+        pep_integration_mode.install_for_request(container, INTEGRATION_REQUEST)
+        record_prerequisite_versions(container, container_type)
+        return
 
     print(f"\n--- Installing {ace_package} on {container_name} ({container_type}) ---")
 
@@ -217,6 +579,8 @@ def test_component_install(container_name, container_type):
 @pytest.mark.parametrize("container_name,container_type", all_containers)
 def test_component_upgrade(container_name, container_type):
     """Upgrade component package if UPGRADE=true"""
+    if INTEGRATION_REQUEST is not None:
+        pytest.skip("integration mode: certification never upgrades; the requested package is pinned")
     if os.getenv("UPGRADE", "false").lower() != "true":
         pytest.skip("Skipping upgrade tests because UPGRADE=false in env")
 
@@ -228,12 +592,7 @@ def test_component_upgrade(container_name, container_type):
     config = get_container_config(container_type)
     ace_package = config["ace_package"]
 
-    try:
-        container = client.containers.get(container_name)
-    except docker.errors.NotFound:
-        pytest.skip(f"Container {container_name} not found or not running.")
-
-    assert container.status == "running"
+    container = _running_container(container_name)
 
     print(f"\n--- Upgrading {ace_package} on {container_name} ({container_type}) ---")
 
@@ -260,6 +619,10 @@ def test_component_upgrade(container_name, container_type):
 @pytest.mark.parametrize("container_name,container_type", all_containers)
 def test_component_package_version(container_name, container_type):
     """Step 3: Check the package version using package_management module"""
+    if INTEGRATION_REQUEST is not None:
+        pytest.skip("integration mode: superseded by test_ace_identity, which checks the exact "
+                    "requested version")
+
     container_name = container_name.strip()
     if not container_name:
         pytest.skip("No container defined in env")
@@ -271,12 +634,7 @@ def test_component_package_version(container_name, container_type):
     config = get_container_config(container_type)
     ace_package = config["ace_package"]
 
-    try:
-        container = client.containers.get(container_name)
-    except docker.errors.NotFound:
-        pytest.skip(f"Container {container_name} not found or not running.")
-
-    assert container.status == "running"
+    container = _running_container(container_name)
 
     print(f"\n--- Verifying {ace_package} version on {container_name} ({container_type}) ---")
 
@@ -293,6 +651,26 @@ def test_component_package_version(container_name, container_type):
 
 
 @pytest.mark.parametrize("container_name,container_type", all_containers)
+def test_ace_identity(container_name, container_type):
+    """Integration mode: one consolidated identity verdict for the requested ACE package
+    (install-before-identity, then the exact package-manager version). The shared binary probe
+    (`<binary> -version`, read as a "Version:" line) cannot read ACE, so no binary is passed here;
+    test_ace_binary_version checks the binary's owner and exact version. The evidence is persisted
+    before any failure. Skipped in standalone mode."""
+    req = INTEGRATION_REQUEST
+    if req is None:
+        pytest.skip("integration mode only")
+
+    container = _running_container(container_name.strip())
+
+    ev, problems = pep_integration_mode.record_identity(container, req)
+    if ev is None:
+        pytest.fail("; ".join(problems))
+    print(f"identity evidence ({req['package_name']}): {ev}")
+    assert not problems, "; ".join(problems)
+
+
+@pytest.mark.parametrize("container_name,container_type", all_containers)
 def test_verify_bundled_files(container_name, container_type):
     """Verify bundled files for ace match expected files
 
@@ -304,12 +682,7 @@ def test_verify_bundled_files(container_name, container_type):
     if not container_name:
         pytest.skip("Invalid container")
 
-    try:
-        container = client.containers.get(container_name)
-    except docker.errors.NotFound:
-        pytest.skip(f"Container {container_name} not found or not running.")
-
-    assert container.status == "running"
+    container = _running_container(container_name)
 
     # Get the actual package name for the platform
     config = get_container_config(container_type)
@@ -345,11 +718,11 @@ def test_verify_bundled_files(container_name, container_type):
             pytest.fail(f"{message}{details_str}")
 
     except Exception as e:
-        # Handle cases like missing expected files
+        # A missing expected-output reference skips a standalone run and fails an integration
+        # run, where the requested release package would otherwise never be compared.
         if "No expected file found" in str(e):
-            pytest.skip(str(e))
-        else:
-            pytest.fail(f"Failed to verify bundled files: {str(e)}")
+            _skip_or_fail(str(e))
+        pytest.fail(f"Failed to verify bundled files: {str(e)}")
 
 
 @pytest.mark.parametrize("container_name,container_type", all_containers)
@@ -360,14 +733,9 @@ def test_verify_sbom(container_name, container_type):
         pytest.skip("No container defined in env")
 
     if not decoupled_sbom_path:
-        pytest.skip("DECOUPLED_COMPONENTS_SBOM not defined in env, skipping SBOM verification")
+        _skip_or_fail("DECOUPLED_COMPONENTS_SBOM is not set, so the SBOM signature cannot be verified")
 
-    try:
-        container = client.containers.get(container_name)
-    except docker.errors.NotFound:
-        pytest.skip(f"Container {container_name} not found or not running.")
-
-    assert container.status == "running"
+    container = _running_container(container_name)
 
     config = get_container_config(container_type)
     ace_package = config["ace_package"]
@@ -431,12 +799,7 @@ def test_ace_help(container_name, container_type):
     if not container_name:
         pytest.skip("No container defined in env")
 
-    try:
-        container = client.containers.get(container_name)
-    except docker.errors.NotFound:
-        pytest.skip(f"Container {container_name} not found or not running.")
-
-    assert container.status == "running"
+    container = _running_container(container_name)
 
     print(f"\n--- Testing ace --help on {container_name} ({container_type}) ---")
 
@@ -476,27 +839,44 @@ def _parse_ace_version(stdout):
 
 @pytest.mark.parametrize("container_name,container_type", all_containers)
 def test_ace_binary_version(container_name, container_type):
-    """Verify that the ace binary reports exactly PGEDGE_ACE_VERSION.
+    """Verify that the ace binary reports exactly the expected version.
+
+    Standalone, the expectation is PGEDGE_ACE_VERSION (skipped when it is not set).
+    In integration mode it is the request's effective tag without the "v"
+    (expected_ace_binary_version, which cross-checks the other release facts), the
+    config value is ignored, and /usr/bin/ace must first belong to the requested
+    package, so the probed binary is the one under test.
 
     Only stdout of `ace --version` is parsed, so a warning on stderr cannot be
     taken for the version. The match is exact on every channel: "3.0.0" fails
     on an RC, dirty or development build (3.0.0-rc.3, 3.0.0-dirty,
-    3.0.0-5-gabc1234), and a pre-release passes only when PGEDGE_ACE_VERSION
-    names it (3.0.0-rc.3). Skipped when PGEDGE_ACE_VERSION is not set.
+    3.0.0-5-gabc1234), and a pre-release passes only when it is the expected
+    version (3.0.0-rc.3).
     """
-    if not ace_version:
-        pytest.skip("PGEDGE_ACE_VERSION not set in env, skipping version check")
+    if INTEGRATION_REQUEST is not None:
+        expected_version, problems = expected_ace_binary_version(INTEGRATION_REQUEST)
+        if problems:
+            pytest.fail("cannot derive the expected ace version from the request: " + "; ".join(problems))
+        hint = f"from effective_tag {INTEGRATION_REQUEST['effective_tag']!r}"
+    else:
+        expected_version = ace_version
+        if not expected_version:
+            pytest.skip("PGEDGE_ACE_VERSION not set in env, skipping version check")
+        hint = "set PGEDGE_ACE_VERSION to a pre-release to expect one"
 
     container_name = container_name.strip()
     if not container_name:
         pytest.skip("No container defined in env")
 
-    try:
-        container = client.containers.get(container_name)
-    except docker.errors.NotFound:
-        pytest.skip(f"Container {container_name} not found or not running.")
+    container = _running_container(container_name)
 
-    assert container.status == "running"
+    if INTEGRATION_REQUEST is not None:
+        requested = INTEGRATION_REQUEST["package_name"]
+        owners, raw = ace_binary_owners(container, container_type)
+        assert owners == [requested], (
+            f"{ACE_BINARY} is owned by {owners or 'no package'}, not only the requested "
+            f"{requested!r} (package manager said: {raw!r})")
+        print(f"✅ {ACE_BINARY} belongs to {requested}")
 
     print(f"\n--- Checking ace --version on {container_name} ({container_type}) ---")
 
@@ -522,11 +902,11 @@ def test_ace_binary_version(container_name, container_type):
         pytest.fail(f"Cannot read the ace version: {e}\n"
                     f"  stdout: {stdout!r}\n  stderr: {stderr!r}")
 
-    assert reported_version == ace_version, (
-        f"ace version mismatch: expected exactly '{ace_version}', got "
-        f"'{reported_version}' (set PGEDGE_ACE_VERSION to a pre-release to expect one)"
+    assert reported_version == expected_version, (
+        f"ace version mismatch: expected exactly '{expected_version}', got "
+        f"'{reported_version}' ({hint})"
     )
-    print(f"✅ ace reports version {reported_version} (expected {ace_version})")
+    print(f"✅ ace reports version {reported_version} (expected {expected_version})")
 
 
 # ============================================================================
@@ -540,12 +920,7 @@ def test_ace_functional_setup_cluster(container_name, container_type):
     if not container_name:
         pytest.skip("No container defined in env")
 
-    try:
-        container = client.containers.get(container_name)
-    except docker.errors.NotFound:
-        pytest.skip(f"Container {container_name} not found or not running.")
-
-    assert container.status == "running"
+    container = _running_container(container_name)
 
     pgbin = _ace_pgbin(container_type)
     pguser = _ace_pguser(container_type)
@@ -555,24 +930,28 @@ def test_ace_functional_setup_cluster(container_name, container_type):
     # pgedge-ace ships only the ACE tool — it does not pull in PostgreSQL or
     # spock. Install the spock package set first: it provides the PostgreSQL
     # server (creating the postgres OS user and initdb/psql/pg_ctl) plus the
-    # replication engine the ACE functional tests operate against.
-    spock_packages = _ace_spock_packages(container_type)
-    print(f"▶️  Installing cluster prerequisites: {', '.join(spock_packages)}")
-    try:
-        success, platform, message = package_management.install_package(
-            container, spock_packages,
-            pg_major_version=ace_pg_major_version, install_pg_server=False
-        )
-        assert success, f"Failed to install spock/server packages for ACE cluster: {message}"
-        print(f"✅ Cluster prerequisites installed on {platform}")
-    except Exception as e:
-        pytest.fail(f"Failed to install spock/server packages for ACE cluster: {str(e)}")
+    # replication engine the ACE functional tests operate against. In integration
+    # mode test_component_install installed them before the pinned ACE package.
+    spock_packages = _cluster_prerequisites_to_install(container_type)
+    if not spock_packages:
+        print("▶️  Cluster prerequisites were installed before the requested ACE package")
+    else:
+        print(f"▶️  Installing cluster prerequisites: {', '.join(spock_packages)}")
+        try:
+            success, platform, message = package_management.install_package(
+                container, spock_packages,
+                pg_major_version=ace_pg_major_version, install_pg_server=False
+            )
+            assert success, f"Failed to install spock/server packages for ACE cluster: {message}"
+            print(f"✅ Cluster prerequisites installed on {platform}")
+        except Exception as e:
+            pytest.fail(f"Failed to install spock/server packages for ACE cluster: {str(e)}")
 
     # Initialize nodes n1, n2, n3
     for node_num in range(1, 4):
         node_name = f"n{node_num}"
         node_port = ace_base_port + node_num - 1
-        node_pgdata = f"/tmp/{node_name}"
+        node_pgdata = _node_pgdata(node_name)
 
         print(f"\n▶️  Initializing {node_name} (port {node_port})")
 
@@ -634,7 +1013,7 @@ def test_ace_functional_setup_cluster(container_name, container_type):
         ");\n"
         "SELECT spock.repset_add_table('default', 'public.n1');\n"
         "INSERT INTO public.n1 (data)\n"
-        "    SELECT 'initial_row_' || g FROM generate_series(1, 10) g;\n"
+        f"    SELECT 'initial_row_' || g FROM generate_series(1, {SEED_INITIAL_ROWS}) g;\n"
     )
     sql_file = "/tmp/ace_create_table.sql"
     container.exec_run(
@@ -647,7 +1026,7 @@ def test_ace_functional_setup_cluster(container_name, container_type):
         user="root"
     )
     assert exit_code == 0, f"Failed to create/seed public.n1 on n1: {output.decode()}"
-    print(f"✅ Table public.n1 seeded with 10 rows on n1")
+    print(f"✅ Table public.n1 seeded with {SEED_INITIAL_ROWS} rows on n1")
 
     # Subscribe n2 and n3 to n1 for initial data sync
     n1_dsn = (
@@ -679,23 +1058,12 @@ def test_ace_functional_setup_cluster(container_name, container_type):
         )
         print(f"✅ n{sub_num} subscribed to n1 ({sub_name})")
 
-    print(f"\n⏳ Waiting 15 seconds for initial replication to n2 and n3...")
-    time.sleep(15)
-
-    # Verify table replicated to n2 and n3
-    for check_num in [2, 3]:
-        check_port = ace_base_port + check_num - 1
-        exit_code, output = container.exec_run(
-            ["psql", "-h", "localhost", "-p", str(check_port), "-U", pguser,
-             "-d", "postgres", "-t", "-c", "SELECT COUNT(*) FROM public.n1;"],
-            user="root"
-        )
-        assert exit_code == 0, f"Failed to query n{check_num}: {output.decode()}"
-        count = output.decode().strip()
-        assert int(count) >= 10, (
-            f"Replication incomplete on n{check_num}: only {count} rows"
-        )
-        print(f"✅ n{check_num} has {count} rows — initial replication confirmed")
+    # Every node must hold exactly the seeded rows (no more, no fewer) before the
+    # divergence step; n2 and n3 get them through the initial replication.
+    print(f"\n⏳ Waiting up to {ace_seed_timeout:.0f} seconds for initial replication to n2 and n3...")
+    observed = wait_for_seed(container, pguser, expected_seed_after_setup(), timeout=ace_seed_timeout)
+    for node, counts in observed.items():
+        print(f"✅ {node}: {counts} — initial replication confirmed")
 
     print(f"\n✅ 3-node Spock cluster ready for ACE functional tests")
 
@@ -707,18 +1075,15 @@ def test_ace_functional_create_divergence(container_name, container_type):
     if not container_name:
         pytest.skip("No container defined in env")
 
-    try:
-        container = client.containers.get(container_name)
-    except docker.errors.NotFound:
-        pytest.skip(f"Container {container_name} not found or not running.")
-
-    assert container.status == "running"
+    container = _running_container(container_name)
 
     pguser = _ace_pguser(container_type)
 
     print(f"\n--- ACE: Disabling subscriptions and creating data divergence ---")
 
-    # Disable all subscriptions on every node so writes stay local
+    # Disable all subscriptions on every node so writes stay local. Each node must
+    # report no enabled subscription afterwards; otherwise n1's rows could replicate
+    # and the differences ACE is expected to find would not exist.
     print(f"\n▶️  Disabling Spock subscriptions on all nodes")
     disable_sql = (
         "DO $$ DECLARE r RECORD; BEGIN "
@@ -726,21 +1091,16 @@ def test_ace_functional_create_divergence(container_name, container_type):
         "PERFORM spock.sub_disable(r.sub_name); "
         "END LOOP; END $$;"
     )
-    for node_num in range(1, 4):
-        node_port = ace_base_port + node_num - 1
-        exit_code, output = container.exec_run(
-            ["psql", "-h", "localhost", "-p", str(node_port), "-U", pguser,
-             "-d", "postgres", "-c", disable_sql],
-            user="root"
-        )
-        if exit_code != 0:
-            out = output.decode()
-            if "does not exist" in out or "no subscription" in out.lower():
-                print(f"   ℹ️  n{node_num}: no subscriptions to disable")
-            else:
-                print(f"   ⚠️  Could not disable subscriptions on n{node_num}: {out}")
-        else:
-            print(f"   ✅ Subscriptions disabled on n{node_num}")
+    for node in ACE_NODES:
+        exit_code, output = _psql(container, node, pguser, disable_sql)
+        assert exit_code == 0, f"Could not disable the subscriptions on {node}: {output.decode()}"
+        exit_code, output = _psql(container, node, pguser,
+                                  "SELECT count(*) FROM spock.subscription WHERE sub_enabled;",
+                                  tuples=True)
+        enabled = output.decode().strip()
+        assert exit_code == 0 and enabled == "0", (
+            f"{node}: subscription(s) still enabled after disabling them: {enabled!r}")
+        print(f"   ✅ Subscriptions disabled on {node}")
 
     time.sleep(2)
 
@@ -753,55 +1113,24 @@ def test_ace_functional_create_divergence(container_name, container_type):
         "(SELECT COALESCE(MAX(id), 1) FROM public.n1)); "
     )
 
-    # Insert 5 unique rows on n2 (these will NOT replicate to n1/n3)
-    print(f"\n▶️  Inserting 5 divergent rows on n2")
-    exit_code, output = container.exec_run(
-        ["psql", "-h", "localhost", "-p", str(ace_base_port + 1), "-U", pguser,
-         "-d", "postgres", "-c",
-         advance_seq +
-         "INSERT INTO public.n1 (data) "
-         "SELECT 'n2_divergent_' || g FROM generate_series(1, 5) g;"],
-        user="root"
-    )
-    assert exit_code == 0, f"Failed to insert divergent rows on n2: {output.decode()}"
-    print(f"✅ 5 divergent rows inserted on n2")
+    # Each node inserts its own rows (these do NOT replicate): n2 and n3 first, then n1.
+    for node in ("n2", "n3", "n1"):
+        label, count = SEED_LOCAL_ROWS[node]
+        print(f"\n▶️  Inserting {count} {label} rows on {node}")
+        exit_code, output = _psql(
+            container, node, pguser,
+            advance_seq +
+            "INSERT INTO public.n1 (data) "
+            f"SELECT '{label}_' || g FROM generate_series(1, {count}) g;")
+        assert exit_code == 0, f"Failed to insert {label} rows on {node}: {output.decode()}"
+        print(f"✅ {count} {label} rows inserted on {node}")
 
-    # Insert 5 unique rows on n3
-    print(f"\n▶️  Inserting 5 divergent rows on n3")
-    exit_code, output = container.exec_run(
-        ["psql", "-h", "localhost", "-p", str(ace_base_port + 2), "-U", pguser,
-         "-d", "postgres", "-c",
-         advance_seq +
-         "INSERT INTO public.n1 (data) "
-         "SELECT 'n3_divergent_' || g FROM generate_series(1, 5) g;"],
-        user="root"
-    )
-    assert exit_code == 0, f"Failed to insert divergent rows on n3: {output.decode()}"
-    print(f"✅ 5 divergent rows inserted on n3")
-
-    # Insert 100 rows on n1
-    print(f"\n▶️  Adding 100 rows on n1")
-    exit_code, output = container.exec_run(
-        ["psql", "-h", "localhost", "-p", str(ace_base_port), "-U", pguser,
-         "-d", "postgres", "-c",
-         advance_seq +
-         "INSERT INTO public.n1 (data) "
-         "SELECT 'n1_load_' || g FROM generate_series(1, 100) g;"],
-        user="root"
-    )
-    assert exit_code == 0, f"Failed to insert 100 rows on n1: {output.decode()}"
-    print(f"✅ 100 rows added on n1")
-
-    # Print row counts per node to confirm divergence
-    print(f"\n▶️  Row counts per node:")
-    for node_num in range(1, 4):
-        node_port = ace_base_port + node_num - 1
-        exit_code, output = container.exec_run(
-            ["psql", "-h", "localhost", "-p", str(node_port), "-U", pguser,
-             "-d", "postgres", "-t", "-c", "SELECT COUNT(*) FROM public.n1;"],
-            user="root"
-        )
-        print(f"   n{node_num}: {output.decode().strip()} rows")
+    # Every node must hold exactly its seeded rows, so the counts table-diff must
+    # report follow from the seed (expected_table_diff_counts).
+    observed = wait_for_seed(container, pguser, expected_seed_after_divergence())
+    print(f"\n▶️  Rows per node:")
+    for node, counts in observed.items():
+        print(f"   {node}: {counts}")
 
     print(f"\n✅ Data divergence created — each node has unique rows")
 
@@ -813,21 +1142,33 @@ def test_ace_functional_create_config(container_name, container_type):
     if not container_name:
         pytest.skip("No container defined in env")
 
-    try:
-        container = client.containers.get(container_name)
-    except docker.errors.NotFound:
-        pytest.skip(f"Container {container_name} not found or not running.")
-
-    assert container.status == "running"
+    _require_safe_work_dir()
+    container = _running_container(container_name)
 
     pguser = _ace_pguser(container_type)
     n1_port = ace_base_port
     n2_port = ace_base_port + 1
     n3_port = ace_base_port + 2
-    pg_service_path = "/tmp/pg_service.conf"
-    ace_yaml_path = "/tmp/ace.yaml"
+    pg_service_path = ace_pg_service_path
+    ace_yaml_path = ace_config_path
 
-    print(f"\n--- ACE: Creating configuration files ---")
+    print(f"\n--- ACE: Creating configuration files in {ace_work_dir} ---")
+
+    # A fresh, empty work directory, so neither init command meets an earlier run's file.
+    exit_code, output = _reset_test_dir(container, ace_work_dir)
+    leftover = output.decode().strip()
+    assert exit_code == 0 and not leftover, (
+        f"Failed to create an empty work directory {ace_work_dir} (exit {exit_code}): {leftover!r}")
+
+    # ace cluster init writes ACE's sample service file. It must succeed on the fresh
+    # path; this run's three nodes then replace the sample entries.
+    print(f"\n▶️  Running: ace cluster init --path {pg_service_path}")
+    exit_code, output = _ace(container, f"cluster init --path {shlex.quote(pg_service_path)}", ace_work_dir)
+    output_str = output.decode()
+    print(f"   {output_str[:500]}")
+    assert exit_code == 0, f"ace cluster init failed (exit {exit_code}):\n{output_str}"
+    _assert_file_written(container, pg_service_path, "ace cluster init")
+    print(f"✅ ace cluster init completed")
 
     # Write pg_service.conf
     pg_service_content = (
@@ -856,35 +1197,14 @@ def test_ace_functional_create_config(container_name, container_type):
     assert exit_code == 0, f"Failed to write pg_service.conf: {output.decode()}"
     print(f"✅ pg_service.conf written to {pg_service_path}")
 
-    # ace cluster init
-    print(f"\n▶️  Running: ace cluster init --path {pg_service_path}")
-    exit_code, output = container.exec_run(
-        ["bash", "-c",
-         f"cd /tmp && PGSERVICEFILE={pg_service_path} "
-         f"/usr/bin/ace cluster init --path {pg_service_path}"],
-        user="root"
-    )
-    output_str = output.decode()
-    print(f"   {output_str[:500]}")
-    if exit_code != 0:
-        print(f"   ⚠️  ace cluster init exit code {exit_code} (output above)")
-    else:
-        print(f"✅ ace cluster init completed")
-
-    # ace config init
+    # ace config init writes the ace.yaml every later ace command uses (ACE_CONFIG).
     print(f"\n▶️  Running: ace config init --path {ace_yaml_path}")
-    exit_code, output = container.exec_run(
-        ["bash", "-c",
-         f"cd /tmp && PGSERVICEFILE={pg_service_path} "
-         f"/usr/bin/ace config init --path {ace_yaml_path}"],
-        user="root"
-    )
+    exit_code, output = _ace(container, f"config init --path {shlex.quote(ace_yaml_path)}", ace_work_dir)
     output_str = output.decode()
     print(f"   {output_str[:500]}")
-    if exit_code != 0:
-        print(f"   ⚠️  ace config init exit code {exit_code} (output above)")
-    else:
-        print(f"✅ ace config init completed — ace.yaml at {ace_yaml_path}")
+    assert exit_code == 0, f"ace config init failed (exit {exit_code}):\n{output_str}"
+    _assert_file_written(container, ace_yaml_path, "ace config init")
+    print(f"✅ ace config init completed — ace.yaml at {ace_yaml_path}")
 
     # Create pgcrypto extension on all nodes (required for mtree SHA-256 hashing)
     print(f"\n▶️  Creating pgcrypto extension on all nodes")
@@ -911,29 +1231,44 @@ def test_ace_table_diff(container_name, container_type):
     if not container_name:
         pytest.skip("No container defined in env")
 
-    try:
-        container = client.containers.get(container_name)
-    except docker.errors.NotFound:
-        pytest.skip(f"Container {container_name} not found or not running.")
-
-    assert container.status == "running"
-
-    pg_service_path = "/tmp/pg_service.conf"
+    _require_safe_work_dir()
+    container = _running_container(container_name)
 
     print(f"\n--- ACE: Running table-diff on public.n1 "
           f"for cluster '{ace_cluster_name}' ---")
 
-    exit_code, output = container.exec_run(
-        ["bash", "-c",
-         f"cd /tmp && PGSERVICEFILE={pg_service_path} "
-         f"/usr/bin/ace table-diff -o html {ace_cluster_name} public.n1"],
-        user="root"
-    )
+    # table-diff exits 0 whether or not the tables match, so the verdict comes from its JSON
+    # report. The report is read only from a directory emptied right before this run, so a
+    # report left by an earlier run (same public_n1_diffs-*.json pattern) can never be read.
+    report_dir = shlex.quote(ace_table_diff_dir)
+    exit_code, output = _reset_test_dir(container, ace_table_diff_dir)
+    leftover = output.decode().strip()
+    assert exit_code == 0 and not leftover, (
+        f"the report directory {ace_table_diff_dir} is not empty after resetting it "
+        f"(exit {exit_code}): {leftover!r}")
+
+    exit_code, output = _ace(container, f"table-diff -o html {shlex.quote(ace_cluster_name)} public.n1",
+                             ace_table_diff_dir)
     output_str = output.decode()
     print(f"   Output:\n{output_str[:1000]}")
-
     assert exit_code == 0, f"ace table-diff failed (exit {exit_code}):\n{output_str}"
-    print(f"✅ ace table-diff completed successfully")
+
+    exit_code, output = _sh(container, f"cd {report_dir} && ls -1 -- public_n1_diffs-*.json 2>/dev/null; true")
+    reports = output.decode().split()
+    assert len(reports) == 1, (
+        f"expected exactly one public_n1_diffs-*.json report from this run in {ace_table_diff_dir}, "
+        f"found {len(reports)}: {reports}. ACE writes no report when the tables match, so the "
+        f"seeded differences were not found")
+    exit_code, output = container.exec_run(["cat", f"{ace_table_diff_dir}/{reports[0]}"], user="root")
+    assert exit_code == 0, f"Failed to read the table-diff report {reports[0]}: {output.decode()}"
+    try:
+        report = json.loads(output.decode())
+    except ValueError as e:
+        pytest.fail(f"the table-diff report {reports[0]} is not valid JSON: {e}")
+
+    problems = table_diff_report_problems(report)
+    assert not problems, f"table-diff report {reports[0]}: " + "; ".join(problems)
+    print(f"✅ ace table-diff found the seeded differences: {report['summary']['diff_rows_count']}")
 
 
 @pytest.mark.parametrize("container_name,container_type", all_containers)
@@ -943,23 +1278,11 @@ def test_ace_mtree_init(container_name, container_type):
     if not container_name:
         pytest.skip("No container defined in env")
 
-    try:
-        container = client.containers.get(container_name)
-    except docker.errors.NotFound:
-        pytest.skip(f"Container {container_name} not found or not running.")
-
-    assert container.status == "running"
-
-    pg_service_path = "/tmp/pg_service.conf"
+    container = _running_container(container_name)
 
     print(f"\n--- ACE: Running mtree init for cluster '{ace_cluster_name}' ---")
 
-    exit_code, output = container.exec_run(
-        ["bash", "-c",
-         f"cd /tmp && PGSERVICEFILE={pg_service_path} "
-         f"/usr/bin/ace mtree init --dbname postgres {ace_cluster_name}"],
-        user="root"
-    )
+    exit_code, output = _ace(container, f"mtree init --dbname postgres {ace_cluster_name}", ace_work_dir)
     output_str = output.decode()
     print(f"   Output:\n{output_str[:1000]}")
 
@@ -974,23 +1297,11 @@ def test_ace_mtree_build(container_name, container_type):
     if not container_name:
         pytest.skip("No container defined in env")
 
-    try:
-        container = client.containers.get(container_name)
-    except docker.errors.NotFound:
-        pytest.skip(f"Container {container_name} not found or not running.")
-
-    assert container.status == "running"
-
-    pg_service_path = "/tmp/pg_service.conf"
+    container = _running_container(container_name)
 
     print(f"\n--- ACE: Running mtree build for public.n1 ---")
 
-    exit_code, output = container.exec_run(
-        ["bash", "-c",
-         f"cd /tmp && PGSERVICEFILE={pg_service_path} "
-         f"/usr/bin/ace mtree build --dbname postgres {ace_cluster_name} public.n1"],
-        user="root"
-    )
+    exit_code, output = _ace(container, f"mtree build --dbname postgres {ace_cluster_name} public.n1", ace_work_dir)
     output_str = output.decode()
     print(f"   Output:\n{output_str[:1000]}")
 
@@ -1005,23 +1316,11 @@ def test_ace_mtree_table_diff(container_name, container_type):
     if not container_name:
         pytest.skip("No container defined in env")
 
-    try:
-        container = client.containers.get(container_name)
-    except docker.errors.NotFound:
-        pytest.skip(f"Container {container_name} not found or not running.")
-
-    assert container.status == "running"
-
-    pg_service_path = "/tmp/pg_service.conf"
+    container = _running_container(container_name)
 
     print(f"\n--- ACE: Running mtree table-diff for public.n1 ---")
 
-    exit_code, output = container.exec_run(
-        ["bash", "-c",
-         f"cd /tmp && PGSERVICEFILE={pg_service_path} "
-         f"/usr/bin/ace mtree table-diff --dbname postgres {ace_cluster_name} public.n1 -o html"],
-        user="root"
-    )
+    exit_code, output = _ace(container, f"mtree table-diff --dbname postgres {ace_cluster_name} public.n1 -o html", ace_work_dir)
     output_str = output.decode()
     print(f"   Output:\n{output_str[:1000]}")
 
@@ -1036,23 +1335,11 @@ def test_ace_mtree_update(container_name, container_type):
     if not container_name:
         pytest.skip("No container defined in env")
 
-    try:
-        container = client.containers.get(container_name)
-    except docker.errors.NotFound:
-        pytest.skip(f"Container {container_name} not found or not running.")
-
-    assert container.status == "running"
-
-    pg_service_path = "/tmp/pg_service.conf"
+    container = _running_container(container_name)
 
     print(f"\n--- ACE: Running mtree update for public.n1 ---")
 
-    exit_code, output = container.exec_run(
-        ["bash", "-c",
-         f"cd /tmp && PGSERVICEFILE={pg_service_path} "
-         f"/usr/bin/ace mtree update --dbname postgres {ace_cluster_name} public.n1"],
-        user="root"
-    )
+    exit_code, output = _ace(container, f"mtree update --dbname postgres {ace_cluster_name} public.n1", ace_work_dir)
     output_str = output.decode()
     print(f"   Output:\n{output_str[:1000]}")
 
@@ -1067,12 +1354,7 @@ def test_ace_functional_cleanup(container_name, container_type):
     if not container_name:
         pytest.skip("No container defined in env")
 
-    try:
-        container = client.containers.get(container_name)
-    except docker.errors.NotFound:
-        pytest.skip(f"Container {container_name} not found or not running.")
-
-    assert container.status == "running"
+    container = _running_container(container_name)
 
     pgbin = _ace_pgbin(container_type)
     pguser = _ace_pguser(container_type)
@@ -1081,7 +1363,7 @@ def test_ace_functional_cleanup(container_name, container_type):
 
     for node_num in range(1, 4):
         node_name = f"n{node_num}"
-        node_pgdata = f"/tmp/{node_name}"
+        node_pgdata = _node_pgdata(node_name)
         node_port = ace_base_port + node_num - 1
 
         success, _, message = pg_server_management.stop_server(
@@ -1109,12 +1391,7 @@ def test_package_uninstall(container_name, container_type):
     config = get_container_config(container_type)
     ace_package = config["ace_package"]
 
-    try:
-        container = client.containers.get(container_name)
-    except docker.errors.NotFound:
-        pytest.skip(f"Container {container_name} not found or not running.")
-
-    assert container.status == "running"
+    container = _running_container(container_name)
 
     print(f"\n--- Uninstalling {ace_package} on {container_name} ({container_type}) ---")
 
@@ -1138,12 +1415,7 @@ def test_pgedge_cleanup(container_name, container_type):
     if not container_name:
         pytest.skip("No container defined in env")
 
-    try:
-        container = client.containers.get(container_name)
-    except docker.errors.NotFound:
-        pytest.skip(f"Container {container_name} not found or not running.")
-
-    assert container.status == "running"
+    container = _running_container(container_name)
 
     # Get container-specific configuration
     config = get_container_config(container_type)

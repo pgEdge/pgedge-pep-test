@@ -48,6 +48,22 @@ def test_policy_defines_both_rag_and_smoke():
     assert pr.COMPONENT_PACKAGES["pgedge-capture-smoke"] == ("pgedge-capture-smoke",)
 
 
+def test_policy_defines_ace_as_one_flat_component():
+    # one runtime package; no capture-time binary expectation (the ACE test checks the binary itself)
+    assert pr.COMPONENT_PACKAGES["ace"] == ("pgedge-ace",)
+    assert pr.COMPONENT_POLICY["ace"] == {"allowed_runtime_package_names": ["pgedge-ace"],
+                                          "expected_binary_version": ""}
+
+
+def test_request_accepts_ace_and_rejects_crossed_packages():
+    req = pr.normalize_request(_req(component="ace", package_name="pgedge-ace", expected_version="3.0.0"))
+    assert (req["component"], req["package_name"]) == ("ace", "pgedge-ace")
+    with pytest.raises(pr.RequestError, match="does not match component 'ace'"):
+        pr.normalize_request(_req(component="ace", package_name="pgedge-rag-server2"))
+    with pytest.raises(pr.RequestError, match="does not match component 'rag'"):
+        pr.normalize_request(_req(package_name="pgedge-ace"))
+
+
 def test_policy_defines_spock_as_one_pg_coupled_component():
     spock = pr.COMPONENT_POLICY["spock"]
     assert spock["pg_coupled"] is True

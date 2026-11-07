@@ -26,6 +26,10 @@
     "ace": {
       "allowed_runtime_package_names": ["pgedge-ace"],
       "expected_binary_version": ""
+    },
+    "radar": {
+      "allowed_runtime_package_names": ["pgedge-radar"],
+      "expected_binary_version": ""
     }
   }
 }

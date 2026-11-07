@@ -1,0 +1,212 @@
+name: PEP next-group pilot wave 1 (temporary)
+# Temporary, branch-scoped caller; never merged. Eight direct pep-integration.yml legs pinned to the
+# retained combined validation commit 9c6e993 (radar + snowflake/lolor/safesession changesets).
+# One RPM (oel9-amd64) and one DEB (debian12-amd64) leg per product, PG17, full mode, observe,
+# installing already-published GA packages (radar 0.6.3 from staging, the others from release).
+# Nothing is built or published. Observe mode keeps failing outcomes green, so the legs are judged
+# from their uploaded evidence and logs, not job colours (PILOT-SPEC.md in the records).
+on:
+  push:
+    branches: [validate/pep-next-group-pilot]
+permissions: {}
+
+jobs:
+  sf-rpm:
+    name: "sf-rpm: oel9-amd64 PG17 pgedge-snowflake_17 2.6.0-1.el9 (release)"
+    permissions: {contents: read}
+    uses: pgEdge/pgedge-pep-test/.github/workflows/pep-integration.yml@9c6e9937e93c1e92fa7bdcc672218e6a3c192a05
+    with:
+      component: snowflake
+      package_name: pgedge-snowflake_17
+      channel: release
+      expected_version: "2.6.0"
+      expected_buildnum: "1"
+      effective_tag: v2.6.0
+      expected_rpm: "2.6.0-1.el9"
+      container_alias: oel9-amd64
+      pg_major: "17"
+      family: rpm
+      arch: amd64
+      scenario: certification
+      mode: observe
+      execution_mode: full
+      invocation_id: vng1-sf-rpm
+      pep_implementation_ref: 9c6e9937e93c1e92fa7bdcc672218e6a3c192a05
+    secrets:
+      PGEDGE_REPO_CLIENT_CRT: ${{ secrets.PGEDGE_REPO_CLIENT_CRT }}
+      PGEDGE_REPO_CLIENT_KEY: ${{ secrets.PGEDGE_REPO_CLIENT_KEY }}
+
+  sf-deb:
+    name: "sf-deb: debian12-amd64 PG17 pgedge-postgresql-17-snowflake 2.6.0-1.bookworm (release)"
+    permissions: {contents: read}
+    uses: pgEdge/pgedge-pep-test/.github/workflows/pep-integration.yml@9c6e9937e93c1e92fa7bdcc672218e6a3c192a05
+    with:
+      component: snowflake
+      package_name: pgedge-postgresql-17-snowflake
+      channel: release
+      expected_version: "2.6.0"
+      expected_buildnum: "1"
+      effective_tag: v2.6.0
+      expected_deb: "2.6.0-1.bookworm"
+      container_alias: debian12-amd64
+      pg_major: "17"
+      family: deb
+      arch: amd64
+      scenario: certification
+      mode: observe
+      execution_mode: full
+      invocation_id: vng1-sf-deb
+      pep_implementation_ref: 9c6e9937e93c1e92fa7bdcc672218e6a3c192a05
+    secrets:
+      PGEDGE_REPO_CLIENT_CRT: ${{ secrets.PGEDGE_REPO_CLIENT_CRT }}
+      PGEDGE_REPO_CLIENT_KEY: ${{ secrets.PGEDGE_REPO_CLIENT_KEY }}
+
+  lolor-rpm:
+    name: "lolor-rpm: oel9-amd64 PG17 pgedge-lolor_17 1.2.3-1.el9 (release)"
+    permissions: {contents: read}
+    uses: pgEdge/pgedge-pep-test/.github/workflows/pep-integration.yml@9c6e9937e93c1e92fa7bdcc672218e6a3c192a05
+    with:
+      component: lolor
+      package_name: pgedge-lolor_17
+      channel: release
+      expected_version: "1.2.3"
+      expected_buildnum: "1"
+      effective_tag: v1.2.3
+      expected_rpm: "1.2.3-1.el9"
+      container_alias: oel9-amd64
+      pg_major: "17"
+      family: rpm
+      arch: amd64
+      scenario: certification
+      mode: observe
+      execution_mode: full
+      invocation_id: vng1-lolor-rpm
+      pep_implementation_ref: 9c6e9937e93c1e92fa7bdcc672218e6a3c192a05
+    secrets:
+      PGEDGE_REPO_CLIENT_CRT: ${{ secrets.PGEDGE_REPO_CLIENT_CRT }}
+      PGEDGE_REPO_CLIENT_KEY: ${{ secrets.PGEDGE_REPO_CLIENT_KEY }}
+
+  lolor-deb:
+    name: "lolor-deb: debian12-amd64 PG17 pgedge-postgresql-17-lolor 1.2.3-1.bookworm (release)"
+    permissions: {contents: read}
+    uses: pgEdge/pgedge-pep-test/.github/workflows/pep-integration.yml@9c6e9937e93c1e92fa7bdcc672218e6a3c192a05
+    with:
+      component: lolor
+      package_name: pgedge-postgresql-17-lolor
+      channel: release
+      expected_version: "1.2.3"
+      expected_buildnum: "1"
+      effective_tag: v1.2.3
+      expected_deb: "1.2.3-1.bookworm"
+      container_alias: debian12-amd64
+      pg_major: "17"
+      family: deb
+      arch: amd64
+      scenario: certification
+      mode: observe
+      execution_mode: full
+      invocation_id: vng1-lolor-deb
+      pep_implementation_ref: 9c6e9937e93c1e92fa7bdcc672218e6a3c192a05
+    secrets:
+      PGEDGE_REPO_CLIENT_CRT: ${{ secrets.PGEDGE_REPO_CLIENT_CRT }}
+      PGEDGE_REPO_CLIENT_KEY: ${{ secrets.PGEDGE_REPO_CLIENT_KEY }}
+
+  ss-rpm:
+    name: "ss-rpm: oel9-amd64 PG17 pgedge-safesession_17 1.0-1.el9 (release)"
+    permissions: {contents: read}
+    uses: pgEdge/pgedge-pep-test/.github/workflows/pep-integration.yml@9c6e9937e93c1e92fa7bdcc672218e6a3c192a05
+    with:
+      component: safesession
+      package_name: pgedge-safesession_17
+      channel: release
+      expected_version: "1.0"
+      expected_buildnum: "1"
+      effective_tag: v1.0
+      expected_rpm: "1.0-1.el9"
+      container_alias: oel9-amd64
+      pg_major: "17"
+      family: rpm
+      arch: amd64
+      scenario: certification
+      mode: observe
+      execution_mode: full
+      invocation_id: vng1-ss-rpm
+      pep_implementation_ref: 9c6e9937e93c1e92fa7bdcc672218e6a3c192a05
+    secrets:
+      PGEDGE_REPO_CLIENT_CRT: ${{ secrets.PGEDGE_REPO_CLIENT_CRT }}
+      PGEDGE_REPO_CLIENT_KEY: ${{ secrets.PGEDGE_REPO_CLIENT_KEY }}
+
+  ss-deb:
+    name: "ss-deb: debian12-amd64 PG17 pgedge-postgresql-17-safesession 1.0-1.bookworm (release)"
+    permissions: {contents: read}
+    uses: pgEdge/pgedge-pep-test/.github/workflows/pep-integration.yml@9c6e9937e93c1e92fa7bdcc672218e6a3c192a05
+    with:
+      component: safesession
+      package_name: pgedge-postgresql-17-safesession
+      channel: release
+      expected_version: "1.0"
+      expected_buildnum: "1"
+      effective_tag: v1.0
+      expected_deb: "1.0-1.bookworm"
+      container_alias: debian12-amd64
+      pg_major: "17"
+      family: deb
+      arch: amd64
+      scenario: certification
+      mode: observe
+      execution_mode: full
+      invocation_id: vng1-ss-deb
+      pep_implementation_ref: 9c6e9937e93c1e92fa7bdcc672218e6a3c192a05
+    secrets:
+      PGEDGE_REPO_CLIENT_CRT: ${{ secrets.PGEDGE_REPO_CLIENT_CRT }}
+      PGEDGE_REPO_CLIENT_KEY: ${{ secrets.PGEDGE_REPO_CLIENT_KEY }}
+
+  radar-rpm:
+    name: "radar-rpm: oel9-amd64 PG17 pgedge-radar 0.6.3-1.el9 (staging)"
+    permissions: {contents: read}
+    uses: pgEdge/pgedge-pep-test/.github/workflows/pep-integration.yml@9c6e9937e93c1e92fa7bdcc672218e6a3c192a05
+    with:
+      component: radar
+      package_name: pgedge-radar
+      channel: staging
+      expected_version: "0.6.3"
+      expected_buildnum: "1"
+      effective_tag: v0.6.3
+      expected_rpm: "0.6.3-1.el9"
+      container_alias: oel9-amd64
+      pg_major: "17"
+      family: rpm
+      arch: amd64
+      scenario: certification
+      mode: observe
+      execution_mode: full
+      invocation_id: vng1-radar-rpm
+      pep_implementation_ref: 9c6e9937e93c1e92fa7bdcc672218e6a3c192a05
+    secrets:
+      PGEDGE_REPO_CLIENT_CRT: ${{ secrets.PGEDGE_REPO_CLIENT_CRT }}
+      PGEDGE_REPO_CLIENT_KEY: ${{ secrets.PGEDGE_REPO_CLIENT_KEY }}
+
+  radar-deb:
+    name: "radar-deb: debian12-amd64 PG17 pgedge-radar 0.6.3-1.bookworm (staging)"
+    permissions: {contents: read}
+    uses: pgEdge/pgedge-pep-test/.github/workflows/pep-integration.yml@9c6e9937e93c1e92fa7bdcc672218e6a3c192a05
+    with:
+      component: radar
+      package_name: pgedge-radar
+      channel: staging
+      expected_version: "0.6.3"
+      expected_buildnum: "1"
+      effective_tag: v0.6.3
+      expected_deb: "0.6.3-1.bookworm"
+      container_alias: debian12-amd64
+      pg_major: "17"
+      family: deb
+      arch: amd64
+      scenario: certification
+      mode: observe
+      execution_mode: full
+      invocation_id: vng1-radar-deb
+      pep_implementation_ref: 9c6e9937e93c1e92fa7bdcc672218e6a3c192a05
+    secrets:
+      PGEDGE_REPO_CLIENT_CRT: ${{ secrets.PGEDGE_REPO_CLIENT_CRT }}
+      PGEDGE_REPO_CLIENT_KEY: ${{ secrets.PGEDGE_REPO_CLIENT_KEY }}

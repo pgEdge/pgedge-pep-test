@@ -34,6 +34,7 @@ _pp = PR._pp
 PACKAGES = {
     "snowflake": ("pgedge-snowflake_{pg}", "pgedge-postgresql-{pg}-snowflake"),
     "safesession": ("pgedge-safesession_{pg}", "pgedge-postgresql-{pg}-safesession"),
+    "lolor": ("pgedge-lolor_{pg}", "pgedge-postgresql-{pg}-lolor"),
 }
 EXTENSIONS = sorted(c for c, e in PR.COMPONENT_POLICY.items()
                     if _pp.is_coupled(e) and "series_by_version_major" not in e)

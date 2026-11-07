@@ -271,7 +271,7 @@ def detect_component_from_test_file(config):
         'test_pep_radar': {
             'name': 'Radar',
             'version_env': 'PGEDGE_RADAR_VERSION',
-            'version_default': '1.4.1',
+            'version_default': '',
             'rhel_package_env': 'RADAR_PACKAGE',
             'rhel_package_default': 'pgedge-radar',
             'deb_package_env': 'DEB_RADAR_PACKAGE',

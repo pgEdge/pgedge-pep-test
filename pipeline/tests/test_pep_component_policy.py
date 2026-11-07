@@ -67,6 +67,27 @@ def test_request_accepts_ace_and_rejects_crossed_packages():
         pr.normalize_request(_req(package_name="pgedge-ace"))
 
 
+def test_policy_defines_radar_as_one_flat_component():
+    # one PG-independent runtime package, the same name in both families; no capture-time binary
+    # expectation (the radar test checks the binary itself)
+    assert pr.COMPONENT_PACKAGES["radar"] == ("pgedge-radar",)
+    assert pr.COMPONENT_POLICY["radar"] == {"allowed_runtime_package_names": ["pgedge-radar"],
+                                            "expected_binary_version": ""}
+
+
+def test_request_accepts_radar_and_rejects_crossed_packages():
+    for family, alias in (("rpm", "rocky9-amd64"), ("deb", "debian13-amd64")):
+        req = pr.normalize_request(_req(component="radar", package_name="pgedge-radar", expected_version="9.8.7",
+                                        family=family, container_alias=alias))
+        assert (req["component"], req["package_name"], req["family"]) == ("radar", "pgedge-radar", family)
+    for other in ("pgedge-ace", "pgedge-rag-server2"):
+        with pytest.raises(pr.RequestError, match="does not match component 'radar'"):
+            pr.normalize_request(_req(component="radar", package_name=other))
+    for component in ("ace", "rag"):
+        with pytest.raises(pr.RequestError, match="does not match component '%s'" % component):
+            pr.normalize_request(_req(component=component, package_name="pgedge-radar"))
+
+
 def test_policy_defines_spock_as_one_pg_coupled_component():
     spock = pr.COMPONENT_POLICY["spock"]
     assert spock["pg_coupled"] is True

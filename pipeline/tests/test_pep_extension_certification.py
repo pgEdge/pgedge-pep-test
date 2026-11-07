@@ -33,6 +33,7 @@ _pp = PR._pp
 # component -> (RPM runtime template, DEB runtime template), as its release workflow names them.
 PACKAGES = {
     "snowflake": ("pgedge-snowflake_{pg}", "pgedge-postgresql-{pg}-snowflake"),
+    "safesession": ("pgedge-safesession_{pg}", "pgedge-postgresql-{pg}-safesession"),
 }
 EXTENSIONS = sorted(c for c, e in PR.COMPONENT_POLICY.items()
                     if _pp.is_coupled(e) and "series_by_version_major" not in e)

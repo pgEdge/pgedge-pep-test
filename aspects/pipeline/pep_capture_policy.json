@@ -26,6 +26,18 @@
     "ace": {
       "allowed_runtime_package_names": ["pgedge-ace"],
       "expected_binary_version": ""
+    },
+    "snowflake": {
+      "pg_coupled": true,
+      "runtime_package_templates": {
+        "rpm": ["pgedge-snowflake_{pg}"],
+        "deb": ["pgedge-postgresql-{pg}-snowflake"]
+      },
+      "uncertified_runtime_package_templates": {
+        "rpm": ["pgedge-snowflake_{pg}-llvmjit"]
+      },
+      "uncertified_reason": "RPM-only JIT bitcode companion; the snowflake functional test does not install it or exercise JIT",
+      "expected_binary_version": ""
     }
   }
 }

@@ -199,9 +199,10 @@ def _validate_envelope(inp):
         ebv = pol.get("expected_binary_version")
         if ebv is not None and not isinstance(ebv, str):
             d.append("component_policy.expected_binary_version must be a string")
-        # Any PG-coupled key (even beside a flat list, which the shared rules reject) means the
-        # whole entry must pass the same validation the policy loaders apply.
-        if any(k in pol for k in PP.COUPLED_KEYS):
+        # Any PG-coupled key (even beside a flat list, which the shared rules reject) or a flat
+        # entry's uncertified names mean the whole entry must pass the same validation the policy
+        # loaders apply.
+        if any(k in pol for k in PP.COUPLED_KEYS + PP.FLAT_UNCERTIFIED_KEYS):
             d.extend("component_policy: %s" % e for e in PP.validate_entry(pol))
     jr = inp.get("job_records")
     if isinstance(jr, list):
@@ -447,7 +448,10 @@ def _package_reason(policy, allowed, name, family, pg_norm, release_intent):
     if PP.is_coupled(policy):
         return PP.classify(policy, name, family, pg_norm.get("build_pg_major"),
                            release_intent.get("intended_version"))
-    return None if name in allowed else "package_not_allowed"
+    if name in allowed:
+        return None
+    # a flat entry's named, built-but-not-certified runtime package stays visible (never a gap)
+    return PP.R_UNCERTIFIED if name in PP.flat_uncertified_names(policy) else "package_not_allowed"
 
 
 def _select_targets(cell, art, policy, release_intent, provenance, family, allowed, pg_norm):
@@ -866,7 +870,7 @@ def reduce(inp):
         "component_policy": {
             "allowed_runtime_package_names": sorted(allowed_set),   # same sanitized value
             "expected_binary_version": policy.get("expected_binary_version"),
-            **(PP.describe(policy) or {})},                        # PG-coupled templates only
+            **(PP.describe(policy) or {})},          # coupled templates / flat uncertified names
         "cells": cells_out,
         "coverage_denominators": {
             "planned_build_cells": len(planned_list),   # honest: original planned entries

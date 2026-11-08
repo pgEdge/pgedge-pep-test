@@ -1268,8 +1268,10 @@ def _gaps_table(gaps: list) -> str:
             'not listed.</p><div class="scroll"><table>%s%s</table></div>' % (header, rows))
 
 
+# Claims only what is true of every listed package: it was built, and PEP does not certify it. A
+# listed package may still be installed as a dependency of the package under test.
 _UNCERTIFIED_TEXT = ("in this release's build artifacts, but the certification deliberately does not "
-                     "install or test them")
+                     "certify them: no test targets them and no identity or checksum check covers them")
 
 
 def _uncertified_entries(result: dict):

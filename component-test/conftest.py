@@ -324,6 +324,15 @@ def detect_component_from_test_file(config):
     }
 
 
+def report_component_version(component_info):
+    """The package version a report names. In integration mode (PEP_INTEGRATION_MODE=1, exported
+    by run_pep_tf.sh together with the request) that is the request's PEP_EXPECTED_VERSION, the
+    version the run installs and checks; otherwise the component's config variable or default."""
+    if os.getenv("PEP_INTEGRATION_MODE") == "1" and os.getenv("PEP_EXPECTED_VERSION"):
+        return os.environ["PEP_EXPECTED_VERSION"]
+    return os.getenv(component_info['version_env'], component_info['version_default'])
+
+
 def pytest_configure(config):
     """Add custom metadata to pytest-html report"""
     if hasattr(config, '_metadata'):
@@ -332,7 +341,7 @@ def pytest_configure(config):
 
         # Get configuration values
         pg_major_version = os.getenv("PG_MAJOR_VERSION", "16")
-        component_version = os.getenv(component_info['version_env'], component_info['version_default'])
+        component_version = report_component_version(component_info)
         repo = os.getenv("REPO", "release")
 
         # Determine package names based on platform
@@ -373,7 +382,7 @@ def pytest_html_report_title(report):
 
     if component_info:
         component_name = component_info['name']
-        component_version = os.getenv(component_info['version_env'], component_info['version_default'])
+        component_version = report_component_version(component_info)
         report.title = f"{component_name} {component_version} Test Report (PostgreSQL {pg_major_version})"
     else:
         # Fallback to generic title

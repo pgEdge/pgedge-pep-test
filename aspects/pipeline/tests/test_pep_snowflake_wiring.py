@@ -10,9 +10,10 @@ Covers: standalone behaviour preserved; the request family overriding PLATFORM_F
 the wrong package, PG major, family or component rejected before any install; the server companion
 installed before the pinned package; only the requested snowflake package installed (an -llvmjit
 companion or another PG major fails); the identity step; the library owner, server major and exact
-extension version; missing references failing in integration mode and skipping standalone; and the
-snowflake checks (exact node, strict stripped check, id burst, epoch bracket, node enforcement,
-per-sequence ids, sequence conversion).
+extension version; missing references failing in integration mode and skipping standalone; the
+expected file lists against the published packages' own listings, with the license required in both
+families; and the snowflake checks (exact node, strict stripped check, id burst, epoch bracket, node
+enforcement, per-sequence ids, sequence conversion).
 """
 import importlib.util
 import itertools
@@ -492,6 +493,55 @@ def test_bundled_file_outcomes_are_unchanged_when_the_reference_exists(monkeypat
     assert outcome == "failed" and "Extra files" in msg and "/usr/x" in msg
     outcome, msg = _bundled_outcome(monkeypatch, env, _raises(RuntimeError("rpm -ql failed")))
     assert outcome == "failed" and "rpm -ql failed" in msg
+
+
+# What the published snowflake 2.6.0-1 PG17 packages own, entry for entry, as their own package
+# listings show (el9 x86_64 RPM: rpm -qp; noble amd64 DEB: dpkg-deb -c, "./" printed as "/." the
+# way dpkg -L prints it). Both families ship the license: the RPM under /usr/share/licenses/,
+# the DEB under /usr/share/doc/<package>/ (current snowflake packaging does this with %license
+# and debian/docs; the v2.6.0 tag predates that in-repo packaging).
+_SF_SQL = ["snowflake--1.0--1.1.sql", "snowflake--1.0.sql", "snowflake--1.1--1.2.sql", "snowflake--1.1.sql",
+           "snowflake--1.2--2.0.sql", "snowflake--1.2.sql", "snowflake--2.0--2.2.sql", "snowflake--2.0.sql",
+           "snowflake--2.2--2.3.sql", "snowflake--2.2.sql", "snowflake--2.3--2.4.sql", "snowflake--2.3.sql",
+           "snowflake--2.4--2.5.0.sql", "snowflake--2.5.0--2.6.0.sql", "snowflake.control"]
+_SF_DEB_DOC = "/usr/share/doc/pgedge-postgresql-17-snowflake"
+_SF_PUBLISHED = {
+    "rhel": ["/usr/lib/.build-id", "/usr/lib/.build-id/cf", "/usr/lib/.build-id/cf/79326c14b711fea12fcd4891f9a3b9917067bc",
+             "/usr/pgsql-17/lib/snowflake.so", "/usr/pgsql-17/sbom/snowflake-sbom.json",
+             "/usr/pgsql-17/sbom/snowflake-sbom.json.asc"]
+            + ["/usr/pgsql-17/share/extension/" + f for f in _SF_SQL]
+            + ["/usr/share/doc/pgedge-snowflake_17", "/usr/share/doc/pgedge-snowflake_17/README.md",
+               "/usr/share/licenses/pgedge-snowflake_17", "/usr/share/licenses/pgedge-snowflake_17/LICENSE.md"],
+    "deb": ["/.", "/usr", "/usr/lib", "/usr/lib/postgresql", "/usr/lib/postgresql/17", "/usr/lib/postgresql/17/lib",
+            "/usr/lib/postgresql/17/lib/bitcode", "/usr/lib/postgresql/17/lib/bitcode/snowflake",
+            "/usr/lib/postgresql/17/lib/bitcode/snowflake/snowflake.bc",
+            "/usr/lib/postgresql/17/lib/bitcode/snowflake.index.bc", "/usr/lib/postgresql/17/lib/snowflake.so",
+            "/usr/lib/postgresql/17/sbom", "/usr/lib/postgresql/17/sbom/snowflake-sbom.json",
+            "/usr/lib/postgresql/17/sbom/snowflake-sbom.json.asc", "/usr/share", "/usr/share/doc", _SF_DEB_DOC,
+            _SF_DEB_DOC + "/LICENSE.md", _SF_DEB_DOC + "/README.md", _SF_DEB_DOC + "/changelog.Debian.gz",
+            "/usr/share/postgresql", "/usr/share/postgresql/17", "/usr/share/postgresql/17/extension"]
+           + ["/usr/share/postgresql/17/extension/" + f for f in _SF_SQL],
+}
+
+
+@pytest.mark.parametrize("env,ctype,alias,listing,license_path", [
+    (_RPM, "rhel", "rocky9-amd64", "rpm -ql pgedge-snowflake_17", "/usr/share/licenses/pgedge-snowflake_17/LICENSE.md"),
+    (_DEB, "deb", "debian13-amd64", "dpkg -L pgedge-postgresql-17-snowflake", _SF_DEB_DOC + "/LICENSE.md"),
+], ids=["rpm", "deb"])
+def test_bundled_file_references_match_the_published_packages_and_require_the_license(
+        monkeypatch, env, ctype, alias, listing, license_path):
+    m = load(monkeypatch, env)
+    files = list(_SF_PUBLISHED[ctype])
+
+    def respond(cmd):
+        assert cmd == listing, cmd
+        return 0, "\n".join(files) + "\n"
+    monkeypatch.setattr(m, "client", _Client(_Container(respond)))
+    assert _outcome(m.test_verify_bundled_files, alias, ctype) == ("passed", "")
+    # ... and a package that stops shipping its license is caught (not reported as a pass).
+    files.remove(license_path)
+    outcome, msg = _outcome(m.test_verify_bundled_files, alias, ctype)
+    assert outcome == "failed" and "Missing files (1)" in msg and "/license.md" in msg, msg
 
 
 @pytest.mark.parametrize("env", [_RPM, _STANDALONE], ids=["integration", "standalone"])

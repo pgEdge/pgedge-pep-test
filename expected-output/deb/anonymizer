@@ -1,6 +1,7 @@
 /etc/pgedge/pgedge-anonymizer.yaml
+/etc/pgedge/pgedge-anonymizer-patterns.yaml
 /usr/bin/pgedge-anonymizer
-/usr/share/licenses/pgedge-anonymizer/LICENCE.md
+/usr/share/doc/pgedge-anonymizer/LICENCE.md
 /usr/share/doc/pgedge-anonymizer/README.md.gz
 /usr/share/pgedge-anonymizer/pgedge-anonymizer-sbom.json
 /usr/share/pgedge-anonymizer/pgedge-anonymizer-sbom.json.asc

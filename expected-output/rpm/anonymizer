@@ -1,4 +1,5 @@
 /etc/pgedge/pgedge-anonymizer.yaml
+/etc/pgedge/pgedge-anonymizer-patterns.yaml
 /usr/bin/pgedge-anonymizer
 /usr/share/doc/pgedge-anonymizer/README.md
 /usr/share/pgedge-anonymizer/pgedge-anonymizer-sbom.json

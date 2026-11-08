@@ -114,6 +114,41 @@ def test_request_accepts_docloader_and_anonymizer_and_rejects_crossed_packages(c
             pr.normalize_request(_req(component=owner, package_name=package))
 
 
+# Multi-package flat products: one certified server package per OS/arch cell; every other runtime
+# package the release builds in the same cell is named as built but not certified, with a reason.
+_MULTI = {
+    "mcp": ("pgedge-postgres-mcp", ["pgedge-nla-cli", "pgedge-nla-web"]),
+    "ai_db_workbench": ("pgedge-ai-dba-server", ["pgedge-ai-dba-upgrade-check", "pgedge-ai-dba-collector",
+                                                 "pgedge-ai-dba-alerter", "pgedge-ai-dba-client"]),
+}
+
+
+@pytest.mark.parametrize("component", sorted(_MULTI))
+def test_policy_defines_multi_package_products_with_one_certified_server(component):
+    server, companions = _MULTI[component]
+    entry = pr.COMPONENT_POLICY[component]
+    assert pr.COMPONENT_PACKAGES[component] == (server,)
+    assert {k: v for k, v in entry.items() if k != "uncertified_reason"} == {
+        "allowed_runtime_package_names": [server], "uncertified_runtime_package_names": companions,
+        "expected_binary_version": ""}
+    assert entry["uncertified_reason"].strip()
+
+
+@pytest.mark.parametrize("component", sorted(_MULTI))
+def test_request_accepts_only_the_server_and_names_why_a_companion_is_refused(component):
+    server, companions = _MULTI[component]
+    for family, alias in (("rpm", "rocky9-amd64"), ("deb", "debian13-amd64")):
+        req = pr.normalize_request(_req(component=component, package_name=server, expected_version="9.8.7",
+                                        family=family, container_alias=alias))
+        assert (req["component"], req["package_name"]) == (component, server)
+    for companion in companions:
+        with pytest.raises(pr.RequestError, match="runtime_not_certified"):
+            pr.normalize_request(_req(component=component, package_name=companion))
+    for owner in ("radar", "rag"):
+        with pytest.raises(pr.RequestError, match="does not match component '%s'" % owner):
+            pr.normalize_request(_req(component=owner, package_name=server))
+
+
 def test_policy_defines_spock_as_one_pg_coupled_component():
     spock = pr.COMPONENT_POLICY["spock"]
     assert spock["pg_coupled"] is True
@@ -209,7 +244,7 @@ def test_rag_package_on_spock_and_spock_package_on_rag_rejected():
 
 def test_unrelated_and_unknown_pairs_still_rejected():
     with pytest.raises(pr.RequestError):                       # unknown component
-        pr.normalize_request(_req(component="mcp", package_name="pgedge-postgres-mcp"))
+        pr.normalize_request(_req(component="not-registered", package_name="pgedge-postgres-mcp"))
     with pytest.raises(pr.RequestError):                       # rag package on smoke component
         pr.normalize_request(_req(component="pgedge-capture-smoke",
                                   package_name="pgedge-rag-server"))

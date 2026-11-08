@@ -128,7 +128,7 @@ def test_bad_mode_rejected():
 
 def test_unknown_component_rejected():
     with pytest.raises(pr.RequestError):
-        pr.normalize_request(_base(component="mcp", package_name="pgedge-postgres-mcp"))
+        pr.normalize_request(_base(component="not-registered", package_name="pgedge-postgres-mcp"))
 
 
 def test_package_name_not_matching_component_rejected():

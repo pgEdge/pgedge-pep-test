@@ -150,3 +150,51 @@ def test_a_malformed_flat_uncertified_policy_fails_the_cert_plan_closed(over):
         "publication_results": {"rpm": "success", "deb": "success"}, "execution_mode": "full"})
     assert cp["plan_resolved"] is False
     assert any("uncertified" in e for e in cp["errors"]), cp["errors"]
+
+
+# --------------------------------------------------------------------------- #
+# the registered multi-package products, through the same chain
+# --------------------------------------------------------------------------- #
+import pep_request as PR                                       # noqa: E402
+
+REGISTERED = sorted(c for c, e in PR.COMPONENT_POLICY.items() if "uncertified_runtime_package_names" in e)
+
+
+def test_registered_multi_package_products_are_exactly_mcp_and_the_workbench():
+    assert REGISTERED == ["ai_db_workbench", "mcp"]
+
+
+@pytest.mark.parametrize("comp", REGISTERED)
+def test_a_registered_product_certifies_its_server_and_lists_every_companion(comp):
+    entry = PR.COMPONENT_POLICY[comp]
+    [server] = entry["allowed_runtime_package_names"]
+    companions = entry["uncertified_runtime_package_names"]
+
+    def built(family, os_token, arch):
+        out = [CG.pkg(family, os_token, arch, name=server)]
+        for i, n in enumerate(companions):
+            native = ("noarch" if family == "rpm" else "all") if n.endswith(("-web", "-client")) else None
+            out.append(CG.pkg(family, os_token, arch, name=n, native=native,
+                              sha=("%d%s%s%s" % (i, n, os_token, arch)).encode().hex()[:64].ljust(64, "0")))
+        return out
+
+    planned = [CG.planned("rpm", "el-9", "amd64", members=built("rpm", "el-9", "amd64")),
+               CG.planned("deb", "trixie", "amd64", members=built("deb", "trixie", "amd64"))]
+    jobs = [{"cell_id": c["cell"]["cell_id"], "job_id": i + 1, "run_attempt": 1, "status": "completed",
+             "conclusion": "success"} for i, c in enumerate(planned)]
+    cp = CP.reduce({
+        "provenance": dict(CG.PROVENANCE),
+        "release_intent": {"logical_component": comp, "intended_version": "2.0.0", "intended_buildnum": "1",
+                           "effective_tag": "v2.0.0", "channel": "staging", "simulated": False},
+        "component_policy": copy.deepcopy(entry), "planned_cells": [c["cell"] for c in planned],
+        "job_records": jobs, "artifacts": [{"name": c["cell"]["cell_id"], "id": 100 + i, "members": c["members"]}
+                                           for i, c in enumerate(planned)],
+        "publication_results": {"rpm": "success", "deb": "success"}, "execution_mode": "full"})
+    assert cp["plan_resolved"] is True, cp["errors"]
+    plan = P.build_invocation_plan(cp, CG.EXEC_CATALOG, CG.ENABLED, execution_mode="full")
+    assert plan["plan_resolved"] is True, plan["errors"]
+    assert {(i["component"], i["package_name"]) for i in plan["matrix"]["include"]} == {(comp, server)}
+    assert plan["coverage_gaps"] == []
+    assert sorted((u["family"], u["physical_package"]) for u in plan["uncertified_runtime_packages"]) == \
+        sorted((f, n) for f in ("rpm", "deb") for n in companions)
+    assert {u["reason"] for u in plan["uncertified_runtime_packages"]} == {entry["uncertified_reason"]}

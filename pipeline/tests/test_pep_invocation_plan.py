@@ -195,6 +195,29 @@ def test_radar_is_planned_like_ace_on_every_supported_major_with_its_release_fac
     assert pep_verify.choose_install(req) == ("pinned", "9.8.7-test1_1.el9")
 
 
+@pytest.mark.parametrize("component,package", [("docloader", "pgedge-docloader"),
+                                               ("anonymizer", "pgedge-anonymizer")])
+def test_docloader_and_anonymizer_are_planned_like_radar_on_every_supported_major(component, package):
+    # PG-independent flat packages (one per OS/arch cell). The planner has no per-component PG rule, so
+    # each built cell becomes one leg per supported PostgreSQL major, as for radar -- even though these
+    # components' tests do not use the server: the legs repeat the same package test, they are not
+    # PostgreSQL coverage. Synthetic 9.8.7 test build: tag v9.8.7-test1 -> build number test1_1.
+    plan = build([cell("c", [target("rpm", "el-9", "amd64", package=package, logical=component,
+                                    version="9.8.7", release="test1_1.el9", native_arch="x86_64", cell_id="c")])],
+                 plats=enabled(("rpm", "amd64", "oel9")), component=component, channel="daily",
+                 version="9.8.7", buildnum="test1_1", tag="v9.8.7-test1")
+    incl = plan["matrix"]["include"]
+    assert plan["coverage_gaps"] == [] and sorted(i["pg_major"] for i in incl) == ["16", "17", "18"]
+    assert all((i["component"], i["package_name"], i["expected_version"], i["expected_buildnum"],
+                i["effective_tag"], i["expected_rpm"], i["expected_deb"], i["expected_binary"])
+               == (component, package, "9.8.7", "test1_1", "v9.8.7-test1", "9.8.7-test1_1.el9", "", "")
+               for i in incl)
+    _assert_ids_workflow_valid(plan)
+    req = pep_request.normalize_request(_request_from_invocation(incl[0]))
+    assert (req["component"], req["package_name"]) == (component, package)
+    assert pep_verify.choose_install(req) == ("pinned", "9.8.7-test1_1.el9")
+
+
 def test_pg_coupled_stays_on_build_major():
     plan = build([cell("c", [target("rpm", "el-9", "amd64", pg_coupled=True, build_pg_major="17", cell_id="c")])])
     assert [i["pg_major"] for i in plan["matrix"]["include"]] == ["17"]

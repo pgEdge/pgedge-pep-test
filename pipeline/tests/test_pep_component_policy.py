@@ -88,6 +88,32 @@ def test_request_accepts_radar_and_rejects_crossed_packages():
             pr.normalize_request(_req(component=component, package_name="pgedge-radar"))
 
 
+@pytest.mark.parametrize("component,package", [("docloader", "pgedge-docloader"),
+                                               ("anonymizer", "pgedge-anonymizer")])
+def test_policy_defines_docloader_and_anonymizer_as_flat_components(component, package):
+    # one PG-independent runtime package each, the same name in both families; no capture-time binary
+    # expectation (each component test checks its binary itself)
+    assert pr.COMPONENT_PACKAGES[component] == (package,)
+    assert pr.COMPONENT_POLICY[component] == {"allowed_runtime_package_names": [package],
+                                              "expected_binary_version": ""}
+
+
+@pytest.mark.parametrize("component,package", [("docloader", "pgedge-docloader"),
+                                               ("anonymizer", "pgedge-anonymizer")])
+def test_request_accepts_docloader_and_anonymizer_and_rejects_crossed_packages(component, package):
+    for family, alias in (("rpm", "rocky9-amd64"), ("deb", "debian13-amd64")):
+        req = pr.normalize_request(_req(component=component, package_name=package, expected_version="9.8.7",
+                                        family=family, container_alias=alias))
+        assert (req["component"], req["package_name"], req["family"]) == (component, package, family)
+    for other in ("pgedge-radar", "pgedge-ace", "pgedge-docloader", "pgedge-anonymizer"):
+        if other != package:
+            with pytest.raises(pr.RequestError, match="does not match component '%s'" % component):
+                pr.normalize_request(_req(component=component, package_name=other))
+    for owner in ("radar", "ace", "rag"):
+        with pytest.raises(pr.RequestError, match="does not match component '%s'" % owner):
+            pr.normalize_request(_req(component=owner, package_name=package))
+
+
 def test_policy_defines_spock_as_one_pg_coupled_component():
     spock = pr.COMPONENT_POLICY["spock"]
     assert spock["pg_coupled"] is True

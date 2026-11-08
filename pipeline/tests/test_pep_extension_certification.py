@@ -1,4 +1,4 @@
-"""PG-coupled extensions without a series (snowflake, lolor, safesession) through the REAL policy,
+"""PG-coupled extensions without a series (snowflake, lolor, safesession, vectorizer) through the REAL policy,
 request validation and certification chain (cert-plan reducer -> invocation planner -> cert-result
 reducer -> gate), against their REAL entries in aspects/pipeline/pep_capture_policy.json.
 
@@ -35,6 +35,7 @@ PACKAGES = {
     "snowflake": ("pgedge-snowflake_{pg}", "pgedge-postgresql-{pg}-snowflake"),
     "safesession": ("pgedge-safesession_{pg}", "pgedge-postgresql-{pg}-safesession"),
     "lolor": ("pgedge-lolor_{pg}", "pgedge-postgresql-{pg}-lolor"),
+    "vectorizer": ("pgedge-vectorizer_{pg}", "pgedge-postgresql-{pg}-vectorizer"),
 }
 EXTENSIONS = sorted(c for c, e in PR.COMPONENT_POLICY.items()
                     if _pp.is_coupled(e) and "series_by_version_major" not in e)

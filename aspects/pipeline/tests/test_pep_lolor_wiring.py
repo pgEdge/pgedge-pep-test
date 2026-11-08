@@ -11,9 +11,11 @@ Covers: request validation at load (wrong package, PG major, family, uncertified
 request family overriding PLATFORM_FILTER; the backstop; the server companion before the pinned
 package; failed installs leaving no evidence; only the requested lolor package installed; identity;
 the binding of the running server (library owner, PG major, exact extension version); missing
-references failing in integration mode and skipping standalone; the strict stripped check; the
-function swap on CREATE/DROP; the large-object round trip, node and replication checks failing on a
-SQL error or a wrong value; the replication timeout; and the standalone paths kept as they were.
+references failing in integration mode and skipping standalone; the expected file lists against the
+published packages' own listings, with the license required in both families; the strict stripped
+check; the function swap on CREATE/DROP; the large-object round trip, node and replication checks
+failing on a SQL error or a wrong value; the replication timeout; and the standalone paths kept as
+they were.
 """
 import importlib.util
 import itertools
@@ -508,6 +510,53 @@ def test_bundled_file_outcomes_are_unchanged_when_the_reference_exists(monkeypat
     assert got == "failed" and "Missing files" in msg and "/usr/x" in msg
     got, msg = _bundled(monkeypatch, env, _raises(RuntimeError("rpm -ql failed")))
     assert got == "failed" and "rpm -ql failed" in msg
+
+
+# What the published lolor 1.2.3-1 PG17 packages own, entry for entry, as their own package
+# listings show (el9 x86_64 RPM: rpm -qp; noble amd64 DEB: dpkg-deb -c, "./" printed as "/." the
+# way dpkg -L prints it). Both families ship the license: the RPM through %license, the DEB
+# through debian/docs into /usr/share/doc/<package>/.
+_LOLOR_SQL = ["lolor--1.0--1.2.1.sql", "lolor--1.0.sql", "lolor--1.2.1--1.2.2.sql", "lolor--1.2.2--1.2.3.sql",
+              "lolor.control"]
+_LOLOR_BC = ["lolor.bc", "lolor_fsstubs.bc", "lolor_inv_api.bc", "lolor_largeobject.bc"]
+_LOLOR_DEB_DOC = "/usr/share/doc/pgedge-postgresql-17-lolor"
+_LOLOR_PUBLISHED = {
+    "rhel": ["/usr/lib/.build-id", "/usr/lib/.build-id/e1", "/usr/lib/.build-id/e1/c7950f3abda937064ecd3bdac64c10c025d06c",
+             "/usr/pgsql-17/lib/lolor.so", "/usr/pgsql-17/sbom/lolor-sbom.json", "/usr/pgsql-17/sbom/lolor-sbom.json.asc"]
+            + ["/usr/pgsql-17/share/extension/" + f for f in _LOLOR_SQL]
+            + ["/usr/share/doc/pgedge-lolor_17", "/usr/share/doc/pgedge-lolor_17/README.md",
+               "/usr/share/licenses/pgedge-lolor_17", "/usr/share/licenses/pgedge-lolor_17/LICENSE.md"],
+    "deb": ["/.", "/usr", "/usr/lib", "/usr/lib/postgresql", "/usr/lib/postgresql/17", "/usr/lib/postgresql/17/lib",
+            "/usr/lib/postgresql/17/lib/bitcode", "/usr/lib/postgresql/17/lib/bitcode/lolor",
+            "/usr/lib/postgresql/17/lib/bitcode/lolor/src"]
+           + ["/usr/lib/postgresql/17/lib/bitcode/lolor/src/" + f for f in _LOLOR_BC]
+           + ["/usr/lib/postgresql/17/lib/bitcode/lolor.index.bc", "/usr/lib/postgresql/17/lib/lolor.so",
+              "/usr/lib/postgresql/17/sbom", "/usr/lib/postgresql/17/sbom/lolor-sbom.json",
+              "/usr/lib/postgresql/17/sbom/lolor-sbom.json.asc", "/usr/share", "/usr/share/doc", _LOLOR_DEB_DOC,
+              _LOLOR_DEB_DOC + "/LICENSE.md", _LOLOR_DEB_DOC + "/README.md", _LOLOR_DEB_DOC + "/changelog.Debian.gz",
+              "/usr/share/postgresql", "/usr/share/postgresql/17", "/usr/share/postgresql/17/extension"]
+           + ["/usr/share/postgresql/17/extension/" + f for f in _LOLOR_SQL],
+}
+
+
+@pytest.mark.parametrize("env,ctype,alias,listing,license_path", [
+    (_RPM, "rhel", "rocky9-amd64", "rpm -ql pgedge-lolor_17", "/usr/share/licenses/pgedge-lolor_17/LICENSE.md"),
+    (_DEB, "deb", "debian13-amd64", "dpkg -L pgedge-postgresql-17-lolor", _LOLOR_DEB_DOC + "/LICENSE.md"),
+], ids=["rpm", "deb"])
+def test_bundled_file_references_match_the_published_packages_and_require_the_license(
+        monkeypatch, env, ctype, alias, listing, license_path):
+    m = load(monkeypatch, env)
+    files = list(_LOLOR_PUBLISHED[ctype])
+
+    def respond(cmd):
+        assert cmd == listing, cmd
+        return 0, "\n".join(files) + "\n"
+    monkeypatch.setattr(m, "client", _Client(_Container(respond)))
+    assert _outcome(m.test_verify_bundled_files, alias, ctype) == ("passed", "")
+    # ... and a package that stops shipping its license is caught (not reported as a pass).
+    files.remove(license_path)
+    got, msg = _outcome(m.test_verify_bundled_files, alias, ctype)
+    assert got == "failed" and "Missing files (1)" in msg and "/license.md" in msg, msg
 
 
 @pytest.mark.parametrize("env,outcome", [(_RPM, "failed"), (_STANDALONE, "failed")],

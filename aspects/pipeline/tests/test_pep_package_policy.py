@@ -135,8 +135,9 @@ def test_describe_records_flat_uncertified_names_and_keeps_plain_flat_entries_un
     ({"uncertified_runtime_package_names": ["p-cli", "p-cli"]}, "duplicate"),
     ({"uncertified_runtime_package_names": ["p-cli", "p-server"]}, "also certified"),
     ({"uncertified_runtime_package_templates": {"rpm": ["p{pg}"]}}, "cannot be combined"),
+    ({"allowed_runtime_package_names": None}, "needs a nonempty allowed_runtime_package_names"),
 ], ids=["reason-missing", "reason-blank", "names-missing", "names-empty", "names-not-list", "name-blank",
-        "name-duplicate", "name-also-certified", "coupled-templates"])
+        "name-duplicate", "name-also-certified", "coupled-templates", "no-certified-list"])
 def test_flat_uncertified_entry_is_rejected_when_malformed(over, fragment):
     entry = {k: v for k, v in dict(FLAT_UNC, **over).items() if v is not None}
     errs = pp.validate_entry(entry)

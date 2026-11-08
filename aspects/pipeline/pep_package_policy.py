@@ -137,7 +137,7 @@ def validate_entry(entry):
     coupled_keys = [k for k in COUPLED_KEYS if k in entry]
     flat_unc = "uncertified_runtime_package_names" in entry
     if flat is not None or flat_unc or not coupled_keys:
-        if flat is None and flat_unc and coupled_keys:
+        if flat is None and flat_unc and [k for k in coupled_keys if k != "uncertified_reason"]:
             return errs + ["uncertified_runtime_package_names is only for flat entries (a PG-coupled "
                            "entry names companions in uncertified_runtime_package_templates)"]
         # a flat entry may carry uncertified_reason only together with its uncertified names

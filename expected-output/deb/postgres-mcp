@@ -1,4 +1,3 @@
-
 /etc/pgedge/postgres-mcp.env
 /etc/pgedge/postgres-mcp.yaml
 /usr/bin/pgedge-postgres-mcp

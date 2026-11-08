@@ -1,12 +1,13 @@
-/etc/pgedge/pgedge-nla-kb-builder.yaml
 /etc/pgedge/postgres-mcp.env
 /etc/pgedge/postgres-mcp.yaml
-/usr/bin/pgedge-nla-kb-builder
 /usr/bin/pgedge-postgres-mcp
 /usr/lib/systemd/system/pgedge-postgres-mcp.service
 /usr/share/doc/pgedge-postgres-mcp/LICENSE.md
 /usr/share/doc/pgedge-postgres-mcp/README.md
+/usr/share/pgedge-postgres-mcp
 /usr/share/pgedge-postgres-mcp/pgedge-postgres-mcp-sbom.json
 /usr/share/pgedge-postgres-mcp/pgedge-postgres-mcp-sbom.json.asc
+/var/lib/pgedge
 /var/lib/pgedge/postgres-mcp
+/var/log/pgedge
 /var/log/pgedge/postgres-mcp

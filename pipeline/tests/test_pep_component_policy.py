@@ -39,7 +39,10 @@ def test_request_registry_is_derived_from_the_policy_file():
     want = {c: tuple(e["allowed_runtime_package_names"]) for c, e in doc["components"].items()
             if "allowed_runtime_package_names" in e}
     assert pr.COMPONENT_PACKAGES == want
-    assert set(want) | {"spock"} == set(doc["components"])
+    # every other entry is PG-coupled (derived from the file, so registering one needs no edit here)
+    coupled = {c for c, e in doc["components"].items() if e.get("pg_coupled") is True}
+    assert "spock" in coupled and not coupled & set(want)
+    assert set(want) | coupled == set(doc["components"])
 
 
 def test_policy_defines_both_rag_and_smoke():

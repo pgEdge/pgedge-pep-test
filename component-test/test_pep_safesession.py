@@ -15,14 +15,29 @@ packaging formats and are therefore resolved per platform rather than derived:
   * README  — same basename on both, different parent directory
   * SBOM    — <pg_path>/sbom/pgedge-safesession-sbom.json
 
-As of the 1.0 GA release the package version and the extension's
-default_version are both '1.0'. They are still read from separate env vars
-(PGEDGE_SAFESESSION_<PG>_VERSION and SAFESESSION_EXTENSION_VERSION) because
-they are independent values that happened to converge at GA.
+In a standalone run the package version and the extension's default_version are
+read from separate env vars (PGEDGE_SAFESESSION_<PG>_VERSION and
+SAFESESSION_EXTENSION_VERSION) because they are independent values.
+
+Integration mode (PEP_INTEGRATION_MODE=1, as in test_pep_spock.py): the request built
+from the PEP_* environment decides the package, family, PG major and channel, and every
+expectation comes from it, never from configuration. The PostgreSQL server goes in first,
+then exactly the requested package (pinned, with checksum evidence); test_safesession_identity
+proves the package version, and test_extension_version proves the running server's library
+belongs to the requested package, the server runs the requested major, the library is
+preloaded and the extension version is the release's (shared steps in
+aspects/pipeline/pep_extension_checks.py). A missing container, expected-output list or other
+input fails instead of skipping.
+
+Both modes: test_safesession_enforcement proves the preloaded extension enforces read-only
+sessions for a restricted role and a member of it, while a control role with identical
+privileges and a superuser can still write.
 """
+import importlib.util as _ilu
 import os
 import sys
 import subprocess
+import time
 from pathlib import Path
 from datetime import datetime
 
@@ -34,8 +49,39 @@ from dotenv import load_dotenv
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 from aspects import configure_repository, package_management, pg_server_management, machine_cleanup, machine_prereq_setup, file_management, container_management
 
+
+def _load_util(name):
+    """Load a shared integration helper from aspects/pipeline/ by path (no package
+    __init__ there), so these imports work however this file is loaded."""
+    spec = _ilu.spec_from_file_location(
+        name, os.path.join(os.path.dirname(__file__), '..', 'aspects', 'pipeline', name + '.py'))
+    mod = _ilu.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+# The shared PG-coupled extension steps, and through them ONE instance each of the
+# integration-mode install/identity steps, the request contract and the package-matching rules.
+pep_extension_checks = _load_util('pep_extension_checks')
+pep_integration_mode = pep_extension_checks.pep_integration_mode
+pep_request_env = pep_integration_mode.pep_request_env
+_pr = pep_request_env._pr
+_pp = _pr._pp
+
 load_dotenv()
 client = docker.from_env()
+
+# Integration request built from the PEP_* env contract (validated by normalize_request, which
+# already binds the safesession package to its family and PG major). None in standalone mode,
+# which keeps every standalone code path below unchanged.
+INTEGRATION_REQUEST = pep_request_env.build_request_from_env()
+
+# Product facts (the package's files and the extension itself), never configuration.
+SAFESESSION_COMPONENT = "safesession"
+SAFESESSION_EXTNAME = "pgedge_safesession"        # pgedge_safesession.control
+SAFESESSION_PRELOAD = "pgedge_safesession"        # module_pathname '$libdir/pgedge_safesession'
+SAFESESSION_LIBRARY = "pgedge_safesession.so"
+SAFESESSION_SBOM = "pgedge-safesession-sbom.json"
 
 # Load values from env
 rhel_containers = [c.strip() for c in os.getenv("CONTAINERS", "").split(",") if c.strip()]
@@ -44,16 +90,18 @@ deb_containers = [c.strip() for c in os.getenv("DEB_CONTAINERS", "").split(",") 
 # Combine all containers with their type
 all_containers = [(c, "rhel") for c in rhel_containers] + [(c, "deb") for c in deb_containers]
 
-# Filter containers based on platform filter (if set)
-platform_filter = os.getenv("PLATFORM_FILTER", "").lower()
+# Filter containers based on platform filter (if set). In integration mode the request family is
+# authoritative and overrides any configured PLATFORM_FILTER.
+platform_filter = (INTEGRATION_REQUEST["family"] if INTEGRATION_REQUEST is not None
+                   else os.getenv("PLATFORM_FILTER", "").lower())
 if platform_filter == "rpm":
     all_containers = [(c, t) for c, t in all_containers if t == "rhel"]
 elif platform_filter == "deb":
     all_containers = [(c, t) for c, t in all_containers if t == "deb"]
 # If platform_filter is empty or "all", use all containers
 
-# Common configuration
-repo = os.getenv("REPO", "release")
+# Common configuration. In integration mode the channel is the request's.
+repo = INTEGRATION_REQUEST["channel"] if INTEGRATION_REQUEST is not None else os.getenv("REPO", "release")
 upgrade_repo = os.getenv("UPGRADE_REPO", "staging")
 skip_cleanup = os.getenv("SKIP_CLEANUP", "false").lower() == "true"
 pgport = os.getenv("PG_PORT", "5432")
@@ -92,6 +140,21 @@ safesession_stripped_lib = os.getenv("SAFESESSION_STRIPPED_LIB", "pgedge_safeses
 # SBOM basename, found under <pg_path>/sbom/
 safesession_sbom = os.getenv("SAFESESSION_SBOM", "pgedge-safesession-sbom.json")
 
+# Additional configuration for extension tests
+check_extensions = os.getenv("CHECK_EXTENSIONS", "true").lower() == "true"
+base_extensions = [
+    ext.strip() for ext in os.getenv("SAFESESSION_EXTENSIONS", "pgedge_safesession").split(",")
+    if ext.strip()
+]
+
+if INTEGRATION_REQUEST is not None:
+    # Exactly the requested (validated) package, and the product's own file and extension names;
+    # never the configured ones.
+    rhel_safesession_package = deb_safesession_package = INTEGRATION_REQUEST["package_name"]
+    safesession_stripped_lib = SAFESESSION_LIBRARY
+    safesession_sbom = SAFESESSION_SBOM
+    base_extensions = [SAFESESSION_EXTNAME]
+
 # LICENSE / README paths. Derived here rather than configured, because each
 # path follows its packaging format's own fixed convention:
 #   RHEL license: /usr/share/licenses/<pkg>/LICENCE.md  (British spelling, as
@@ -103,12 +166,26 @@ deb_license_path = f"/usr/share/doc/{deb_safesession_package}/copyright"
 rhel_readme_path = f"/usr/share/doc/{rhel_safesession_package}/README.md"
 deb_readme_path = f"/usr/share/doc/{deb_safesession_package}/README.md"
 
-# Additional configuration for extension tests
-check_extensions = os.getenv("CHECK_EXTENSIONS", "true").lower() == "true"
-base_extensions = [
-    ext.strip() for ext in os.getenv("SAFESESSION_EXTENSIONS", "pgedge_safesession").split(",")
-    if ext.strip()
-]
+
+def _integration_problem(request, pg_major_env):
+    """Why an integration request cannot be served by this test (None if it can). Checked again
+    before anything is installed; normalize_request has already validated the request itself."""
+    if request is None:
+        return None
+    policy = _pr.COMPONENT_POLICY.get(request["component"])
+    if request["component"] != SAFESESSION_COMPONENT or not _pp.is_coupled(policy):
+        return f"component {request['component']!r} is not the PG-coupled safesession component"
+    if str(request["pg_major"]) != str(pg_major_env):
+        return f"request PG{request['pg_major']} disagrees with PG_MAJOR_VERSION={pg_major_env}"
+    why = _pp.classify(policy, request["package_name"], request["family"], request["pg_major"],
+                       request["expected_version"])
+    if why is not None:
+        return (f"package {request['package_name']!r} is not safesession for {request['family']} "
+                f"PG{request['pg_major']} ({why})")
+    return None
+
+
+INTEGRATION_PROBLEM = _integration_problem(INTEGRATION_REQUEST, pg_major_version)
 
 
 def get_container_config(container_type):
@@ -136,13 +213,188 @@ def get_container_config(container_type):
 
 
 def _get_container(container_name):
-    """Fetch a running container, skipping the test when unavailable."""
+    """Fetch a running container. A missing container skips a standalone run and fails an
+    integration run."""
     try:
         container = client.containers.get(container_name)
     except docker.errors.NotFound:
-        pytest.skip(f"Container {container_name} not found or not running.")
+        pep_extension_checks.skip_or_fail(
+            INTEGRATION_REQUEST, f"Container {container_name} not found or not running.")
     assert container.status == "running"
     return container
+
+
+def _psql_as(container, pgbin, role, sql):
+    """``(exit_code, output)`` of ONE new psql session authenticated as ``role``, so ``role`` is
+    the session user (what SafeSession checks), never a SET ROLE. The cluster from init_cluster
+    uses initdb's default trust authentication for local connections, so a LOGIN role needs no
+    password. stdout and stderr are combined: a rejection's ERROR and HINT lines are in it."""
+    exit_code, output = container.exec_run(
+        [f"{pgbin}/psql", "-X", "-q", "-h", "localhost", "-p", str(pgport), "-U", role,
+         "-d", "postgres", "-v", "ON_ERROR_STOP=1", "-t", "-A", "-c", sql],
+        user="root")
+    return exit_code, output.decode().strip()
+
+
+def preload_problem(container, pgbin, pguser):
+    """None if the running server preloads pgedge_safesession, otherwise why not. The product
+    works only when preloaded (its _PG_init refuses any other load), so the setting must be in
+    force, which needs a server restart."""
+    exit_code, out = _psql_as(container, pgbin, pguser, "SHOW shared_preload_libraries;")
+    if exit_code != 0:
+        return f"SHOW shared_preload_libraries failed: {out}"
+    libraries = [lib.strip().strip('"') for lib in out.split(",")]
+    if SAFESESSION_PRELOAD not in libraries:
+        return f"shared_preload_libraries is {out!r}; it does not include {SAFESESSION_PRELOAD!r}"
+    return None
+
+
+def verify_requested_safesession(container, container_type, config):
+    """Integration mode: the server preloads pgedge_safesession, its library belongs to the
+    requested package, it runs the requested PostgreSQL major, and the extension version is the
+    request's release version. Safesession's release workflow requires only the numeric series of
+    default_version to equal the release version (default_version may carry a pre-release marker
+    such as 1.0-alpha1), so the series rule applies, not an exact match."""
+    req = INTEGRATION_REQUEST
+    problem = preload_problem(container, config["pgbin"], config["pguser"])
+    assert problem is None, problem
+    print(f"✅ shared_preload_libraries includes {SAFESESSION_PRELOAD}")
+    pep_extension_checks.verify_requested_extension(
+        container, container_type, req, ports=[pgport], pguser=config["pguser"],
+        library=SAFESESSION_LIBRARY, extname=SAFESESSION_EXTNAME, pg_major=req["pg_major"],
+        version_problem=pep_extension_checks.series_version(req["expected_version"]))
+
+
+# ---------------------------------------------------------------------------- enforcement
+# Test-local names (not configuration). The restricted role, its member and the control role get
+# IDENTICAL privileges, so a rejection can only come from SafeSession; the superuser is also a
+# member of the restricted role, so its exemption is the product's, not an omission.
+SS_SCHEMA = "pep_safesession"
+SS_TABLE = f"{SS_SCHEMA}.data"
+SS_RESTRICTED = "pep_ss_restricted"          # listed in pgedge_safesession.roles
+SS_MEMBER = "pep_ss_member"                  # member of SS_RESTRICTED
+SS_CONTROL = "pep_ss_control"                # not listed
+SS_SUPERUSER = "pep_ss_superuser"            # superuser, member of SS_RESTRICTED
+SS_ROLES = (SS_RESTRICTED, SS_MEMBER, SS_CONTROL, SS_SUPERUSER)
+SS_GRANTEES = f"{SS_RESTRICTED}, {SS_MEMBER}, {SS_CONTROL}"
+# SafeSession's own texts (src/pgedge_safesession.c): safesession_reject() adds this hint to every
+# rejection; INSERT is rejected by the ExecutorStart hook as "cannot execute INSERT in a read-only
+# session" and CREATE TABLE by the utility hook's default branch as "cannot execute CREATE TABLE in
+# a read-only session". Core's own read-only errors say "transaction" and carry no hint.
+SS_HINT = "This session is restricted to read-only access by the pgedge_safesession extension."
+SS_FINAL_ROWS = "1|setup\n2|setup\n20|control\n30|superuser"     # setup + the allowed writes only
+SS_FINAL_TABLES = "by_control,data"                               # no by_restricted / by_member
+SS_RELOAD_ATTEMPTS = 20
+
+
+def rejection_problem(exit_code, output, command):
+    """None if ``command`` was rejected BY SAFESESSION (its error for ``command`` and its hint);
+    otherwise why not. Success, or a failure for another reason (a missing privilege, core's
+    read-only transaction error, a failed connection), is a problem."""
+    if exit_code == 0:
+        return f"{command} succeeded: {output!r}"
+    lines = [line.strip() for line in output.splitlines()]
+    missing = [want for want in (f"ERROR:  cannot execute {command} in a read-only session",
+                                 f"HINT:  {SS_HINT}") if want not in lines]
+    if missing:
+        return f"{command} failed, but not with SafeSession's rejection (missing {missing!r}): {output!r}"
+    return None
+
+
+def verify_enforcement(container, pgbin, pguser):
+    """Configure pgedge_safesession.roles as the product documents (ALTER SYSTEM + reload) and
+    prove, each statement in its own session authenticated as the acting role, that SafeSession
+    blocks writes for the restricted role and its member and nobody else."""
+    def run(role, sql):
+        exit_code, out = _psql_as(container, pgbin, role, sql)
+        print(f"   [{role}] {sql} -> exit {exit_code}: {out}")
+        return exit_code, out
+
+    def ok(role, sql):
+        exit_code, out = run(role, sql)
+        assert exit_code == 0, f"as {role}: {sql} failed: {out}"
+        return out
+
+    def rejected(role, sql, command):
+        problem = rejection_problem(*run(role, sql), command)
+        assert problem is None, f"as {role}: {problem}"
+
+    def session(role, extra=""):
+        return ok(role, f"SELECT session_user, pgedge_safesession_is_restricted(){extra};")
+
+    problem = preload_problem(container, pgbin, pguser)
+    assert problem is None, problem
+
+    ok(pguser, f"DROP SCHEMA IF EXISTS {SS_SCHEMA} CASCADE; "
+               f"DROP ROLE IF EXISTS {', '.join(SS_ROLES)}; "
+               f"CREATE ROLE {SS_RESTRICTED} LOGIN; CREATE ROLE {SS_MEMBER} LOGIN; "
+               f"CREATE ROLE {SS_CONTROL} LOGIN; CREATE ROLE {SS_SUPERUSER} LOGIN SUPERUSER; "
+               f"GRANT {SS_RESTRICTED} TO {SS_MEMBER}, {SS_SUPERUSER}; "
+               f"CREATE SCHEMA {SS_SCHEMA}; "
+               f"GRANT USAGE, CREATE ON SCHEMA {SS_SCHEMA} TO {SS_GRANTEES}; "
+               f"CREATE TABLE {SS_TABLE} (id int PRIMARY KEY, writer text NOT NULL); "
+               f"GRANT ALL ON TABLE {SS_TABLE} TO {SS_GRANTEES}; "
+               f"INSERT INTO {SS_TABLE} VALUES (1, 'setup'), (2, 'setup');")
+    ok(pguser, f"ALTER SYSTEM SET pgedge_safesession.roles = '{SS_RESTRICTED}';")
+    assert ok(pguser, "SELECT pg_reload_conf();") == "t", "pg_reload_conf() did not signal a reload"
+    # The reload is asynchronous: wait until a NEW session sees the setting.
+    seen = None
+    for _ in range(SS_RELOAD_ATTEMPTS):
+        seen = ok(pguser, "SHOW pgedge_safesession.roles;")
+        if seen == SS_RESTRICTED:
+            break
+        time.sleep(0.5)
+    assert seen == SS_RESTRICTED, (
+        f"pgedge_safesession.roles is {seen!r} in a new session, not {SS_RESTRICTED!r}")
+    print(f"✅ pgedge_safesession.roles = {SS_RESTRICTED} in a new session")
+
+    # The restricted role reads, is restricted, and cannot write or create.
+    got = session(SS_RESTRICTED, f", (SELECT count(*) FROM {SS_TABLE})")
+    assert got == f"{SS_RESTRICTED}|t|2", f"restricted session: expected '{SS_RESTRICTED}|t|2', got {got!r}"
+    rejected(SS_RESTRICTED, f"INSERT INTO {SS_TABLE} VALUES (10, 'restricted');", "INSERT")
+    rejected(SS_RESTRICTED, f"CREATE TABLE {SS_SCHEMA}.by_restricted (id int);", "CREATE TABLE")
+    print(f"✅ {SS_RESTRICTED}: SELECT allowed; INSERT and CREATE TABLE rejected by SafeSession")
+
+    # A member of the restricted role is restricted too.
+    got = session(SS_MEMBER)
+    assert got == f"{SS_MEMBER}|t", f"member session: expected '{SS_MEMBER}|t', got {got!r}"
+    rejected(SS_MEMBER, f"INSERT INTO {SS_TABLE} VALUES (11, 'member');", "INSERT")
+    rejected(SS_MEMBER, f"CREATE TABLE {SS_SCHEMA}.by_member (id int);", "CREATE TABLE")
+    print(f"✅ {SS_MEMBER}: INSERT and CREATE TABLE rejected by SafeSession")
+
+    # The control role holds the same privileges and is not restricted, so the privileges suffice.
+    got = session(SS_CONTROL)
+    assert got == f"{SS_CONTROL}|f", f"control session: expected '{SS_CONTROL}|f', got {got!r}"
+    ok(SS_CONTROL, f"INSERT INTO {SS_TABLE} VALUES (20, 'control');")
+    ok(SS_CONTROL, f"CREATE TABLE {SS_SCHEMA}.by_control (id int);")
+    print(f"✅ {SS_CONTROL}: INSERT and CREATE TABLE allowed")
+
+    # A superuser is never restricted, even as a member of a restricted role.
+    got = session(SS_SUPERUSER)
+    assert got == f"{SS_SUPERUSER}|f", f"superuser session: expected '{SS_SUPERUSER}|f', got {got!r}"
+    ok(SS_SUPERUSER, f"INSERT INTO {SS_TABLE} VALUES (30, 'superuser');")
+    print(f"✅ {SS_SUPERUSER}: INSERT allowed")
+
+    # Exactly the setup rows plus the allowed writes, and only the control role's table.
+    rows = ok(pguser, f"SELECT id, writer FROM {SS_TABLE} ORDER BY id;")
+    assert rows == SS_FINAL_ROWS, f"table contents: expected {SS_FINAL_ROWS!r}, got {rows!r}"
+    tables = ok(pguser, f"SELECT string_agg(relname, ',' ORDER BY relname) FROM pg_class "
+                        f"WHERE relnamespace = '{SS_SCHEMA}'::regnamespace AND relkind = 'r';")
+    assert tables == SS_FINAL_TABLES, f"tables in {SS_SCHEMA}: expected {SS_FINAL_TABLES!r}, got {tables!r}"
+    print(f"✅ data verified: {rows.count(chr(10)) + 1} rows; tables {tables}")
+
+
+def enforcement_cleanup(container, pgbin, pguser):
+    """Remove the setting, schema and roles the enforcement check created. Returns the problems
+    (never raises), so a cleanup failure cannot hide the check's own result."""
+    problems = []
+    for sql in ("ALTER SYSTEM RESET pgedge_safesession.roles;",
+                "SELECT pg_reload_conf();",
+                f"DROP SCHEMA IF EXISTS {SS_SCHEMA} CASCADE; DROP ROLE IF EXISTS {', '.join(SS_ROLES)};"):
+        exit_code, out = _psql_as(container, pgbin, pguser, sql)
+        if exit_code != 0:
+            problems.append(f"{sql} failed: {out}")
+    return problems
 
 
 # ============================================================================
@@ -197,7 +449,8 @@ def test_configure_repository(container_name, container_type):
 
 @pytest.mark.parametrize("container_name,container_type", all_containers)
 def test_component_install(container_name, container_type):
-    """Step 2: Install the safesession package using package_management module"""
+    """Step 2: Install the safesession package using package_management module. In integration
+    mode: the PostgreSQL server first, then exactly the requested package (pinned)."""
     container_name = container_name.strip()
     if not container_name:
         pytest.skip("No container defined in env")
@@ -206,6 +459,13 @@ def test_component_install(container_name, container_type):
     safesession_package = config["safesession_package"]
 
     container = _get_container(container_name)
+
+    if INTEGRATION_REQUEST is not None:
+        # Execution-side backstop: never install for a request this test cannot serve.
+        assert INTEGRATION_PROBLEM is None, f"integration request cannot be served: {INTEGRATION_PROBLEM}"
+        pep_extension_checks.install_requested_extension(
+            container, container_type, INTEGRATION_REQUEST, INTEGRATION_REQUEST["pg_major"], repo)
+        return
 
     print(f"\n--- Installing {safesession_package} on {container_name} ({container_type}) ---")
 
@@ -221,6 +481,8 @@ def test_component_install(container_name, container_type):
 @pytest.mark.parametrize("container_name,container_type", all_containers)
 def test_component_upgrade(container_name, container_type):
     """Upgrade the safesession package if UPGRADE=true"""
+    if INTEGRATION_REQUEST is not None:
+        pytest.skip("integration mode: certification never upgrades; the requested package is pinned")
     if os.getenv("UPGRADE", "false").lower() != "true":
         pytest.skip("Skipping upgrade tests because UPGRADE=false in env")
 
@@ -257,6 +519,9 @@ def test_component_upgrade(container_name, container_type):
 @pytest.mark.parametrize("container_name,container_type", all_containers)
 def test_component_package_version(container_name, container_type):
     """Step 3: Check the package version using package_management module"""
+    if INTEGRATION_REQUEST is not None:
+        pytest.skip("integration mode: test_safesession_identity checks the exact requested version")
+
     container_name = container_name.strip()
     if not container_name:
         pytest.skip("No container defined in env")
@@ -280,6 +545,24 @@ def test_component_package_version(container_name, container_type):
         print(f"✅ Platform detected: {platform}")
     except Exception as e:
         pytest.fail(f"Failed to verify {safesession_package} version: {str(e)}")
+
+
+@pytest.mark.parametrize("container_name,container_type", all_containers)
+def test_safesession_identity(container_name, container_type):
+    """Integration mode: one consolidated identity verdict for the requested safesession package
+    (install-before-identity, then the exact package-manager version; safesession has no binary
+    to probe). The evidence is persisted before any failure. Skipped in standalone mode."""
+    req = INTEGRATION_REQUEST
+    if req is None:
+        pytest.skip("integration mode only")
+
+    container = _get_container(container_name.strip())
+
+    ev, problems = pep_integration_mode.record_identity(container, req)
+    if ev is None:
+        pytest.fail("; ".join(problems))
+    print(f"identity evidence ({req['package_name']}): {ev}")
+    assert not problems, "; ".join(problems)
 
 
 @pytest.mark.parametrize("container_name,container_type", all_containers)
@@ -325,10 +608,11 @@ def test_verify_bundled_files(container_name, container_type):
             pytest.fail(f"{message}{details_str}")
 
     except Exception as e:
+        # No expected-output reference: a standalone run skips; an integration run fails, since
+        # the verdict could otherwise pass without the requested package ever being compared.
         if "No expected file found" in str(e):
-            pytest.skip(str(e))
-        else:
-            pytest.fail(f"Failed to verify bundled files: {str(e)}")
+            pep_extension_checks.skip_or_fail(INTEGRATION_REQUEST, str(e))
+        pytest.fail(f"Failed to verify bundled files: {str(e)}")
 
 
 @pytest.mark.parametrize("container_name,container_type", all_containers)
@@ -363,7 +647,8 @@ def test_verify_shared_library(container_name, container_type):
 
 @pytest.mark.parametrize("container_name,container_type", all_containers)
 def test_library_stripped(container_name, container_type):
-    """Verify the shared library was stripped of debug symbols at build time."""
+    """Verify the shared library was stripped of debug symbols at build time. `file` prints
+    "not stripped" for an unstripped library, so the shared strict check is used."""
     container_name = container_name.strip()
     if not container_name:
         pytest.skip("No container defined in env")
@@ -375,19 +660,8 @@ def test_library_stripped(container_name, container_type):
 
     print(f"\n--- Checking ELF strip status of {lib_path} on {container_name} ---")
 
-    exit_code, output = container.exec_run(
-        ["bash", "-c", f"file {lib_path} 2>&1"],
-        user="root",
-    )
-    assert exit_code == 0, f"'file {lib_path}' failed: {output.decode().strip()}"
-
-    file_output = output.decode().strip()
-    print(f"   Output: {file_output}")
-
-    assert "stripped" in file_output.lower(), (
-        f"Library {lib_path} does not appear to be stripped.\n"
-        f"'file' output: {file_output}"
-    )
+    problem = pep_extension_checks.stripped_problem(container, lib_path)
+    assert problem is None, problem
     print(f"✅ {lib_path} is stripped")
 
 
@@ -587,7 +861,7 @@ def test_check_connection(container_name, container_type):
 def test_create_extensions(container_name, container_type, extension):
     """Create the pgedge_safesession extension"""
     if not check_extensions:
-        pytest.skip("Extension check disabled via env")
+        pep_extension_checks.skip_or_fail(INTEGRATION_REQUEST, "Extension check disabled via env")
 
     container_name = container_name.strip()
     extension = extension.strip()
@@ -625,15 +899,24 @@ def test_extension_version(container_name, container_type, extension):
     reported version column equals SAFESESSION_EXTENSION_VERSION exactly — the
     .control file's default_version, which is tracked separately from the
     package version.
+
+    Integration mode: instead, the binding of the running server to the request
+    (verify_requested_safesession): preload, library owner, PostgreSQL major and
+    the extension version by the release workflow's series rule.
     """
     if not check_extensions:
-        pytest.skip("Extension check disabled via env")
+        pep_extension_checks.skip_or_fail(INTEGRATION_REQUEST, "Extension check disabled via env")
 
     container_name = container_name.strip()
     extension = extension.strip()
 
     if not container_name or not extension:
         pytest.skip("Invalid container or extension")
+
+    if INTEGRATION_REQUEST is not None:
+        container = _get_container(container_name)
+        verify_requested_safesession(container, container_type, get_container_config(container_type))
+        return
 
     if not safesession_extension_version:
         pytest.skip("No SAFESESSION_EXTENSION_VERSION defined in env")
@@ -678,6 +961,40 @@ def test_extension_version(container_name, container_type, extension):
         f"✅ Extension '{extension}' version {installed_version} "
         f"matches expected {safesession_extension_version}"
     )
+
+
+@pytest.mark.parametrize("container_name,container_type", all_containers)
+def test_safesession_enforcement(container_name, container_type):
+    """Both modes: SafeSession enforces read-only sessions. With pgedge_safesession.roles set by
+    ALTER SYSTEM + reload, sessions authenticated as the restricted role or a member of it read but
+    cannot INSERT or CREATE TABLE (rejected with SafeSession's error and hint), while a control role
+    with identical privileges and a superuser member can write; the data is then exactly the setup
+    rows plus the allowed writes. The setting, schema and roles are removed afterwards."""
+    if not check_extensions:
+        pep_extension_checks.skip_or_fail(
+            INTEGRATION_REQUEST, "Extension check disabled via env; enforcement needs the extension")
+
+    container_name = container_name.strip()
+    if not container_name:
+        pytest.skip("No container defined in env")
+
+    container = _get_container(container_name)
+
+    config = get_container_config(container_type)
+    pgbin = config["pgbin"]
+    pguser = config["pguser"]
+
+    print(f"\n--- Verifying SafeSession enforcement on {container_name} ---")
+
+    cleanup_problems = []
+    try:
+        verify_enforcement(container, pgbin, pguser)
+    finally:
+        cleanup_problems = enforcement_cleanup(container, pgbin, pguser)
+        for problem in cleanup_problems:
+            print(f"⚠️  cleanup: {problem}")
+    assert not cleanup_problems, "enforcement cleanup failed: " + "; ".join(cleanup_problems)
+    print(f"✅ SafeSession enforcement verified on {container_name}")
 
 
 @pytest.mark.parametrize("container_name,container_type", all_containers)

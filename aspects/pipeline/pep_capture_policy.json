@@ -30,6 +30,42 @@
     "radar": {
       "allowed_runtime_package_names": ["pgedge-radar"],
       "expected_binary_version": ""
+    },
+    "snowflake": {
+      "pg_coupled": true,
+      "runtime_package_templates": {
+        "rpm": ["pgedge-snowflake_{pg}"],
+        "deb": ["pgedge-postgresql-{pg}-snowflake"]
+      },
+      "uncertified_runtime_package_templates": {
+        "rpm": ["pgedge-snowflake_{pg}-llvmjit"]
+      },
+      "uncertified_reason": "RPM-only JIT bitcode companion; the snowflake functional test does not install it or exercise JIT",
+      "expected_binary_version": ""
+    },
+    "safesession": {
+      "pg_coupled": true,
+      "runtime_package_templates": {
+        "rpm": ["pgedge-safesession_{pg}"],
+        "deb": ["pgedge-postgresql-{pg}-safesession"]
+      },
+      "uncertified_runtime_package_templates": {
+        "rpm": ["pgedge-safesession_{pg}-llvmjit"]
+      },
+      "uncertified_reason": "RPM-only JIT bitcode companion; the SafeSession functional test does not install it or exercise JIT",
+      "expected_binary_version": ""
+    },
+    "lolor": {
+      "pg_coupled": true,
+      "runtime_package_templates": {
+        "rpm": ["pgedge-lolor_{pg}"],
+        "deb": ["pgedge-postgresql-{pg}-lolor"]
+      },
+      "uncertified_runtime_package_templates": {
+        "rpm": ["pgedge-lolor_{pg}-llvmjit"]
+      },
+      "uncertified_reason": "RPM-only JIT bitcode companion; the lolor functional test does not install it or exercise JIT",
+      "expected_binary_version": ""
     }
   }
 }

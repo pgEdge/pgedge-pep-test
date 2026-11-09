@@ -3,6 +3,7 @@
 /usr/lib/postgresql/17/lib/snowflake.so
 /usr/lib/postgresql/17/sbom/snowflake-sbom.json
 /usr/lib/postgresql/17/sbom/snowflake-sbom.json.asc
+/usr/share/doc/pgedge-postgresql-17-snowflake/LICENSE.md
 /usr/share/doc/pgedge-postgresql-17-snowflake/README.md
 /usr/share/doc/pgedge-postgresql-17-snowflake/changelog.Debian.gz
 /usr/share/postgresql/17/extension/snowflake--1.0--1.1.sql

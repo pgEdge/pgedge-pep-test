@@ -9,7 +9,9 @@ ACE prints "ace version <tag without v>" on stdout (3.0.0, 3.0.0-rc.3). Covers t
 an exact match on every channel, so a GA expectation rejects RC, dirty and development builds; an
 explicitly requested pre-release; the version read from stdout only; and missing, malformed or
 ambiguous output rejected. Also covers the existing package check against the 3.0.0-rc.3 RPM and
-DEB packages published in staging, and against the released 3.0.0 packages the configs expect.
+DEB packages published in staging and the released 3.0.0 packages (fixed examples of the package
+formats), and that the standalone configs name one version the checks can match, whichever release
+that is.
 """
 import importlib.util
 import itertools
@@ -169,18 +171,116 @@ def test_the_package_check_rejects_ga_and_release_packages_for_an_rc3_expectatio
     assert outcome == "failed"
 
 
-# ACE 3.0.0 is final and the newest pgedge-ace in release, staging and daily, so every standalone
-# config expects it whether or not its default UPGRADE to staging runs.
+# A standalone run (run_pep_tf.sh) sources configuration/config<PG>.env, and the ACE package and
+# binary checks then expect its PGEDGE_ACE_VERSION exactly. A release run ignores that value and
+# expects the request's tag (test_pep_ace_wiring.py). The current ACE release is therefore named
+# only in those config files: these tests check that the files name one version the checks can
+# match, not which version, so a consistent bump of the configs needs no edit here.
 _CONFIG_DIR = os.path.join(os.path.dirname(__file__), "..", "..", "configuration")
+_ACE_SETTING = re.compile(r"^export PGEDGE_ACE_VERSION=(.*)$", re.M)
 
 
-def test_every_config_expects_the_released_ace_3_0_0():
-    names = sorted(n for n in os.listdir(_CONFIG_DIR) if re.fullmatch(r"config\d+\.env", n))
-    assert names
+def _config_names(config_dir):
+    return sorted(n for n in os.listdir(config_dir) if re.fullmatch(r"config\d+\.env", n))
+
+
+def ace_config_problems(config_dir, accepts):
+    """Problems with the standalone ACE expectation in config_dir's config<N>.env files. Each file
+    must set PGEDGE_ACE_VERSION exactly once (unset, the version checks skip) to a value ``accepts``
+    (the binary check can be satisfied with it), and the files must agree, because one
+    PostgreSQL-independent pgedge-ace package serves every PostgreSQL major."""
+    names = _config_names(config_dir)
+    if not names:
+        return ["no config<N>.env file in %s" % config_dir]
+    problems, values = [], {}
     for name in names:
+        with open(os.path.join(config_dir, name)) as f:
+            found = _ACE_SETTING.findall(f.read())
+        if len(found) != 1:
+            problems.append("%s sets PGEDGE_ACE_VERSION %d times, not once" % (name, len(found)))
+        elif not accepts(found[0]):
+            problems.append("%s: PGEDGE_ACE_VERSION=%r is not a version the binary check can match"
+                            % (name, found[0]))
+        else:
+            values[name] = found[0]
+    if len(set(values.values())) > 1:
+        problems.append("the configs expect different ACE versions: %s" % values)
+    return problems
+
+
+def _accepts(monkeypatch):
+    """Whether the real binary check, expecting a value, passes a binary reporting exactly it."""
+    return lambda value: run(load(monkeypatch, value),
+                             _Container("ace version %s\n" % value))[0] == "passed"
+
+
+def _set(value):
+    """A rewrite of a config's text that sets PGEDGE_ACE_VERSION to ``value``."""
+    return lambda text: _ACE_SETTING.sub(lambda _: "export PGEDGE_ACE_VERSION=" + value, text)
+
+
+def _configs(tmp_path, value):
+    """Copies of the real config<N>.env files with PGEDGE_ACE_VERSION set to ``value``."""
+    for name in _config_names(_CONFIG_DIR):
         with open(os.path.join(_CONFIG_DIR, name)) as f:
-            found = re.findall(r"^export PGEDGE_ACE_VERSION=(\S*)$", f.read(), re.M)
-        assert found == ["3.0.0"], name
+            (tmp_path / name).write_text(_set(value)(f.read()))
+    return str(tmp_path)
+
+
+def _rewrite_last(config_dir, rewrite):
+    """Rewrite the last config file (by name), returning its name."""
+    name = _config_names(config_dir)[-1]
+    path = os.path.join(config_dir, name)
+    with open(path) as f:
+        text = rewrite(f.read())
+    with open(path, "w") as f:
+        f.write(text)
+    return name
+
+
+def test_the_standalone_configs_name_one_usable_ace_version(monkeypatch):
+    assert ace_config_problems(_CONFIG_DIR, _accepts(monkeypatch)) == []
+
+
+@pytest.mark.parametrize("value", ["3.0.0", "3.0.1", "3.1.0", "3.0.1-rc.1", "4.0.0-beta.2"])
+def test_a_consistent_version_bump_needs_no_edit_here(monkeypatch, tmp_path, value):
+    assert ace_config_problems(_configs(tmp_path, value), _accepts(monkeypatch)) == []
+
+
+@pytest.mark.parametrize("rewrite", [
+    lambda text: _ACE_SETTING.sub("", text),
+    lambda text: _ACE_SETTING.sub(r"# \g<0>", text),
+    lambda text: text + "export PGEDGE_ACE_VERSION=3.0.1\n",
+], ids=["missing", "commented-out", "set-twice"])
+def test_a_config_that_does_not_set_the_version_once_is_caught(monkeypatch, tmp_path, rewrite):
+    config_dir = _configs(tmp_path, "3.0.1")
+    name = _rewrite_last(config_dir, rewrite)
+    problems = ace_config_problems(config_dir, _accepts(monkeypatch))
+    assert len(problems) == 1 and problems[0].startswith(name), problems
+
+
+@pytest.mark.parametrize("value", ["", "3.0", "v3.0.1", "latest", "3.0.1-"],
+                         ids=["empty", "two-part", "leading-v", "not-a-version", "empty-suffix"])
+def test_a_malformed_version_is_caught(monkeypatch, tmp_path, value):
+    config_dir = _configs(tmp_path, "3.0.1")
+    name = _rewrite_last(config_dir, _set(value))
+    problems = ace_config_problems(config_dir, _accepts(monkeypatch))
+    assert len(problems) == 1 and problems[0].startswith(name), problems
+    assert repr(value) in problems[0], problems
+
+
+@pytest.mark.parametrize("other", ["3.0.0", "3.0.1-rc.1"])
+def test_configs_that_disagree_are_caught(monkeypatch, tmp_path, other):
+    config_dir = _configs(tmp_path, "3.0.1")
+    name = _rewrite_last(config_dir, _set(other))
+    problems = ace_config_problems(config_dir, _accepts(monkeypatch))
+    assert len(problems) == 1 and "different ACE versions" in problems[0], problems
+    assert "%r: %r" % (name, other) in problems[0], problems
+
+
+def test_no_config_files_is_caught(monkeypatch, tmp_path):
+    assert ace_config_problems(str(tmp_path), _accepts(monkeypatch)) == [
+        "no config<N>.env file in %s" % tmp_path]
 
 
 # pgedge-ace 3.0.0 as published on every native ACE platform: RPM release 1.el9/1.el10, DEB 3.0.0-1.

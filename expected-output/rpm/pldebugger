@@ -1,0 +1,10 @@
+/usr/pgsql-17/doc/extension/README-pldebugger.md
+/usr/pgsql-17/lib/plugin_debugger.so
+/usr/pgsql-17/sbom/pldebugger-sbom.json
+/usr/pgsql-17/sbom/pldebugger-sbom.json.asc
+/usr/pgsql-17/share/extension/pldbgapi--1.0--1.1.sql
+/usr/pgsql-17/share/extension/pldbgapi--1.1.sql
+/usr/pgsql-17/share/extension/pldbgapi--unpackaged--1.1.sql
+/usr/pgsql-17/share/extension/pldbgapi.control
+/usr/share/licenses/pgedge-pldebugger_17
+/usr/share/licenses/pgedge-pldebugger_17/LICENSE

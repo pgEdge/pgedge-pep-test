@@ -1,0 +1,15 @@
+/usr/lib/postgresql/17/lib/bitcode/plugin_debugger/dbgcomm.bc
+/usr/lib/postgresql/17/lib/bitcode/plugin_debugger/pldbgapi.bc
+/usr/lib/postgresql/17/lib/bitcode/plugin_debugger/plpgsql_debugger.bc
+/usr/lib/postgresql/17/lib/bitcode/plugin_debugger/plugin_debugger.bc
+/usr/lib/postgresql/17/lib/bitcode/plugin_debugger.index.bc
+/usr/lib/postgresql/17/lib/plugin_debugger.so
+/usr/lib/postgresql/17/sbom/pldebugger-sbom.json
+/usr/lib/postgresql/17/sbom/pldebugger-sbom.json.asc
+/usr/share/doc/pgedge-postgresql-17-pldebugger/README-pldebugger.md
+/usr/share/doc/pgedge-postgresql-17-pldebugger/changelog.Debian.gz
+/usr/share/doc/postgresql-doc-17/extension/README-pldebugger.md
+/usr/share/postgresql/17/extension/pldbgapi--1.0--1.1.sql
+/usr/share/postgresql/17/extension/pldbgapi--1.1.sql
+/usr/share/postgresql/17/extension/pldbgapi--unpackaged--1.1.sql
+/usr/share/postgresql/17/extension/pldbgapi.control

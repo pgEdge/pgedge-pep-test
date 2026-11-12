@@ -88,11 +88,51 @@ def test_merge_evidence_rejects_unknown_value():
 
 
 def test_component_version_matches_beta_substring():
-    # observed carries a beta suffix; expected is the bare beta version. Both
-    # normalize to "1.0.0.beta2", so expected is a substring of observed.
+    # expected carries its own '-beta2'; the release is everything after the LAST '-'.
     assert pid.component_version_matches("1.0.0-beta2", "1.0.0-beta2-1.el9") is True
 
 
 def test_component_version_matches_padding_mismatch():
-    # "16.11" normalizes to "16.11.0"; "16.12" normalizes to "16.12.0" — not a substring.
+    # A two-part version is compared as two parts: 16.12 is not 16.11.
     assert pid.component_version_matches("16.12", "16.11-1.bullseye") is False
+
+
+# --- L1: the component version inside a package-manager identity -------------------------------
+# The identities are the ones the release plan pins (pipeline/pep_cert_plan.py::_expected_native):
+# RPM VERSION-RELEASE <version>-<buildnum>.<dist> and DEB Version <version>[~<pretag>]-<n>.<codename>,
+# where a pre-release build number is <pretag>_<n>. The component version is <version> exactly, in
+# the component's own format: two parts for a major.minor product, three for major.minor.patch.
+@pytest.mark.parametrize("expected,observed", [
+    # two-part (major.minor) component
+    ("1.1", "1.1-1.el9"), ("1.1", "1.1-1.el10"), ("1.1", "1.1-1.jammy"), ("1.0", "1.0-1.bookworm"),
+    ("1.1", "1.1-test1_1.el9"), ("1.1", "1.1-test1_1.el10"),
+    ("1.1", "1.1~test1-1.jammy"), ("1.1", "1.1~test1-1.bookworm"), ("1.1", "1.1~test1-1.resolute"),
+    ("1.1", "1.1-rc1_1.el9"), ("1.1", "1.1~rc1-1.noble"),
+    ("1.1", "1.1-alpha1_1.el9"), ("1.1", "1.1~alpha1-1.trixie"),
+    ("1.1", "1.1-beta1_1.el9"), ("1.1", "1.1~beta1-1.trixie"), ("1.0", "1.0~beta12-1.noble"),
+    # three-part (major.minor.patch) component
+    ("1.2.4", "1.2.4-1.el9"), ("1.2.4", "1.2.4-1.noble"),
+    ("1.2.4", "1.2.4-test1_1.el9"), ("1.2.4", "1.2.4~test1-1.jammy"),
+    ("2.6.1", "2.6.1-rc2_1.el10"), ("2.6.1", "2.6.1~rc2-1.noble"),
+    ("2.0.0", "2.0.0-beta3_1.el9"), ("2.0.0", "2.0.0~beta3-1.noble"),
+    # a dotted build number keeps its dist (release 1.1.el9 of version 1.1)
+    ("1.1", "1.1-1.1.el9"),
+])
+def test_component_version_matches_the_version_in_each_build_form(expected, observed):
+    assert pid.component_version_matches(expected, observed) is True
+
+
+@pytest.mark.parametrize("expected,observed", [
+    ("1.1", "11.1-1.jammy"), ("1.1", "11.1-1.el9"), ("1.1", "21.1-test1_1.el9"),
+    ("1.1", "1.10~test1-1.noble"), ("1.1", "1.10-1.el9"),
+    ("1.1", "1.1.1-1.el9"), ("1.1", "1.1.1~test1-1.jammy"), ("1.1", "1.2~test1-1.jammy"),
+    ("2.6.1", "2.6.10-1.el9"), ("2.6.1", "12.6.1~test1-1.jammy"), ("2.6.1", "2.6.1.1-1.el9"),
+    ("1.2.4", "1.2.40-test1_1.el9"), ("1.2.4", "1.2-1.el9"),
+    # a missing patch field is not supplied: 1.1 and 1.1.0 are different versions
+    ("1.1", "1.1.0-1.el9"), ("1.1.0", "1.1-1.el9"), ("1.1", "1.1.0~test1-1.jammy"),
+    # only the recognised decorations may follow the version
+    ("1.1", "1.1-1-1.jammy"), ("1.1", "1.1+dfsg-1.jammy"), ("1.1", "1.1~test1~x-1.jammy"),
+    ("1.1", "1.1-"), ("1.1", ""), ("", "1.1-1.el9"),
+])
+def test_component_version_matches_rejects_another_version(expected, observed):
+    assert pid.component_version_matches(expected, observed) is False

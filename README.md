@@ -204,7 +204,7 @@ Run without arguments to enter interactive menu mode:
 |--------|-------------|--------|
 | `--pgver` | PostgreSQL versions to test | `16`, `17`, `18`, `19`, `all` |
 | `--platforms` | Target platforms | `rpm`, `deb`, `all` |
-| `--components` | Components to test | `server`, `snowflake`, `pgbouncer`, `pgbackrest`, `postgrest`, `lolor`, `postgis`, `system_stats`, `vectorizer`, `zerodowntime`, `mcp`, `rag`, `ace`, `repo_health`, `docloader`, `anonymizer`, `pg_vectorize`, `pg_tokenizer`, `vchord_bm25`, `pgaudit`, `pgadmin4`, `patroni`, `pg_stat_monitor`, `ai_db_workbench`, `radar`, `spock_patroni_failover`, `llvmjit`, `spock`, `supautils`, `ai_kb`, `pgvector`, `control_plane`, `coldfront`, `safesession`, `pgmq`, `all` |
+| `--components` | Components to test | `server`, `snowflake`, `pgbouncer`, `pgbackrest`, `postgrest`, `lolor`, `postgis`, `system_stats`, `vectorizer`, `zerodowntime`, `mcp`, `rag`, `ace`, `repo_health`, `docloader`, `anonymizer`, `pg_vectorize`, `pg_tokenizer`, `vchord_bm25`, `pgaudit`, `pgadmin4`, `patroni`, `pg_stat_monitor`, `ai_db_workbench`, `radar`, `spock_patroni_failover`, `llvmjit`, `spock`, `supautils`, `ai_kb`, `pgvector`, `control_plane`, `coldfront`, `safesession`, `pgmq`, `pldebugger`, `pg_cron`, `all` |
 | `--repo` | Repository to use | `release`, `staging`, `daily` |
 | `--target` | Execution target | `docker` (default), `aws` |
 | `--arch` | Filter enabled containers by architecture | `arm64`, `amd64` |
@@ -277,6 +277,8 @@ pgedge-pep-test/
 │   ├── test_pep_vchord_bm25.py
 │   ├── test_pep_pgaudit.py
 │   ├── test_pep_pgmq.py
+│   ├── test_pep_pldebugger.py
+│   ├── test_pep_pg_cron.py
 │   ├── test_pep_patroni.py
 │   ├── test_pep_radar.py
 │   ├── test_pep_pg_stat_monitor.py
@@ -377,6 +379,8 @@ pgedge-pep-test/
 | `control_plane` | pgEdge control plane service (standalone `/usr/sbin` binary + systemd unit) |
 | `safesession` | SafeSession session-safety extension (`pgedge_safesession.so` + `pgedge_safesession` extension) |
 | `pgmq` | pgmq message-queue extension (pure SQL — `pgmq` extension, no shared library) |
+| `pldebugger` | PL/pgSQL debugger (`plugin_debugger.so` shared library + `pldbgapi` extension) |
+| `pg_cron` | Cron-based job scheduler (`pg_cron.so` shared library + `pg_cron` extension) |
 | `coldfront` | Coldfront cold-storage tiering: `coldfront` + `pg_duckdb` extensions, the archiver/compactor/partitioner binaries, bundled DuckDB extensions, and lakekeeper |
 
 ## Author

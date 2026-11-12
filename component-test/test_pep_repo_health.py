@@ -40,7 +40,10 @@ def _packages_from_matrix(pg_version: str, platform: str) -> list:
         raw = comp.get(platform)
         if not raw:
             continue
-        pkg = raw.replace("{PG}", pg_version)
+        # {PG} = PostgreSQL major; {POSTGIS} = PostGIS series (POSTGIS_TARGET_VERSION,
+        # default 35) so the RHEL postgis package name is not hardcoded to one series.
+        postgis_series = os.getenv("POSTGIS_TARGET_VERSION", "35").strip() or "35"
+        pkg = raw.replace("{PG}", pg_version).replace("{POSTGIS}", postgis_series)
         if pkg not in seen:
             seen.add(pkg)
             pkgs.append(pkg)
@@ -88,15 +91,12 @@ deb_all_packages  = _packages_from_matrix(pg_major_version, "deb")
 # PostGIS on RHEL: postgis35 and postgis36 are distinct, mutually-exclusive packages
 # (both own postgis-3.so). repo_health installs everything together, so only one series
 # can be present at a time — POSTGIS_TARGET_VERSION (35|36) selects which. The matrix
-# defaults to postgis35; swap it to postgis36 when requested. Debian is unaffected
-# (single postgis-3 package, upgraded in place).
+# uses the {POSTGIS} placeholder (resolved in _packages_from_matrix), so the chosen
+# series is already baked into rhel_all_packages; no post-hoc swap is needed. Debian is
+# unaffected (single postgis-3 package, upgraded in place).
 postgis_target_version = os.getenv("POSTGIS_TARGET_VERSION", "35").strip()
 postgis35_version = os.getenv(f"PGEDGE_POSTGIS35_{pg_major_version}_VERSION")
 postgis36_version = os.getenv(f"PGEDGE_POSTGIS36_{pg_major_version}_VERSION")
-_rhel_postgis35 = f"pgedge-postgis35_{pg_major_version}"
-_rhel_postgis36 = os.getenv("POSTGIS36_PACKAGE", f"pgedge-postgis36_{pg_major_version}")
-if postgis_target_version == "36":
-    rhel_all_packages = [_rhel_postgis36 if p == _rhel_postgis35 else p for p in rhel_all_packages]
 
 # Debian's single postgis-3 package always tracks the newest minor available.
 deb_postgis_version = postgis36_version or postgis35_version
@@ -213,6 +213,13 @@ CONDITIONAL_PRELOAD_LIBRARIES = {
     "pgedge_safesession": {
         "rhel": f"pgedge-safesession_{pg_major_version}",
         "deb":  f"pgedge-postgresql-{pg_major_version}-safesession",
+    },
+    # pldebugger ships plugin_debugger.so; the debugger requires it in
+    # shared_preload_libraries. Gated on the package being installed, so toggling
+    # pldebugger off in the matrix drops it and the cluster still starts.
+    "plugin_debugger": {
+        "rhel": f"pgedge-pldebugger_{pg_major_version}",
+        "deb":  f"pgedge-postgresql-{pg_major_version}-pldebugger",
     },
 }
 

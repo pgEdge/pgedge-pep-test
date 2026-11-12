@@ -37,7 +37,7 @@ skip_cleanup = os.getenv("SKIP_CLEANUP", "false").lower() == "true"
 pgport = os.getenv("PG_PORT", "5432")
 pgdata = os.getenv("PG_DATA_DIR", "/tmp/n1")
 pg_major_version = os.getenv("PG_MAJOR_VERSION", "16")
-supautils_version = os.getenv("PGEDGE_SUPAUTILS_VERSION", "3.2.2")
+supautils_version = os.getenv("PGEDGE_SUPAUTILS_VERSION", "4.0.0")
 
 # supautils ships no standalone binary — only the shared library supautils.so.
 # Functional config: roles/memberships protected by supautils for the functional

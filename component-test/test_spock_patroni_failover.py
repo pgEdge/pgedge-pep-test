@@ -510,6 +510,10 @@ def test_create_patroni_yml_n2(container_name, container_type):
     pguser   = config["pguser"]
     bin_dir  = config["bin_dir"]
 
+    # The spock.*_ddl_* parameters go in the cluster-wide DCS block below, not
+    # just via ALTER SYSTEM on n1/n2, so Patroni applies them to every member —
+    # including the n3 standby. Otherwise n3 comes up with them at their 'off'
+    # defaults and, once promoted by a failover, would replicate no DDL.
     n2_yml = f"""\
 scope: {patroni_scope}
 name: n2
@@ -540,7 +544,11 @@ bootstrap:
         max_replication_slots: 10
         max_worker_processes: 16
         track_commit_timestamp: "on"
-        shared_preload_libraries: 'spock'{_output_plugin_yaml}
+        shared_preload_libraries: 'spock'
+        # Spock auto-DDL replication: cluster-wide so n3 inherits it (see note above)
+        spock.enable_ddl_replication: "on"
+        spock.include_ddl_repset: "on"
+        spock.allow_ddl_from_functions: "on"{_output_plugin_yaml}
     slots:
       n3:
         type: physical
@@ -876,7 +884,11 @@ def test_cross_wire_n1_n2(container_name, container_type):
     time.sleep(5)
     print(f"Cross-wiring complete: {src_node} <-> {new_node}")
 
-    # Enable auto-DDL replication on both nodes.
+    # Enable auto-DDL replication on the directly-managed nodes.
+    # n1 is standalone and n2 is the Patroni leader, so each gets it via
+    # ALTER SYSTEM here. n3 (the Patroni standby) is NOT set here: it inherits
+    # these from the cluster-wide DCS parameters block in n2.yml, so it comes up
+    # with them on and keeps them on after a failover/promotion.
     # ALTER SYSTEM must be issued in separate psql -c calls — it cannot run
     # inside a multi-statement batch sent via a single -c invocation.
     ddl_statements = [

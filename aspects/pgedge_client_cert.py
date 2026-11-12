@@ -11,8 +11,16 @@ through the environment, either as PEM contents or as paths:
     PGEDGE_REPO_CLIENT_CRT_FILE  path to the certificate instead
     PGEDGE_REPO_CLIENT_KEY_FILE  path to the key instead
 
-With neither supplied the repositories stay disabled and no pgEdge package
-installs, so the caller reports that rather than failing obscurely later.
+When none of those is set, the pre-registered pair kept in the repo is used:
+keys/repo_certificates/client.crt and keys/repo_certificates/client.key. That
+directory is gitignored and never committed; CI supplies the pair through the
+environment instead, which takes precedence over it. This lets a local
+`run_pep_tf.sh --target aws` run pick up the operator's own certificate with
+no extra setup.
+
+With no pair available at all the repositories stay disabled and no pgEdge
+package installs, so the caller reports that rather than failing obscurely
+later.
 
 The key never appears in a command: it travels as a tar on stdin, through
 docker's archive API, or on the stdin of a root write over SSH. Both runners
@@ -32,6 +40,11 @@ from pathlib import Path
 # Where pgedge-subscription-manager keeps the pair. It derives the same paths
 # itself; these are only what gets written before handing them over.
 CERT_DIR = {"rhel": "/etc/pki/pgedge", "ubuntu": "/etc/pgedge"}
+
+# The pre-registered pair kept in the repo for local runs, used when none of the
+# PGEDGE_REPO_CLIENT_* variables is set. keys/ is gitignored, so this never
+# reaches GitHub. A module attribute so tests can repoint it at an empty dir.
+_DEFAULT_CERT_DIR = Path(__file__).resolve().parent.parent / "keys" / "repo_certificates"
 
 # What failed, as recorded for pep-integration.yml: no pair was supplied, the
 # pair could not be installed, or the repositories it enables could not be
@@ -89,21 +102,30 @@ def clear_setup_failure():
 
 
 def read_client_certificate():
-    """Return (crt_pem, key_pem) from the environment, or (None, None).
+    """Return (crt_pem, key_pem), or (None, None) when no pair is available.
+
+    Each half is resolved independently, highest precedence first:
+      1. PGEDGE_REPO_CLIENT_{CRT,KEY}        inline PEM (CI secrets)
+      2. PGEDGE_REPO_CLIENT_{CRT,KEY}_FILE   a path
+      3. keys/repo_certificates/client.{crt,key}   the repo-local pair
 
     The values keep themselves out of repr(); see _SecretText.
     """
 
-    def _value(name):
+    def _value(name, default_name):
         inline = os.environ.get(f"PGEDGE_REPO_CLIENT_{name}", "").strip()
         if inline:
             return inline
         path = os.environ.get(f"PGEDGE_REPO_CLIENT_{name}_FILE", "").strip()
+        if not path:
+            default = _DEFAULT_CERT_DIR / default_name
+            if default.is_file():
+                path = str(default)
         if path:
             return Path(path).read_text().strip()
         return ""
 
-    crt, key = _value("CRT"), _value("KEY")
+    crt, key = _value("CRT", "client.crt"), _value("KEY", "client.key")
     if crt and key:
         return _SecretText(crt), _SecretText(key)
     return None, None
@@ -131,9 +153,12 @@ def tar_payload(crt, key):
 
 
 def _enable_script(cert_dir, unpack):
-    """Fix the modes and hand the pair to pgedge-subscription-manager.
+    """Put the pair in place and hand the certificate to pgedge-subscription-manager.
 
-    Carries no secret, so it is safe for a runner that echoes commands.
+    Both files are written to cert_dir; the manager is given only the
+    certificate (`install client.crt`) and reads the matching client.key from
+    the same directory. Carries no secret, so it is safe for a runner that
+    echoes commands.
     """
     unpack_step = f"tar -x -C {cert_dir} client.crt client.key; " if unpack else ""
     return (
@@ -143,8 +168,7 @@ def _enable_script(cert_dir, unpack):
         f"{unpack_step}"
         f"chmod 0644 {cert_dir}/client.crt; "
         f"chmod 0600 {cert_dir}/client.key; "
-        f"pgedge-subscription-manager install "
-        f"{cert_dir}/client.crt {cert_dir}/client.key --force"
+        f"pgedge-subscription-manager install {cert_dir}/client.crt"
     )
 
 
@@ -231,5 +255,6 @@ def _describe(exc):
 NO_CERTIFICATE_MESSAGE = (
     "No pgEdge client certificate supplied: the gated repositories stay "
     "disabled, so no package from them will install. Set "
-    "PGEDGE_REPO_CLIENT_CRT and PGEDGE_REPO_CLIENT_KEY (or the _FILE variants)."
+    "PGEDGE_REPO_CLIENT_CRT and PGEDGE_REPO_CLIENT_KEY (or the _FILE variants), "
+    "or place the pair at keys/repo_certificates/client.crt and client.key."
 )

@@ -16,6 +16,7 @@ Usage:
 
 import argparse
 import json
+import os
 import re
 import sys
 from pathlib import Path
@@ -37,7 +38,10 @@ def build_package_list(components: list, pg: int, platform: str) -> str:
         raw = comp.get(platform)
         if not raw:
             continue
-        pkg = raw.replace("{PG}", str(pg))
+        # {PG} = PostgreSQL major; {POSTGIS} = PostGIS series (POSTGIS_TARGET_VERSION,
+        # default 35) so the RHEL postgis package name is not hardcoded to one series.
+        postgis_series = os.environ.get("POSTGIS_TARGET_VERSION", "35").strip() or "35"
+        pkg = raw.replace("{PG}", str(pg)).replace("{POSTGIS}", postgis_series)
         if pkg not in seen:
             seen.add(pkg)
             pkgs.append(pkg)

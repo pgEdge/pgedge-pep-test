@@ -41,6 +41,9 @@ def isolated_env(monkeypatch, tmp_path):
                  "PGEDGE_REPO_CLIENT_KEY_FILE", "PEP_REPO_AUTH_FAILURE_FILE", "AWS_SSH_KEY_PATH"):
         monkeypatch.delenv(name, raising=False)
     monkeypatch.setenv("AWS_SSH_KEY_PATH", "")
+    # No repo-local pair during tests: point the default location at an empty dir
+    # so "no pair supplied" cases don't pick up a real keys/repo_certificates/.
+    monkeypatch.setattr(pgedge_client_cert, "_DEFAULT_CERT_DIR", tmp_path / "no-cert-dir")
 
 
 @pytest.fixture
@@ -68,6 +71,30 @@ def test_without_the_marker_variable_a_setup_failure_writes_nothing(tmp_path):
 def rendered(excinfo):
     """The failure as pytest renders it in reports: long style, function arguments, chains."""
     return str(excinfo.getrepr(funcargs=True, style="long", chain=True))
+
+
+def test_the_repo_local_pair_is_used_when_no_env_is_set(monkeypatch, tmp_path):
+    # A local run with no PGEDGE_REPO_CLIENT_* env falls back to the pair the
+    # operator placed under keys/repo_certificates/ (gitignored).
+    cert_dir = tmp_path / "repo_certificates"
+    cert_dir.mkdir()
+    (cert_dir / "client.crt").write_text(CRT + "\n")
+    (cert_dir / "client.key").write_text(KEY + "\n")
+    monkeypatch.setattr(pgedge_client_cert, "_DEFAULT_CERT_DIR", cert_dir)
+    crt, key = pgedge_client_cert.read_client_certificate()
+    assert (crt, key) == (CRT, KEY)
+    assert KEY_BODY not in repr(key)   # still redacted in reports
+
+
+def test_env_takes_precedence_over_the_repo_local_pair(monkeypatch, tmp_path):
+    cert_dir = tmp_path / "repo_certificates"
+    cert_dir.mkdir()
+    (cert_dir / "client.crt").write_text("repo-local-crt\n")
+    (cert_dir / "client.key").write_text("repo-local-key\n")
+    monkeypatch.setattr(pgedge_client_cert, "_DEFAULT_CERT_DIR", cert_dir)
+    monkeypatch.setenv("PGEDGE_REPO_CLIENT_CRT", CRT)
+    monkeypatch.setenv("PGEDGE_REPO_CLIENT_KEY", KEY)
+    assert pgedge_client_cert.read_client_certificate() == (CRT, KEY)
 
 
 def test_the_pair_read_from_the_environment_never_reprs_its_value(monkeypatch):
@@ -237,8 +264,7 @@ def test_ssh_delivery_writes_the_pair_through_sudo_never_sftp(local_ssh, tmp_pat
     assert all(KEY_BODY not in c and "PRIVATE KEY" not in c for c in record["commands"])
     writes = [c for c in record["commands"] if "mktemp" in c]
     assert len(writes) == 2 and all(c.startswith("sudo ") for c in writes)
-    assert record["manager"].read_text().strip() == \
-        "install %s/client.crt %s/client.key --force" % (cert_dir, cert_dir)
+    assert record["manager"].read_text().strip() == "install %s/client.crt" % cert_dir
 
 
 def test_ssh_delivery_replaces_a_readable_old_key_with_a_new_private_file(local_ssh, tmp_path):

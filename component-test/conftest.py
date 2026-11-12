@@ -48,6 +48,24 @@ def detect_component_from_test_file(config):
 
     # Component mapping based on test file names
     component_map = {
+        'test_pep_pg_cron': {
+            'name': 'Pg Cron',
+            'version_env': f'PGEDGE_PG_CRON_{os.getenv("PG_MAJOR_VERSION", "16")}_VERSION',
+            'version_default': '1.6.8-1',
+            'rhel_package_env': 'PG_CRON_PACKAGE',
+            'rhel_package_default': f'pgedge-pg_cron_{os.getenv("PG_MAJOR_VERSION", "16")}',
+            'deb_package_env': 'DEB_PG_CRON_PACKAGE',
+            'deb_package_default': f'pgedge-postgresql-{os.getenv("PG_MAJOR_VERSION", "16")}-cron'
+        },
+        'test_pep_pldebugger': {
+            'name': 'Pldebugger',
+            'version_env': f'PGEDGE_PLDEBUGGER_{os.getenv("PG_MAJOR_VERSION", "16")}_VERSION',
+            'version_default': '1.10',
+            'rhel_package_env': 'PLDEBUGGER_PACKAGE',
+            'rhel_package_default': f'pgedge-pldebugger_{os.getenv("PG_MAJOR_VERSION", "16")}',
+            'deb_package_env': 'DEB_PLDEBUGGER_PACKAGE',
+            'deb_package_default': f'pgedge-postgresql-{os.getenv("PG_MAJOR_VERSION", "16")}-pldebugger'
+        },
         'test_pep_pgmq': {
             'name': 'pgmq',
             'version_env': f'PGEDGE_PGMQ_{os.getenv("PG_MAJOR_VERSION", "16")}_VERSION',

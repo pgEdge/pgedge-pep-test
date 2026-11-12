@@ -196,7 +196,7 @@ OPTIONS:
   --components <names>    Components to test (default: all)
                           Values: server, snowflake, pgbouncer, pgbackrest, postgrest, lolor, postgis,
                                   system_stats, vectorizer, zerodowntime, mcp, rag, ace, repo_health,
-                                  docloader, anonymizer, pg_vectorize, pg_tokenizer, vchord_bm25, pgaudit, pgadmin4, patroni, pg_stat_monitor, ai_db_workbench, radar, spock_patroni_failover, llvmjit, ai_kb, spock, supautils, pgvector, control_plane, coldfront, safesession, pgmq, all
+                                  docloader, anonymizer, pg_vectorize, pg_tokenizer, vchord_bm25, pgaudit, pgadmin4, patroni, pg_stat_monitor, ai_db_workbench, radar, spock_patroni_failover, llvmjit, ai_kb, spock, supautils, pgvector, control_plane, coldfront, safesession, pgmq, pldebugger, pg_cron, all
                           Comma-separated for multiple: lolor,postgis
 
   --repo <repository>     Repository to use (default: staging)
@@ -446,7 +446,9 @@ else
   echo "33) coldfront - Coldfront tests"
   echo "34) safesession - SafeSession tests"
   echo "35) pgmq - pgmq extension tests"
-  echo "36) all - All tests"
+  echo "36) pldebugger - Pldebugger tests"
+  echo "37) pg_cron - Pg Cron tests"
+  echo "38) all - All tests"
   echo ""
   echo "💡 You can specify multiple components separated by commas"
   echo "   Example: lolor,postgis,system_stats"
@@ -479,7 +481,7 @@ fi
 
 # Determine test types to run
 if [[ "$test_type_choice" == "all" || "$test_type_choice" == "All" ]]; then
-  test_type_list=(server snowflake pgbouncer pgbackrest postgrest lolor postgis system_stats vectorizer zerodowntime mcp rag ace repo_health docloader anonymizer pg_vectorize pg_tokenizer vchord_bm25 pgaudit pgadmin4 patroni pg_stat_monitor ai_db_workbench radar spock_patroni_failover llvmjit ai_kb spock supautils pgvector control_plane coldfront safesession pgmq)
+  test_type_list=(server snowflake pgbouncer pgbackrest postgrest lolor postgis system_stats vectorizer zerodowntime mcp rag ace repo_health docloader anonymizer pg_vectorize pg_tokenizer vchord_bm25 pgaudit pgadmin4 patroni pg_stat_monitor ai_db_workbench radar spock_patroni_failover llvmjit ai_kb spock supautils pgvector control_plane coldfront safesession pgmq pldebugger pg_cron)
 else
   # Split by comma and trim whitespace
   IFS=',' read -ra test_type_list <<< "$test_type_choice"
@@ -989,6 +991,12 @@ for fam, name in selected:
             pgmq)
               run_pytest_with_tracking "component-test/test_pep_pgmq.py" "$env" "rpm" "pgmq"
               ;;
+            pldebugger)
+              run_pytest_with_tracking "component-test/test_pep_pldebugger.py" "$env" "rpm" "pldebugger"
+              ;;
+            pg_cron)
+              run_pytest_with_tracking "component-test/test_pep_pg_cron.py" "$env" "rpm" "pg_cron"
+              ;;
             *)
               echo "⚠️ Unknown test type: $test_type"
               ;;
@@ -1101,6 +1109,12 @@ for fam, name in selected:
               ;;
             pgmq)
               run_pytest_with_tracking "component-test/test_pep_pgmq.py" "$env" "deb" "pgmq"
+              ;;
+            pldebugger)
+              run_pytest_with_tracking "component-test/test_pep_pldebugger.py" "$env" "deb" "pldebugger"
+              ;;
+            pg_cron)
+              run_pytest_with_tracking "component-test/test_pep_pg_cron.py" "$env" "deb" "pg_cron"
               ;;
             *)
               echo "⚠️ Unknown test type: $test_type"
@@ -1781,7 +1795,7 @@ cat > "test-logs/index.html" <<EOF
 EOF
 
 # Add card for each component that has reports
-for test_type in server snowflake pgbouncer pgbackrest postgrest lolor postgis system_stats vectorizer zerodowntime mcp rag ace repo_health docloader anonymizer pg_vectorize pg_tokenizer vchord_bm25 pgaudit pgadmin4 patroni pg_stat_monitor ai_db_workbench radar spock_patroni_failover llvmjit ai_kb spock supautils pgvector control_plane coldfront safesession pgmq; do
+for test_type in server snowflake pgbouncer pgbackrest postgrest lolor postgis system_stats vectorizer zerodowntime mcp rag ace repo_health docloader anonymizer pg_vectorize pg_tokenizer vchord_bm25 pgaudit pgadmin4 patroni pg_stat_monitor ai_db_workbench radar spock_patroni_failover llvmjit ai_kb spock supautils pgvector control_plane coldfront safesession pgmq pldebugger pg_cron; do
   component_dir="test-logs/${test_type}"
   if [[ -d "$component_dir" ]]; then
     # Check for any HTML reports

@@ -1,5 +1,5 @@
 {
-  "description": "Master component test matrix. Set 'enabled' to false to exclude a component from ALL_PACKAGES / DEB_ALL_PACKAGES. Use {PG} as the PostgreSQL major-version placeholder in package names. Run 'python configuration/generate_env.py' after editing to regenerate the config env files.",
+  "description": "Master component test matrix. Set 'enabled' to false to exclude a component from ALL_PACKAGES / DEB_ALL_PACKAGES. Use {PG} as the PostgreSQL major-version placeholder in package names, and {POSTGIS} for the PostGIS series (resolved from POSTGIS_TARGET_VERSION, default 35). Run 'python configuration/generate_env.py' after editing to regenerate the config env files.",
   "components": [
 
     {"category": "server",    "name": "postgresql-server",   "description": "PostgreSQL server binary",              "enabled": false,  "rhel": "pgedge-postgresql{PG}-server",   "deb": "pgedge-postgresql-{PG}"},
@@ -10,8 +10,8 @@
     {"category": "server",    "name": "postgresql-plperl",   "description": "PL/Perl procedural language",           "enabled": false,  "rhel": "pgedge-postgresql{PG}-plperl",   "deb": null},
     {"category": "server",    "name": "postgresql-plpython3","description": "PL/Python3 procedural language",        "enabled": false,  "rhel": "pgedge-postgresql{PG}-plpython3","deb": null},
     {"category": "server",    "name": "postgresql-pltcl",    "description": "PL/Tcl procedural language",            "enabled": false,  "rhel": "pgedge-postgresql{PG}-pltcl",    "deb": null},
-    {"category": "extension", "name": "pldebugger",          "description": "PL/pgSQL debugger (Must Have)",        "enabled": true,  "rhel": "pgedge-pldebugger_{PG}",         "deb": "pgedge-postgresql-{PG}-pldebugger"},
-    {"category": "extension", "name": "postgis",             "description": "PostGIS spatial extension",            "enabled": false,  "rhel": "pgedge-postgis35_{PG}",          "deb": "pgedge-postgresql-{PG}-postgis-3"},
+    {"category": "extension", "name": "pldebugger",          "description": "PL/pgSQL debugger (Must Have)",        "enabled": true, "rhel": "pgedge-pldebugger_{PG}",         "deb": "pgedge-postgresql-{PG}-pldebugger"},
+    {"category": "extension", "name": "postgis",             "description": "PostGIS spatial extension",            "enabled": false,  "rhel": "pgedge-postgis{POSTGIS}_{PG}",   "deb": "pgedge-postgresql-{PG}-postgis-3"},
     {"category": "extension", "name": "pgaudit",             "description": "PostgreSQL audit logging",             "enabled": false,  "rhel": "pgedge-pgaudit_{PG}",            "deb": "pgedge-postgresql-{PG}-pgaudit"},
     {"category": "extension", "name": "pgvector",            "description": "Vector similarity search",             "enabled": false,  "rhel": "pgedge-pgvector_{PG}",           "deb": "pgedge-postgresql-{PG}-pgvector"},
     {"category": "extension", "name": "pg-tokenizer",        "description": "Text tokenizer extension",             "enabled": false,  "rhel": "pgedge-pg-tokenizer_{PG}",       "deb": "pgedge-postgresql-{PG}-pg-tokenizer"},
@@ -63,7 +63,7 @@
     {"category": "ai_dba",    "name": "ai-dba-client",       "description": "AI DBA CLI client",                    "enabled": false,  "rhel": "pgedge-ai-dba-client",           "deb": "pgedge-ai-dba-client"},
 
     {"category": "enterprise","name": "enterprise-all",      "description": "Enterprise all-in-one meta-package",   "enabled": true, "rhel": "pgedge-enterprise-all_{PG}",     "deb": "pgedge-enterprise-all-{PG}"},
-    {"category": "enterprise","name": "enterprise-postgres", "description": "Enterprise PostgreSQL meta-package",   "enabled": false, "rhel": "pgedge-enterprise-postgres_{PG}","deb": "pgedge-enterprise-postgres-{PG}"}
+    {"category": "enterprise","name": "enterprise-postgres", "description": "Enterprise PostgreSQL meta-package",   "enabled": true, "rhel": "pgedge-enterprise-postgres_{PG}","deb": "pgedge-enterprise-postgres-{PG}"}
 
   ]
 }

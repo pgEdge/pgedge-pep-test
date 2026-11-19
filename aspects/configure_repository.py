@@ -127,15 +127,26 @@ def _configure_rhel_repo(container, repo):
             raise Exception(f"Failed to switch repo to {repo}: {output.decode()}")
         print(f" Repository switched to {repo}")
 
+        # The pgedge-release RPM just populated dnf's cache against the 'release'
+        # baseurl, and that cache is still within metadata_expire. A plain
+        # makecache/install would keep serving the 'release' package list even
+        # after the sed switch, so packages that exist only in staging/daily
+        # (e.g. newly built metas for the latest PG major) resolve as "No match".
+        # Drop the stale cache so the switched baseurl is fetched fresh.
+        container.exec_run(["/bin/sh", "-c", "dnf clean all"], user="root")
+        print(f" Cleared stale dnf cache after switching to {repo}")
+
     enabled = _install_client_certificate(container, "rhel")
 
     if enabled:
         # pgedge-subscription-manager enables the repositories but tolerates a
         # failed refresh, so a certificate the server refuses would surface only
         # at the first package install, read as a product failure. Refresh just
-        # the repositories it enabled (not the disabled source one).
+        # the repositories it enabled (not the disabled source one). --refresh
+        # forces a re-download so the staging/daily switch above is picked up even
+        # if the cache was only just created and not yet expired.
         exit_code, output = container.exec_run(
-            ["/bin/sh", "-c", "dnf -q makecache --repo=pgedge --repo=pgedge-noarch"],
+            ["/bin/sh", "-c", "dnf -q makecache --refresh --repo=pgedge --repo=pgedge-noarch"],
             user="root"
         )
         if exit_code != 0:

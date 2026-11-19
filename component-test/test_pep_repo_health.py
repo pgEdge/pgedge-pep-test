@@ -18,21 +18,35 @@ load_dotenv()
 client = docker.from_env()
 
 
+def _load_matrix_components() -> list:
+    """Return the raw component list from packages_test_matrix.json (or [])."""
+    matrix_path = Path(__file__).parent.parent / "configuration" / "packages_test_matrix.json"
+    if not matrix_path.exists():
+        return []
+    with matrix_path.open() as f:
+        return json.load(f).get("components", [])
+
+
+def _resolve_pkg(raw: str, pg_version: str) -> str:
+    """Substitute the matrix placeholders in a package name.
+
+    {PG} = PostgreSQL major; {POSTGIS} = PostGIS series (POSTGIS_TARGET_VERSION,
+    default 35) so the RHEL postgis package name is not hardcoded to one series.
+    """
+    postgis_series = os.getenv("POSTGIS_TARGET_VERSION", "35").strip() or "35"
+    return raw.replace("{PG}", pg_version).replace("{POSTGIS}", postgis_series)
+
+
 def _packages_from_matrix(pg_version: str, platform: str) -> list:
     """
     Build the package list for repo_health tests from packages_test_matrix.json.
     Returns packages whose 'enabled' flag is true and whose pg_versions (if set)
     includes the given PG major version.
     """
-    matrix_path = Path(__file__).parent.parent / "configuration" / "packages_test_matrix.json"
-    if not matrix_path.exists():
-        return []
-    with matrix_path.open() as f:
-        matrix = json.load(f)
     pg = int(pg_version)
     seen: set = set()
     pkgs: list = []
-    for comp in matrix["components"]:
+    for comp in _load_matrix_components():
         if not comp.get("enabled", False):
             continue
         if "pg_versions" in comp and pg not in comp["pg_versions"]:
@@ -40,10 +54,59 @@ def _packages_from_matrix(pg_version: str, platform: str) -> list:
         raw = comp.get(platform)
         if not raw:
             continue
-        # {PG} = PostgreSQL major; {POSTGIS} = PostGIS series (POSTGIS_TARGET_VERSION,
-        # default 35) so the RHEL postgis package name is not hardcoded to one series.
-        postgis_series = os.getenv("POSTGIS_TARGET_VERSION", "35").strip() or "35"
-        pkg = raw.replace("{PG}", pg_version).replace("{POSTGIS}", postgis_series)
+        pkg = _resolve_pkg(raw, pg_version)
+        if pkg not in seen:
+            seen.add(pkg)
+            pkgs.append(pkg)
+    return pkgs
+
+
+_POSTGIS_RHEL_RE = re.compile(r'^pgedge-postgis\d+_(\d+)$')
+
+
+def _acceptable_dependency_names(pkg: str) -> list:
+    """Concrete package names that satisfy a dependency.
+
+    PostGIS on RHEL ships as mutually-exclusive series (postgis35 / postgis36);
+    a meta-package pulls exactly one of them, and which one is the package's own
+    choice. Accept either series as satisfying the 'postgis' dependency so the
+    verification does not pin a series the meta-package did not select. Debian's
+    single postgis-3 package needs no such treatment.
+    """
+    m = _POSTGIS_RHEL_RE.match(pkg)
+    if m:
+        pg = m.group(1)
+        return [f"pgedge-postgis35_{pg}", f"pgedge-postgis36_{pg}"]
+    return [pkg]
+
+
+def _matrix_component_enabled(name: str) -> bool:
+    """True if the named matrix component exists and has enabled: true."""
+    return any(c.get("name") == name and c.get("enabled", False)
+               for c in _load_matrix_components())
+
+
+def _dependency_packages(dep_names, pg_version: str, platform: str) -> list:
+    """Resolve a list of matrix component *names* to this platform's package names.
+
+    Components with no package on the platform (deb: null, e.g. contrib which is
+    bundled into the server) are skipped, and PG-version-scoped components not
+    applicable to this major are dropped. Order follows dep_names; duplicates removed.
+    """
+    pg = int(pg_version)
+    by_name = {c.get("name"): c for c in _load_matrix_components()}
+    seen: set = set()
+    pkgs: list = []
+    for name in dep_names:
+        comp = by_name.get(name)
+        if not comp:
+            continue
+        if "pg_versions" in comp and pg not in comp["pg_versions"]:
+            continue
+        raw = comp.get(platform)
+        if not raw:  # null package on this platform (e.g. deb contrib)
+            continue
+        pkg = _resolve_pkg(raw, pg_version)
         if pkg not in seen:
             seen.add(pkg)
             pkgs.append(pkg)
@@ -359,6 +422,84 @@ all_container_package_combinations = generate_container_package_combinations()
 
 
 # ============================================================================
+# Enterprise meta-package dependency expectations
+# ============================================================================
+# The enterprise meta-packages are convenience bundles: installing one must pull
+# in a fixed set of components via package-level dependencies, even when those
+# components are toggled off in packages_test_matrix.json (so they never appear
+# in ALL_PACKAGES on their own). When a meta-package is enabled in the matrix,
+# test_verify_enterprise_dependencies asserts each expected dependency actually
+# landed on the host, catching a meta-package whose Requires/Depends drifted.
+#
+# Names below are matrix component names; they are resolved to the platform's
+# real package name (with {PG}/{POSTGIS} substituted) at test time, and any
+# component with no package on a platform (e.g. deb contrib, bundled into the
+# server) is skipped automatically.
+ENTERPRISE_META_PACKAGE_NAMES = ["enterprise-all", "enterprise-postgres"]
+
+# Components that no meta-package bundles, so they must NOT be asserted as
+# enterprise-all dependencies even though they live in the matrix:
+#   - AI-KB embedding packages (category 'ai_kb')
+#   - the ColdFront family (coldfront extension + server + bundled duckdb extensions)
+#   - pg-duckdb (DuckDB execution engine)
+NON_META_COMPONENT_NAMES = {
+    "coldfront",
+    "coldfront-server",
+    "coldfront-duckdb-extensions",
+    "pg-duckdb",
+    "postgres-mcp-kb",
+    "lakekeeper",
+    # enterprise-all bundles the v2 RAG server (pgedge-rag-server2, see
+    # ENTERPRISE_EXTRA_PACKAGES), not this v1 'pgedge-rag-server' component.
+    "rag-server",
+}
+NON_META_CATEGORIES = {"ai_kb"}
+
+# Packages a meta-package pulls in that are NOT represented by a matrix component,
+# so they can't be resolved from a component name. Checked verbatim, per platform.
+ENTERPRISE_EXTRA_PACKAGES = {
+    "enterprise-all": {
+        "rhel": ["pgedge-rag-server2"],
+        "deb":  ["pgedge-rag-server2"],
+    },
+}
+
+# pgedge-enterprise-postgres: PostgreSQL server plus the core extensions.
+ENTERPRISE_POSTGRES_DEPENDENCIES = [
+    "postgresql-server",
+    "spock50",
+    "lolor",
+    "snowflake",
+    "postgresql-contrib",
+    "postgis",
+    "pgvector",
+    "pgaudit",
+]
+
+# pgedge-enterprise-all: every matrix component except the meta-packages
+# themselves and the components no meta-package bundles (AI-KB, ColdFront, DuckDB).
+ENTERPRISE_ALL_DEPENDENCIES = [
+    c.get("name")
+    for c in _load_matrix_components()
+    if c.get("name")
+    and c.get("name") not in ENTERPRISE_META_PACKAGE_NAMES
+    and c.get("name") not in NON_META_COMPONENT_NAMES
+    and c.get("category") not in NON_META_CATEGORIES
+]
+
+# Meta-package component name -> its required dependency component names.
+ENTERPRISE_DEPENDENCY_MAP = {
+    "enterprise-all": ENTERPRISE_ALL_DEPENDENCIES,
+    "enterprise-postgres": ENTERPRISE_POSTGRES_DEPENDENCIES,
+}
+
+# Only the meta-packages actually enabled in the matrix get verified.
+ENABLED_ENTERPRISE_META_PACKAGES = [
+    name for name in ENTERPRISE_META_PACKAGE_NAMES if _matrix_component_enabled(name)
+]
+
+
+# ============================================================================
 # Test Functions
 # ============================================================================
 
@@ -472,14 +613,25 @@ def test_configure_repository(container_name, container_type):
             pytest.fail(f"Failed to configure repository: {str(e)}")
 
 
-@pytest.mark.parametrize("container_name,container_type,package", all_container_package_combinations)
-def test_install_all_packages(container_name, container_type, package):
-    """Step 2: Install each package from ALL_PACKAGES / DEB_ALL_PACKAGES as a separate test"""
-    container_name = container_name.strip()
-    package = package.strip()
+@pytest.mark.parametrize("container_name,container_type", all_containers)
+def test_install_all_packages(container_name, container_type):
+    """Step 2: Install the platform's full package list in a SINGLE transaction.
 
-    if not container_name or not package:
-        pytest.skip("No container or package defined")
+    repo_health installs everything together so the package manager resolves
+    shared, mutually-exclusive dependencies consistently. Installing packages
+    one-by-one (separate transactions) makes the enterprise meta-packages each
+    pick their own PostGIS series — one transaction lands postgis36, the next
+    pulls postgis35, and their files conflict. A single combined transaction
+    mirrors a manual `dnf install a b c` and lets one PostGIS satisfy all of them.
+    """
+    container_name = container_name.strip()
+    if not container_name:
+        pytest.skip("No container defined in env")
+
+    config = get_container_config(container_type)
+    packages = [p.strip() for p in config["all_packages"] if p and p.strip()]
+    if not packages:
+        pytest.skip("No packages defined for this platform")
 
     try:
         container = client.containers.get(container_name)
@@ -488,15 +640,16 @@ def test_install_all_packages(container_name, container_type, package):
 
     assert container.status == "running"
 
-    print(f"\n--- Installing {package} on {container_name} ({container_type}) ---")
+    print(f"\n--- Installing {len(packages)} packages on {container_name} ({container_type}) ---")
+    print(f"    {', '.join(packages)}")
 
     try:
-        success, platform, message = package_management.install_package(container, package)
+        success, platform, message = package_management.install_package(container, packages)
         assert success, f"Package installation failed: {message}"
         print(f"✅ {message}")
         print(f"✅ Platform detected: {platform}")
     except Exception as e:
-        pytest.fail(f"Failed to install {package}: {str(e)}")
+        pytest.fail(f"Failed to install packages on {container_name}: {str(e)}")
 
 
 @pytest.mark.parametrize("container_name,container_type", all_containers)
@@ -573,6 +726,65 @@ def test_verify_package_versions(container_name, container_type):
         + "\n".join(f"  - {p}" for p in failed_verifications)
     )
     print(f"✅ All verified package versions match on {container_name}")
+
+
+@pytest.mark.parametrize("container_name,container_type", all_containers)
+def test_verify_enterprise_dependencies(container_name, container_type):
+    """Step 3b: Verify enterprise meta-packages pulled in their dependencies.
+
+    When 'enterprise-all' and/or 'enterprise-postgres' is enabled in
+    packages_test_matrix.json, installing the meta-package must transitively
+    install its component dependencies. This checks each expected dependency is
+    actually present on the host (via the package manager), so a meta-package
+    whose Requires/Depends regressed is caught even when the dependency is
+    toggled off on its own in the matrix.
+    """
+    container_name = container_name.strip()
+    if not container_name:
+        pytest.skip("No container defined in env")
+
+    if not ENABLED_ENTERPRISE_META_PACKAGES:
+        pytest.skip("No enterprise meta-package enabled in packages_test_matrix.json")
+
+    try:
+        container = client.containers.get(container_name)
+    except docker.errors.NotFound:
+        pytest.skip(f"Container {container_name} not found or not running.")
+
+    assert container.status == "running"
+
+    print(f"\n--- Verifying enterprise meta-package dependencies on {container_name} ({container_type}) ---")
+
+    missing = []
+    for meta_name in ENABLED_ENTERPRISE_META_PACKAGES:
+        dep_names = ENTERPRISE_DEPENDENCY_MAP.get(meta_name, [])
+        dep_packages = _dependency_packages(dep_names, pg_major_version, container_type)
+        # Append packages that aren't matrix components (e.g. pgedge-rag-server2).
+        for extra in ENTERPRISE_EXTRA_PACKAGES.get(meta_name, {}).get(container_type, []):
+            if extra not in dep_packages:
+                dep_packages.append(extra)
+        print(f"   {meta_name}: expecting {len(dep_packages)} dependencies installed")
+        for pkg in dep_packages:
+            candidates = _acceptable_dependency_names(pkg)
+            found = None
+            for cand in candidates:
+                installed_version = package_management.query_installed_version(container, cand)
+                if installed_version:
+                    found = (cand, installed_version)
+                    break
+            if found:
+                note = "" if found[0] == pkg else f" [{found[0]} satisfies {pkg}]"
+                print(f"   ✅ {pkg} (installed {found[1]}){note}")
+            else:
+                shown = pkg if len(candidates) == 1 else " / ".join(candidates)
+                print(f"   ❌ {shown} NOT installed (required by {meta_name})")
+                missing.append(f"{shown} (required by {meta_name})")
+
+    assert not missing, (
+        f"Enterprise meta-package dependencies missing on {container_name}:\n"
+        + "\n".join(f"  - {p}" for p in missing)
+    )
+    print(f"✅ All enterprise meta-package dependencies present on {container_name}")
 
 
 @pytest.mark.parametrize("container_name,container_type", all_containers)

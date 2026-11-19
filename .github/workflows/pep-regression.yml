@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       pg_versions:
-        description: "PG versions: '16' | '17' | '18' | 'all' | CSV (e.g. '16,17')"
+        description: "PG versions: '16' | '17' | '18' | '19' | 'all' | CSV (e.g. '16,17')"
         default: 'all'
       families:
         description: "Package families: 'rpm' | 'deb' | 'all' | 'rpm,deb'"
@@ -73,7 +73,7 @@ jobs:
           python3 - <<'PY' >> "$GITHUB_OUTPUT"
           import json, os, sys
 
-          ALL_PGS        = ['16', '17', '18']
+          ALL_PGS        = ['16', '17', '18', '19']
           ALL_FAMILIES   = ['rpm', 'deb']
           ALL_ARCHES     = ['arm64', 'amd64']
           # Must match the components --help advertises in run_pep_tf.sh

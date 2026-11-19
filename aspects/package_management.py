@@ -83,18 +83,24 @@ def install_package(container, package_name, pg_major_version=None, install_pg_s
 
     print(f"Detected platform: {platform}")
 
-    # Install the packages sequentially
-    for pkg in packages:
-        print(f"Installing {pkg}...")
-        exit_code, output = container.exec_run(
-            ["/bin/sh", "-c", f"{pkg_mgr} {pkg}"],
-            user="root"
-        )
+    # Install all requested packages in a SINGLE transaction. Installing them
+    # together lets the package manager resolve shared, mutually-exclusive
+    # dependencies consistently — e.g. the enterprise-* meta-packages both pull in
+    # PostGIS; installed one-by-one, one transaction selects postgis36 and the next
+    # selects postgis35, whose files then conflict. A combined transaction mirrors a
+    # manual `dnf install a b c` / `apt-get install a b c`, where only one PostGIS is
+    # chosen for all of them.
+    pkg_args = " ".join(packages)
+    print(f"Installing {pkg_args}...")
+    exit_code, output = container.exec_run(
+        ["/bin/sh", "-c", f"{pkg_mgr} {pkg_args}"],
+        user="root"
+    )
 
-        if exit_code != 0:
-            raise Exception(f"Failed to install {pkg}: {output.decode()}")
+    if exit_code != 0:
+        raise Exception(f"Failed to install {pkg_args}: {output.decode()}")
 
-        print(f"\x05 Successfully installed {pkg}")
+    print(f"\x05 Successfully installed {pkg_args}")
 
     # Install PostgreSQL server package for Debian if requested
     if platform == "debian" and install_pg_server and pg_major_version:

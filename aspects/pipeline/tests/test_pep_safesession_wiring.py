@@ -337,6 +337,47 @@ def test_identity_proves_the_exact_requested_package_version(monkeypatch, tmp_pa
     assert json.loads((tmp_path / "identity-evidence.json").read_text())["l2a"] == ("proven" if ok else "not_proven")
 
 
+def _identity_with_pin(monkeypatch, tmp_path, env, buildnum, pin, observed):
+    """Run the real test_safesession_identity for release 1.1 pinned to ``pin`` with ``observed``
+    installed. Returns (outcome, message, evidence)."""
+    key = "PEP_EXPECTED_RPM" if env["PEP_FAMILY"] == "rpm" else "PEP_EXPECTED_DEB"
+    m = load(monkeypatch, dict(env, **{key: pin, "PEP_EXPECTED_BUILDNUM": buildnum}))
+    _wire(monkeypatch, tmp_path, m, _Container(_pkg_list()))
+    m.pep_integration_mode.pep_evidence.write_install_evidence(
+        m.INTEGRATION_REQUEST, "run-A", "pinned", pin, str(tmp_path / "install-evidence.json"),
+        installed_sha256="f" * 64)
+    monkeypatch.setattr(m.package_management, "query_installed_version", lambda c, n: observed)
+    ctype = "rhel" if env["PEP_FAMILY"] == "rpm" else "deb"
+    outcome, msg = _outcome(m.test_safesession_identity, env["PEP_CONTAINER_ALIAS"], ctype)
+    return outcome, msg, json.loads((tmp_path / "identity-evidence.json").read_text())
+
+
+# SafeSession's version is major.minor: 1.1 is the whole version. These are the pins the release
+# plan builds for 1.1 (RPM <version>-<buildnum>.<dist>, DEB <version>[~<pretag>]-<n>.<codename>).
+@pytest.mark.parametrize("env,buildnum,pin", [
+    (_RPM, "1", "1.1-1.el9"), (_RPM, "test1_1", "1.1-test1_1.el9"),
+    (_RPM, "rc1_1", "1.1-rc1_1.el9"), (_RPM, "beta1_1", "1.1-beta1_1.el9"),
+    (_DEB, "1", "1.1-1.trixie"), (_DEB, "test1_1", "1.1~test1-1.trixie"),
+    (_DEB, "rc1_1", "1.1~rc1-1.trixie"), (_DEB, "beta1_1", "1.1~beta1-1.trixie"),
+], ids=["rpm-ga", "rpm-test", "rpm-rc", "rpm-beta", "deb-ga", "deb-test", "deb-rc", "deb-beta"])
+def test_identity_proves_a_two_part_release_in_every_build_form(monkeypatch, tmp_path, env, buildnum, pin):
+    outcome, msg, ev = _identity_with_pin(monkeypatch, tmp_path, env, buildnum, pin, pin)
+    assert (outcome, msg) == ("passed", "")
+    assert ev == {"l2a": "proven", "l2b": "not_attempted", "l1": "proven"}
+
+
+# The installed package is exactly the pin, but its component version is not 1.1: L1 alone must
+# fail the identity step (the pin here is deliberately wrong, so L2a cannot be what rejects it).
+@pytest.mark.parametrize("env,pin", [
+    (_DEB, "11.1-1.trixie"), (_DEB, "1.10~test1-1.trixie"), (_RPM, "1.1.1-1.el9"),
+    (_RPM, "1.1.0-1.el9"), (_RPM, "21.1-test1_1.el9"),
+], ids=["11.1", "1.10-test", "1.1.1", "1.1.0", "21.1-test"])
+def test_identity_fails_when_the_component_version_is_not_the_release(monkeypatch, tmp_path, env, pin):
+    outcome, msg, ev = _identity_with_pin(monkeypatch, tmp_path, env, "1", pin, pin)
+    assert outcome == "assert" and "component-version match failed" in msg
+    assert ev == {"l2a": "proven", "l2b": "not_attempted", "l1": "not_proven"}
+
+
 def test_identity_without_install_evidence_fails_with_persisted_evidence(monkeypatch, tmp_path):
     m = load(monkeypatch, _RPM)
     _wire(monkeypatch, tmp_path, m, _Container(_pkg_list()))

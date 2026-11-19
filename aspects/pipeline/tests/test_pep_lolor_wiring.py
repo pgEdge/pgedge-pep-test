@@ -419,6 +419,29 @@ def test_identity_proves_the_exact_requested_version(monkeypatch, tmp_path, obse
     assert json.loads((tmp_path / "identity-evidence.json").read_text())["l2a"] == ("proven" if ok else "not_proven")
 
 
+# A three-part (major.minor.patch) release through the real identity step: each build form of 9.8.7
+# proves L1, and a package whose version merely contains 9.8.7 does not (pinned to itself, so only
+# L1 can reject it).
+@pytest.mark.parametrize("env,buildnum,pin,l1", [
+    (_RPM, "test1_1", "9.8.7-test1_1.el9", "proven"), (_DEB, "test1_1", "9.8.7~test1-1.trixie", "proven"),
+    (_RPM, "test1_1", "9.8.70-test1_1.el9", "not_proven"), (_DEB, "1", "19.8.7-1.trixie", "not_proven"),
+], ids=["rpm-test", "deb-test", "rpm-9.8.70", "deb-19.8.7"])
+def test_identity_reads_a_three_part_version_from_the_pin(monkeypatch, tmp_path, env, buildnum, pin, l1):
+    key = "PEP_EXPECTED_RPM" if env["PEP_FAMILY"] == "rpm" else "PEP_EXPECTED_DEB"
+    m = load(monkeypatch, dict(env, **{key: pin, "PEP_EXPECTED_BUILDNUM": buildnum}))
+    _wire(monkeypatch, tmp_path, m, _Container(_Server(m)))
+    m.pep_integration_mode.pep_evidence.write_install_evidence(
+        m.INTEGRATION_REQUEST, "run-A", "pinned", pin, str(tmp_path / "install-evidence.json"),
+        installed_sha256="f" * 64)
+    monkeypatch.setattr(m.package_management, "query_installed_version", lambda c, n: pin)
+    ctype = "rhel" if env["PEP_FAMILY"] == "rpm" else "deb"
+    outcome, msg = _outcome(m.test_lolor_identity, env["PEP_CONTAINER_ALIAS"], ctype)
+    assert outcome == ("passed" if l1 == "proven" else "failed")
+    assert l1 == "proven" or "component-version match failed" in msg
+    ev = json.loads((tmp_path / "identity-evidence.json").read_text())
+    assert ev == {"l2a": "proven", "l2b": "not_attempted", "l1": l1}
+
+
 def test_identity_without_install_evidence_fails_with_persisted_evidence(monkeypatch, tmp_path):
     m = load(monkeypatch, _RPM)
     _wire(monkeypatch, tmp_path, m, _Container(_Server(m)))

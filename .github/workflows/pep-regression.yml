@@ -77,13 +77,16 @@ jobs:
           ALL_FAMILIES   = ['rpm', 'deb']
           ALL_ARCHES     = ['arm64', 'amd64']
           # Must match the components --help advertises in run_pep_tf.sh
+          # (kept in sync with test_type_list in run_pep_tf.sh).
           ALL_COMPONENTS = [
               'server', 'snowflake', 'pgbouncer', 'pgbackrest', 'postgrest',
               'lolor', 'postgis', 'system_stats', 'vectorizer', 'zerodowntime',
               'mcp', 'rag', 'ace', 'repo_health', 'docloader', 'anonymizer',
               'pg_vectorize', 'pg_tokenizer', 'vchord_bm25', 'pgaudit',
               'pgadmin4', 'patroni', 'pg_stat_monitor', 'ai_db_workbench',
-              'radar', 'spock_patroni_failover', 'llvmjit',
+              'radar', 'spock_patroni_failover', 'llvmjit', 'ai_kb', 'spock',
+              'supautils', 'pgvector', 'control_plane', 'coldfront',
+              'safesession', 'pgmq', 'pldebugger', 'pg_cron',
           ]
           RUNNER_FOR = {'arm64': 'ubuntu-24.04-arm', 'amd64': 'ubuntu-24.04'}
 

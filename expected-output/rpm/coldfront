@@ -1,7 +1,6 @@
 /usr/bin/archiver
 /usr/bin/compactor
 /usr/bin/partitioner
-/etc/pgedge/coldfront/config.yaml
 /usr/share/licenses/pgedge-coldfront
 /usr/share/pgedge-coldfront/coldfront-sbom.json
 /usr/share/pgedge-coldfront/coldfront-sbom.json.asc

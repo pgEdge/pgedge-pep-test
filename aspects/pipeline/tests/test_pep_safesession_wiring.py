@@ -644,6 +644,84 @@ def test_disabled_extension_checks_skip_standalone_and_fail_integration(monkeypa
         assert _outcome(fn, "rocky9-amd64", "rhel", *args)[0] == want
 
 
+# --------------------------------------------------------------------------- functional tests
+# The single-session functional tests (added alongside test_safesession_enforcement) run in both modes,
+# so integration mode must fail them, never skip, when they cannot run.
+_FUNCTIONAL = ["test_safesession_restricted_role_blocks_writes", "test_safesession_blocks_ddl",
+               "test_safesession_is_restricted_status", "test_safesession_superuser_not_restricted",
+               "test_safesession_set_role_cannot_bypass", "test_safesession_unlisted_role_is_not_restricted"]
+
+
+@pytest.mark.parametrize("env,want", [(_STANDALONE, "skipped"), (_RPM, "failed")], ids=["standalone", "integration"])
+def test_functional_tests_skip_standalone_and_fail_integration_when_disabled(monkeypatch, env, want):
+    m = load(monkeypatch, dict(env, CHECK_EXTENSIONS="false"))
+    monkeypatch.setattr(m, "client", _Client(_Cluster()))
+    for step in _FUNCTIONAL:
+        assert (_outcome(getattr(m, step), "rocky9-amd64", "rhel")[0], step) == (want, step)
+
+
+@pytest.mark.parametrize("env,want", [(_STANDALONE, "skipped"), (_RPM, "failed")], ids=["standalone", "integration"])
+def test_functional_tests_fail_integration_and_skip_standalone_without_a_container(monkeypatch, env, want):
+    m = load(monkeypatch, env)
+    monkeypatch.setattr(m, "client", _Client(None))
+    for step in _FUNCTIONAL:
+        outcome, msg = _outcome(getattr(m, step), "rocky9-amd64", "rhel")
+        assert (outcome, step) == (want, step) and "not found or not running" in msg
+
+
+# What each functional test's single psql session prints when SafeSession behaves as documented.
+_FUNCTIONAL_OK = {
+    "test_safesession_restricted_role_blocks_writes":
+        " alpha\n beta\nERROR:  cannot execute INSERT in a read-only session\n"
+        "ERROR:  cannot execute UPDATE in a read-only session\n"
+        "ERROR:  cannot execute DELETE in a read-only session\n FINAL_ROWS=2\n",
+    "test_safesession_blocks_ddl":
+        "ERROR:  cannot execute CREATE TABLE in a read-only session\n DDL_TABLE_EXISTS=0\n",
+    "test_safesession_is_restricted_status": " SUPER_RESTRICTED=false\n ROLE_RESTRICTED=true\n",
+    "test_safesession_superuser_not_restricted": " SUPER_ROWS=1\n",
+    "test_safesession_set_role_cannot_bypass":
+        "ERROR:  cannot execute INSERT in a read-only session\n BYPASS_ROWS=0\n",
+    "test_safesession_unlisted_role_is_not_restricted": " FREE_ROWS=1\n",
+}
+# ... and what it prints when SafeSession does not enforce (or over-enforces).
+_FUNCTIONAL_BAD = {
+    "test_safesession_restricted_role_blocks_writes": " alpha\n beta\n FINAL_ROWS=3\n",
+    "test_safesession_blocks_ddl": " DDL_TABLE_EXISTS=1\n",
+    "test_safesession_is_restricted_status": " SUPER_RESTRICTED=false\n ROLE_RESTRICTED=false\n",
+    "test_safesession_superuser_not_restricted":
+        "ERROR:  cannot execute INSERT in a read-only session\n SUPER_ROWS=0\n",
+    "test_safesession_set_role_cannot_bypass": " BYPASS_ROWS=1\n",
+    "test_safesession_unlisted_role_is_not_restricted":
+        "ERROR:  cannot execute INSERT in a read-only session\n FREE_ROWS=0\n",
+}
+
+
+def _script_responder(outputs):
+    """exec_run responder: a psql heredoc script gets ``outputs['script']``; cleanup scripts get ''."""
+    def respond(cmd):
+        assert cmd[:2] == ["bash", "-c"] and "psql -X -q" in cmd[2] and "<<'EOSQL'" in cmd[2], cmd
+        if "DROP OWNED BY" in cmd[2] and "SET SESSION AUTHORIZATION" not in cmd[2]:
+            return 0, ""
+        return 0, outputs["script"]
+    return respond
+
+
+@pytest.mark.parametrize("env", [_RPM, _STANDALONE], ids=["integration", "standalone"])
+@pytest.mark.parametrize("step", _FUNCTIONAL)
+def test_functional_tests_pass_on_enforcement_and_fail_without_it(monkeypatch, env, step):
+    m = load(monkeypatch, env)
+    outputs = {"script": _FUNCTIONAL_OK[step]}
+    c = _Container(_script_responder(outputs))
+    monkeypatch.setattr(m, "client", _Client(c))
+    assert _outcome(getattr(m, step), "rocky9-amd64", "rhel") == ("passed", "")
+    # Every scenario script runs as the server's superuser in ONE session and is followed by cleanup.
+    assert len(c.cmds) == 2 and "DROP OWNED BY" in c.cmds[-1][2]
+    outputs["script"] = _FUNCTIONAL_BAD[step]
+    c.cmds.clear()
+    assert _outcome(getattr(m, step), "rocky9-amd64", "rhel")[0] == "assert"
+    assert len(c.cmds) == 2 and "DROP OWNED BY" in c.cmds[-1][2], "cleanup must run after a failure too"
+
+
 # --------------------------------------------------------------------------- missing references
 _NO_REFERENCE = Exception("No expected file found for safesession at /x/expected-output/rpm (checked: /x/a)")
 

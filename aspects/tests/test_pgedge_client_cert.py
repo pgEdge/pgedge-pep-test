@@ -530,10 +530,31 @@ def test_rhel_refreshes_only_the_enabled_pgedge_repositories(pair, marker):
     ok, platform, message = configure_repository.configure_pgedge_repository(box, "staging")
     assert ok and platform == "rhel" and "configured successfully" in message
     refresh = [c for c in box.commands if "makecache" in c]
-    assert refresh == ["dnf -q makecache --repo=pgedge --repo=pgedge-noarch"]
+    # --refresh (6d41938): re-download even unexpired metadata, so the staging/daily switch is seen.
+    assert refresh == ["dnf -q makecache --refresh --repo=pgedge --repo=pgedge-noarch"]
     assert box.commands.index(refresh[0]) > next(i for i, c in enumerate(box.commands)
                                                   if "pgedge-subscription-manager" in c)
     assert not marker.exists()
+
+
+@pytest.mark.parametrize("repo", ["staging", "daily"])
+def test_rhel_drops_the_release_cache_after_switching_channel_and_before_refreshing(pair, marker, repo):
+    box = RepoContainer("rpm")
+    ok, _, _ = configure_repository.configure_pgedge_repository(box, repo)
+    assert ok
+    switch = next(i for i, c in enumerate(box.commands) if c.startswith("sed -i 's|release|%s|g'" % repo))
+    clean = box.commands.index("dnf clean all")
+    refresh = next(i for i, c in enumerate(box.commands) if c.startswith("dnf -q makecache --refresh"))
+    assert switch < clean < refresh and box.commands.count("dnf clean all") == 1
+
+
+def test_rhel_release_channel_keeps_its_cache_and_still_refreshes(pair, marker):
+    box = RepoContainer("rpm")
+    ok, _, _ = configure_repository.configure_pgedge_repository(box, "release")
+    assert ok
+    assert "dnf clean all" not in box.commands and not any(c.startswith("sed -i") for c in box.commands)
+    assert [c for c in box.commands if "makecache" in c] == [
+        "dnf -q makecache --refresh --repo=pgedge --repo=pgedge-noarch"]
 
 
 @pytest.mark.parametrize("family", ["rpm", "deb"])

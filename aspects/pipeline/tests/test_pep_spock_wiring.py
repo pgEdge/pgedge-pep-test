@@ -486,6 +486,14 @@ def test_standalone_spock6_beta_accepts_the_extension_its_package_ships(monkeypa
         _standalone_extension_check(monkeypatch, "60", "6.0.0beta2", "5.0.14")
 
 
+@pytest.mark.parametrize("spock_major,configured,ext", [
+    ("60", "6.0.0beta2", "6.0.0-beta2"), ("60", "6.0.0beta2", "6.0.0.1"), ("50", "5.0.1", "5.0.14")],
+    ids=["tagged-extension", "longer-extension", "spock5-prefix"])
+def test_standalone_extension_version_must_match_exactly(monkeypatch, spock_major, configured, ext):
+    with pytest.raises(AssertionError, match="Spock version mismatch"):
+        _standalone_extension_check(monkeypatch, spock_major, configured, ext)
+
+
 def test_standalone_spock5_extension_check_is_unchanged(monkeypatch):
     _standalone_extension_check(monkeypatch, "50", "5.0.14", "5.0.14")
     with pytest.raises(AssertionError, match="expected '5.0.14', got '5.0.13'"):

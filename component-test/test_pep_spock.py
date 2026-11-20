@@ -734,7 +734,7 @@ def test_verify_spock_extension_version(container_name, container_type):
 
         assert exit_code == 0, f"Failed to query Spock extension version on {node_name}: {out}"
         assert out, f"Spock extension not found in pg_extension on {node_name}"
-        assert expected_version in out, (
+        assert out == expected_version, (
             f"Spock version mismatch on {node_name}: expected '{expected_version}', got '{out}'"
         )
 

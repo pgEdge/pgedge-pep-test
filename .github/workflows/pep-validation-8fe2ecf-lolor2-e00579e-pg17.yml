@@ -1,0 +1,356 @@
+name: PEP 8fe2ecf LOLOR 2.0 development-tree source-build functional validation, PG17 (temporary)
+# Temporary, branch-scoped; never merged; not part of PR #49 or any product release workflow.
+#
+# SOURCE-BUILT FUNCTIONAL EVIDENCE ONLY. Not native-package integration coverage, not QA certification:
+#   * lolor is compiled with PGXS from pgEdge/lolor e00579ed (head of lolor #86 "Prepare the 2.0.0
+#     release"; lolor.control default_version 2.0.0). That development tree is 12 commits behind lolor
+#     main (it lacks, among others, #83's lolor.node update refusal) and is NOT the eventual 2.0.0 release.
+#   * PostgreSQL is community 17.12 from the pinned official postgres image (PGDG packages), not pgEdge's
+#     PostgreSQL build, in one test-owned container.
+#   * The checks are PEP 8fe2ecf's own lolor test logic (component-test/test_pep_lolor.py, standalone mode)
+#     plus two small harness checks that call PEP's functions for what a source build cannot answer
+#     through a package listing. There is no package: no package-manager ownership, receipt or package
+#     identity is claimed or checked, and the package-only PEP tests are not run.
+# Read-only token; no secrets, certificates, inherited secrets, write tokens or publishing. One job with
+# a 30-minute limit and no retries: a failure is kept as it is. Fresh run only; never re-run this run.
+on:
+  push:
+    branches: [validate/pep-8fe2ecf-lolor2-e00579e-pg17]
+permissions:
+  contents: read
+concurrency:
+  group: validate-pep-8fe2ecf-lolor2-e00579e-pg17
+  cancel-in-progress: false
+
+jobs:
+  lolor2-source-pg17:
+    name: lolor e00579e (2.0.0 development tree) source build · PG17 · PEP 8fe2ecf functional checks
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    env:
+      PEP_SHA: 8fe2ecff29a70bbe171f0ebcce15e42303d37fcc
+      LOLOR_SHA: e00579ed82b42b070ec4d86f9041628db518506c
+      LOLOR_TREE: ab0894792423ce9d9ddbe229714e957941b989e1
+      IMAGE: postgres:17.12-bookworm@sha256:837bed18782820fe967067cb5328b02b0d9992c1be9a37ee0c9c492cfc03af3b
+      CONTAINER: pep-lolor2-e00579e-pg17
+      # PEP test-module configuration, set explicitly (PEP's tracked .env never overrides a set variable).
+      PEP_INTEGRATION_MODE: "0"
+      CONTAINERS: ""
+      DEB_CONTAINERS: pep-lolor2-e00579e-pg17
+      PLATFORM_FILTER: deb
+      PG_MAJOR_VERSION: "17"
+      PG_PORT: "6433"
+      PG_DATA_DIR: /tmp/n1
+      DEB_PG_USER: postgres
+      DEB_PG_BIN_PATH: /usr/lib/postgresql/17/bin
+      DEB_PG_PATH: /usr/lib/postgresql/17
+      DEB_PG_SHARE_PATH: /usr/share/postgresql/17
+      DEB_LOLOR_LIB: /usr/lib/postgresql/17/lib/
+      CHECK_EXTENSIONS: "true"
+      BASE_EXTENSIONS: lolor
+      SKIP_CLEANUP: "true"
+    steps:
+      - name: Check out PEP 8fe2ecf (the logic under test)
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803  # v6.1.0
+        with:
+          repository: pgEdge/pgedge-pep-test
+          ref: 8fe2ecff29a70bbe171f0ebcce15e42303d37fcc
+          path: pep
+          persist-credentials: false
+      - name: Check out lolor e00579e (lolor #86 head, 2.0.0 development tree)
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803  # v6.1.0
+        with:
+          repository: pgEdge/lolor
+          ref: e00579ed82b42b070ec4d86f9041628db518506c
+          path: lolor-src
+          persist-credentials: false
+      - name: Record and verify the exact revisions
+        id: revisions
+        run: |
+          set -euo pipefail
+          mkdir -p evidence
+          pep=$(git -C pep rev-parse HEAD)
+          lol=$(git -C lolor-src rev-parse HEAD)
+          tree=$(git -C lolor-src rev-parse 'HEAD^{tree}')
+          ver=$(sed -n "s/^[[:space:]]*default_version[[:space:]]*=[[:space:]]*'\([^']*\)'.*/\1/p" lolor-src/lolor.control)
+          {
+            echo "pep_sha=$pep"; echo "lolor_sha=$lol"; echo "lolor_tree=$tree"
+            echo "lolor_control_default_version=$ver"; echo "caller_sha=$GITHUB_SHA"; echo "caller_ref=$GITHUB_REF"
+            echo "run_id=$GITHUB_RUN_ID"; echo "run_attempt=$GITHUB_RUN_ATTEMPT"
+          } | tee evidence/revisions.txt
+          if [ "$pep" != "$PEP_SHA" ] || [ "$lol" != "$LOLOR_SHA" ] || [ "$tree" != "$LOLOR_TREE" ] || [ "$ver" != 2.0.0 ]; then
+            echo "::error::a revision or the lolor.control version is not the one this validation was prepared for"
+            exit 1
+          fi
+      - name: Set up Python (pinned)
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1  # v6.3.0
+        with: {python-version: "3.11"}
+      - name: Install PEP's test dependencies
+        run: |
+          set -euo pipefail
+          pip install -r pep/requirements.txt
+          pip freeze | grep -i -E '^(pytest|docker|python-dotenv)==' | tee evidence/python-packages.txt
+      - name: Start the test-owned container (pinned community PostgreSQL 17.12 image)
+        id: container
+        run: |
+          set -euo pipefail
+          docker pull "$IMAGE"
+          docker run -d --init --name "$CONTAINER" --label pep.check=lolor2-source-build --entrypoint sleep "$IMAGE" infinity
+          {
+            echo "image=$IMAGE"
+            docker image inspect "$IMAGE" --format 'repo_digests={{json .RepoDigests}} platform={{.Os}}/{{.Architecture}}'
+            docker exec "$CONTAINER" bash -c '. /etc/os-release; echo "os=$PRETTY_NAME"; echo "image_PG_VERSION=$PG_VERSION";
+              echo "postgres_version=$(/usr/lib/postgresql/17/bin/postgres --version)";
+              echo "postgresql_17_package=$(dpkg-query -W -f="\${Version}" postgresql-17)"'
+          } | tee evidence/environment.txt
+      - name: Build and install lolor with PGXS (one attempt, no retries)
+        id: build
+        timeout-minutes: 12
+        run: |
+          set -euo pipefail
+          tar -C lolor-src --exclude=.git -cf - . | docker exec -i "$CONTAINER" sh -c 'mkdir -p /src && tar -xf - -C /src'
+          set +e
+          docker exec -i "$CONTAINER" bash -s > evidence/build.log 2>&1 <<'BUILD'
+          set -euo pipefail
+          PGC=/usr/lib/postgresql/17/bin/pg_config
+          pgv=$(dpkg-query -W -f='${Version}' postgresql-17)
+          echo "== lolor files present before the build installs anything"
+          find /usr/share/postgresql/17/extension /usr/lib/postgresql/17/lib -maxdepth 2 -name 'lolor*' | sort | tee /tmp/preexisting-files.txt
+          echo "== build dependencies (server headers pinned to the installed server $pgv)"
+          apt-get -o Acquire::Retries=0 -o Acquire::http::Timeout=30 update
+          DEBIAN_FRONTEND=noninteractive apt-get -o Acquire::Retries=0 -o Acquire::http::Timeout=30 install -y \
+            --no-install-recommends build-essential "postgresql-server-dev-17=$pgv"
+          dpkg-query -W postgresql-17 postgresql-server-dev-17
+          "$PGC" --version
+          echo "== build (PGXS; JIT bitcode off: with_llvm=no)"
+          cd /src
+          make USE_PGXS=1 PG_CONFIG="$PGC" with_llvm=no
+          echo "== what make install installs (staged with DESTDIR, then installed for real and compared)"
+          make USE_PGXS=1 PG_CONFIG="$PGC" with_llvm=no install DESTDIR=/stage
+          (cd /stage && find . \( -type f -o -type l \) | sed 's#^\.##' | sort) > /tmp/installed-files.txt
+          make USE_PGXS=1 PG_CONFIG="$PGC" with_llvm=no install
+          while read -r p; do cmp "/stage$p" "$p"; done < /tmp/installed-files.txt
+          sha256sum $(cat /tmp/installed-files.txt) > /tmp/installed-sha256.txt
+          cat /tmp/installed-sha256.txt
+          echo "BUILD_OK"
+          BUILD
+          rc=$?
+          set -e
+          tail -n 40 evidence/build.log
+          for f in preexisting-files.txt installed-files.txt installed-sha256.txt; do
+            docker cp "$CONTAINER:/tmp/$f" "evidence/$f" 2>/dev/null || true
+          done
+          echo "build exit $rc"
+          exit $rc
+      - name: Write the two harness checks (they call PEP's own functions)
+        if: ${{ steps.build.outcome == 'success' }}
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/harness"
+          cat > "$RUNNER_TEMP/harness/test_lolor2_source_build.py" <<'PY'
+          """Harness checks for the lolor 2.0 development-tree source build (not part of PEP or PR #49).
+
+          Each calls PEP 8fe2ecf's own functions from component-test/test_pep_lolor.py:
+          * the SQL scripts this build installed (its `make install` file list, staged with DESTDIR and
+            compared with the real install; NOT a package listing) judged by control_default_version and
+            lolor_sql_script_problems;
+          * the capability detection PEP's drop and replication tests branch on (lolor_capabilities),
+            which must find the 2.0 lifecycle, and the tables PEP then publishes (replicated_tables).
+          """
+          import importlib.util
+          import os
+          import sys
+
+          PEP = os.path.abspath(os.environ["PEP_DIR"])
+          sys.path.insert(0, PEP)
+          _spec = importlib.util.spec_from_file_location("pep_test_pep_lolor", os.path.join(PEP, "component-test", "test_pep_lolor.py"))
+          T = importlib.util.module_from_spec(_spec)
+          _spec.loader.exec_module(T)
+          CONTAINER = os.environ["CONTAINER"]
+
+
+          def _lines(path):
+              with open(path) as f:
+                  return [line.strip() for line in f if line.strip()]
+
+
+          def test_build_installed_exactly_the_2_0_0_sql_scripts():
+              preexisting = _lines(os.environ["PREEXISTING_LIST"])
+              assert preexisting == [], f"lolor files were present before the build installed anything: {preexisting}"
+              paths = _lines(os.environ["INSTALLED_LIST"])
+              controls = [p for p in paths if p.endswith("/extension/lolor.control")]
+              assert controls == ["/usr/share/postgresql/17/extension/lolor.control"], f"installed control files {controls}"
+              container = T._running_container(CONTAINER)
+              rc, out = container.exec_run(["cat", controls[0]], user="root")
+              assert rc == 0, out.decode(errors="replace")
+              version = T.control_default_version(out.decode(errors="replace"))
+              assert version == "2.0.0", f"installed lolor.control default_version {version!r}"
+              problems = T.lolor_sql_script_problems(paths, version)
+              assert not problems, "installed SQL scripts: " + "; ".join(problems)
+              scripts = sorted(os.path.basename(p) for p in paths if p.endswith(".sql"))
+              print(f"✅ the build installed exactly the {len(T.LOLOR_SQL_SCRIPTS[version])} SQL scripts of lolor "
+                    f"{version}: {', '.join(scripts)}")
+
+
+          def test_capabilities_detect_the_2_0_lifecycle():
+              container = T._running_container(CONTAINER)
+              cfg = T.get_container_config("deb")
+              caps = T.lolor_capabilities(container, cfg["pgbin"], T.pgport, cfg["pguser"])
+              want = {"extversion": "2.0.0", "migrate_to_native": True, "description_table": True, "lifecycle_2": True}
+              assert caps == want, f"lolor capabilities {caps}, expected {want}"
+              tables = T.replicated_tables(caps)
+              assert tables == T.LOLOR_TABLES + (T.LOLOR_DESCRIPTION_TABLE,), f"replicated tables {tables}"
+              print("✅ capabilities: " + " ".join(f"{k}={caps[k]}" for k in ("extversion", "migrate_to_native",
+                    "description_table", "lifecycle_2")) + "; PEP publishes " + ", ".join(tables))
+          PY
+      - name: Run PEP 8fe2ecf's lolor checks against the source build
+        id: checks
+        if: ${{ steps.build.outcome == 'success' }}
+        timeout-minutes: 12
+        working-directory: pep
+        env:
+          PEP_DIR: ${{ github.workspace }}/pep
+          PREEXISTING_LIST: ${{ github.workspace }}/evidence/preexisting-files.txt
+          INSTALLED_LIST: ${{ github.workspace }}/evidence/installed-files.txt
+        run: |
+          set +e            # GitHub runs `bash -e`: a failing pytest must not cut the evidence short
+          set -uo pipefail
+          E="$GITHUB_WORKSPACE/evidence"
+          mkdir -p "$E/junit"
+          common=(-v -rA -p no:cacheprovider -o junit_logging=system-out -o junit_log_passing_tests=true)
+          # 1. PEP: cluster, server, connection, CREATE EXTENSION lolor (standalone mode).
+          python -m pytest "${common[@]}" --rootdir=. component-test/test_pep_lolor.py --junit-xml="$E/junit/1-pep-setup.xml" \
+            -k "test_init_cluster or test_start_server or test_check_connection or test_create_extensions" 2>&1 | tee "$E/pytest-1-pep-setup.log"
+          echo "pep_setup=${PIPESTATUS[0]}" >> "$E/pytest-exit-codes.txt"
+          # 2. Harness checks calling PEP's functions: installed SQL scripts, capability detection.
+          python -m pytest "${common[@]}" --rootdir="$RUNNER_TEMP/harness" "$RUNNER_TEMP/harness/test_lolor2_source_build.py" \
+            --junit-xml="$E/junit/2-harness.xml" \
+            2>&1 | tee "$E/pytest-2-harness.log"
+          echo "harness=${PIPESTATUS[0]}" >> "$E/pytest-exit-codes.txt"
+          # 3. PEP: function swap, round trip, lolor.node, native logical replication (description table
+          #    included), drop refusal + migrate_to_native + removal + OID/bytes kept, server stop.
+          python -m pytest "${common[@]}" --rootdir=. component-test/test_pep_lolor.py --junit-xml="$E/junit/3-pep-functional.xml" \
+            -k "test_lolor_replaces_lo_functions or test_lolor_large_object_round_trip or test_lolor_node_must_be_set or test_lolor_native_logical_replication or test_lolor_drop_restores_lo_functions or test_stop_server" \
+            2>&1 | tee "$E/pytest-3-pep-functional.log"
+          echo "pep_functional=${PIPESTATUS[0]}" >> "$E/pytest-exit-codes.txt"
+          cat "$E/pytest-exit-codes.txt"
+      - name: Keep the server log tail and remove the test-owned container
+        if: ${{ always() }}
+        run: |
+          docker exec "$CONTAINER" bash -c 'tail -n 80 /tmp/n1/logfile' > evidence/server-log-tail.txt 2>&1 || true
+          docker rm -f "$CONTAINER" >/dev/null 2>&1 || true
+      - name: Assert from the evidence, not job colour
+        if: ${{ always() }}
+        env:
+          OUTCOMES: ${{ toJSON(steps) }}
+        run: |
+          python3 - <<'PY'
+          import json, os, re, sys
+          import xml.etree.ElementTree as ET
+          from pathlib import Path
+
+          E = os.environ
+          EV = Path("evidence")
+          P = E["CONTAINER"] + "-deb"
+          INVENTORY = {
+              "1-pep-setup.xml": ("component-test.test_pep_lolor", [
+                  "test_init_cluster[%s]" % P, "test_start_server[%s]" % P, "test_check_connection[%s]" % P,
+                  "test_create_extensions[lolor-%s]" % P]),
+              "2-harness.xml": ("test_lolor2_source_build", [
+                  "test_build_installed_exactly_the_2_0_0_sql_scripts", "test_capabilities_detect_the_2_0_lifecycle"]),
+              "3-pep-functional.xml": ("component-test.test_pep_lolor", [
+                  "test_lolor_replaces_lo_functions[%s]" % P, "test_lolor_large_object_round_trip[%s]" % P,
+                  "test_lolor_node_must_be_set[%s]" % P, "test_lolor_native_logical_replication[%s]" % P,
+                  "test_lolor_drop_restores_lo_functions[%s]" % P, "test_stop_server[%s]" % P]),
+          }
+          MARKERS = {
+              "test_build_installed_exactly_the_2_0_0_sql_scripts": [
+                  "the build installed exactly the 6 SQL scripts of lolor 2.0.0: lolor--1.0--1.2.1.sql, lolor--1.0.sql, "
+                  "lolor--1.2.1--1.2.2.sql, lolor--1.2.2--1.2.3.sql, lolor--1.2.3--2.0.0.sql, lolor--2.0.0.sql"],
+              "test_capabilities_detect_the_2_0_lifecycle": [
+                  "capabilities: extversion=2.0.0 migrate_to_native=True description_table=True lifecycle_2=True; PEP publishes "
+                  "lolor.pg_largeobject, lolor.pg_largeobject_metadata, lolor.pg_largeobject_description"],
+              "test_lolor_native_logical_replication[%s]" % P: [
+                  "Publishing lolor.pg_largeobject, lolor.pg_largeobject_metadata, lolor.pg_largeobject_description",
+                  "replicated to port 6434"],
+              "test_lolor_drop_restores_lo_functions[%s]" % P: [
+                  "lolor 2.0.0 refused the drop while storage held",
+                  "after lolor.migrate_to_native() the drop restored the built-ins and kept large object"],
+              "test_lolor_large_object_round_trip[%s]" % P: ["lolor large-object round trip passed"],
+              "test_lolor_node_must_be_set[%s]" % P: ["lolor.node 0 is refused with the product's error"],
+          }
+          problems, result = [], {"inventory": {k: v[1] for k, v in INVENTORY.items()}, "files": {}}
+
+          def check(ok, what):
+              if not ok:
+                  problems.append(what)
+              return ok
+
+          def read(name):
+              p = EV / name
+              return p.read_text(errors="replace") if p.is_file() else None
+
+          steps = json.loads(E.get("OUTCOMES") or "{}")
+          result["step_outcomes"] = {k: v.get("outcome") for k, v in steps.items()}
+          for s in ("revisions", "container", "build", "checks"):
+              check(result["step_outcomes"].get(s) == "success", "step %s outcome %r" % (s, result["step_outcomes"].get(s)))
+          rev = dict(l.split("=", 1) for l in (read("revisions.txt") or "").splitlines() if "=" in l)
+          check((rev.get("pep_sha"), rev.get("lolor_sha"), rev.get("lolor_tree"), rev.get("lolor_control_default_version"))
+                == (E["PEP_SHA"], E["LOLOR_SHA"], E["LOLOR_TREE"], "2.0.0"), "revisions %r" % rev)
+          env = read("environment.txt") or ""
+          check("sha256:837bed18782820fe967067cb5328b02b0d9992c1be9a37ee0c9c492cfc03af3b" in env, "image digest not recorded")
+          check(re.search(r"postgres_version=postgres \(PostgreSQL\) 17\.12\b", env) is not None, "server is not PostgreSQL 17.12")
+          check("BUILD_OK" in (read("build.log") or ""), "build did not complete (see build.log)")
+          check((read("preexisting-files.txt") or "").strip() == "", "lolor files existed before the build")
+          installed = [l for l in (read("installed-files.txt") or "").splitlines() if l.strip()]
+          check(any(l.endswith("/lib/lolor.so") for l in installed), "the build installed no lolor.so")
+          rcs = dict(l.split("=", 1) for l in (read("pytest-exit-codes.txt") or "").splitlines() if "=" in l)
+          check(rcs == {"pep_setup": "0", "harness": "0", "pep_functional": "0"}, "pytest exit codes %r" % rcs)
+
+          for fname, (classname, want) in INVENTORY.items():
+              path = EV / "junit" / fname
+              if not check(path.is_file(), "%s missing" % fname):
+                  continue
+              root = ET.parse(path).getroot()
+              suites = list(root.iter("testsuite"))
+              tcs = list(root.iter("testcase"))
+              names = [tc.get("name") for tc in tcs]
+              check(names == want, "%s: testcases %r != frozen %r" % (fname, names, want))
+              totals = {k: sum(int(s.get(k) or 0) for s in suites) for k in ("tests", "failures", "errors", "skipped")}
+              check(len(suites) == 1 and totals == {"tests": len(want), "failures": 0, "errors": 0, "skipped": 0},
+                    "%s: totals %r" % (fname, totals))
+              per = {}
+              for tc in tcs:
+                  bad = [k for k in ("failure", "error", "skipped") if tc.find(k) is not None]
+                  msg = "" if not bad else (tc.find(bad[0]).get("message") or "")[:400]
+                  check(not bad, "%s: %s %s %s" % (fname, tc.get("name"), "/".join(bad), msg))
+                  check(tc.get("classname") == classname, "%s: %s classname %r" % (fname, tc.get("name"), tc.get("classname")))
+                  out = "".join(x.text or "" for x in tc.iter("system-out"))
+                  for marker in MARKERS.get(tc.get("name"), []):
+                      check(marker in out, "%s: %s lacks %r" % (fname, tc.get("name"), marker))
+                  per[tc.get("name")] = "passed" if not bad else bad[0]
+              result["files"][fname] = {"totals": totals, "testcases": per}
+
+          result["problems"] = problems
+          result["verdict"] = "pass" if not problems else "fail"
+          (EV / "validation-result.json").write_text(json.dumps(result, indent=1, sort_keys=True))
+          head = ("### lolor e00579e (2.0.0 development tree) source build · PG17 · PEP 8fe2ecf: %s\n\n"
+                  "Source-built functional evidence only; not native-package integration coverage or QA certification.\n\n"
+                  % result["verdict"].upper())
+          rows = "".join("| %s | %s | %s |\n" % (f, n, s) for f, v in result["files"].items() for n, s in v["testcases"].items())
+          with open(E["GITHUB_STEP_SUMMARY"], "a") as f:
+              f.write(head + "| report | testcase | result |\n|---|---|---|\n" + rows
+                      + ("\n**Problems**\n\n" + "\n".join("- " + p for p in problems) + "\n" if problems else ""))
+          print(json.dumps(result, indent=1, sort_keys=True))
+          sys.exit(1 if problems else 0)
+          PY
+      - name: Upload the small diagnostic evidence
+        if: ${{ always() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
+        with:
+          name: pep-validation-8fe2ecf-lolor2-e00579e-pg17-r${{ github.run_number }}-a${{ github.run_attempt }}
+          path: evidence
+          retention-days: 30
+          if-no-files-found: warn

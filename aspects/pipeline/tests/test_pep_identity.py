@@ -87,9 +87,14 @@ def test_merge_evidence_rejects_unknown_value():
         pid.merge_evidence([{"l2a": "definitely", "l2b": "proven", "l1": "proven"}])
 
 
-def test_component_version_matches_beta_substring():
-    # expected carries its own '-beta2'; the release is everything after the LAST '-'.
-    assert pid.component_version_matches("1.0.0-beta2", "1.0.0-beta2-1.el9") is True
+def test_component_version_matches_a_hyphenated_pre_release_only_in_the_built_forms():
+    # A tag-style expected '<version>-<pretag>' (a direct pep-integration.yml caller may pass one)
+    # matches the RPM and DEB identities the builders produce for that pre-release ...
+    assert pid.component_version_matches("1.0.0-beta2", "1.0.0-beta2_1.el9") is True
+    assert pid.component_version_matches("1.0.0-beta2", "1.0.0~beta2-1.noble") is True
+    # ... and no longer the impossible '1.0.0-beta2-1.el9' (an RPM version/release has no '-';
+    # it was kept from the substring era by #47 and is replaced by the two real forms above).
+    assert pid.component_version_matches("1.0.0-beta2", "1.0.0-beta2-1.el9") is False
 
 
 def test_component_version_matches_padding_mismatch():
@@ -135,4 +140,39 @@ def test_component_version_matches_the_version_in_each_build_form(expected, obse
     ("1.1", "1.1-"), ("1.1", ""), ("", "1.1-1.el9"),
 ])
 def test_component_version_matches_rejects_another_version(expected, observed):
+    assert pid.component_version_matches(expected, observed) is False
+
+
+# --- L1: the realistic release matrix (GA and pre-release, RPM and DEB) -------------------------
+@pytest.mark.parametrize("expected,observed", [
+    ("1.1", "1.1-1.el9"), ("1.1", "1.1-rc1_1.el10"), ("1.1", "1.1~rc1-1.bookworm"),
+    ("1.1", "1.1-test1_1.el9"), ("1.1", "1.1~test1-1.jammy"),
+    ("1.1", "1.1-beta1_1.el9"), ("1.1", "1.1~beta1-1.noble"),
+    ("2.6.1", "2.6.1-1.el9"), ("2.6.1", "2.6.1-1.jammy"), ("2.6.1", "2.6.1~rc1-1.trixie"),
+    ("5.0.14", "5.0.14-1.el10"), ("5.0.14", "5.0.14-rc2_1.el9"), ("5.0.14", "5.0.14~rc2-1.resolute"),
+    ("6.0.0", "6.0.0-1.el9"), ("6.0.0", "6.0.0-beta2_1.el9"), ("6.0.0", "6.0.0~beta2-1.noble"),
+    # tag-style pre-release expected, matched only in its own built forms
+    ("1.1-rc1", "1.1-rc1_1.el10"), ("1.1-rc1", "1.1~rc1-1.bookworm"),
+    ("1.1-test1", "1.1-test1_1.el9"), ("1.1-test1", "1.1~test1-1.jammy"),
+    ("6.0.0-beta2", "6.0.0-beta2_1.el9"), ("6.0.0-beta2", "6.0.0~beta2-1.noble"),
+    ("5.0.14-rc.1", "5.0.14-rc.1_1.el9"), ("5.0.14-rc.1", "5.0.14~rc.1-1.noble"),
+])
+def test_component_version_matches_realistic_ga_and_pre_release_identities(expected, observed):
+    assert pid.component_version_matches(expected, observed) is True
+
+
+@pytest.mark.parametrize("expected,observed", [
+    ("1.1", "1.10-1.el9"), ("1.1", "11.1-1.jammy"), ("1.1", "1.2~rc1-1"), ("1.1", "1.1.1-1"),
+    ("1.1", "1.0-1"), ("1.1", "1.0-1.el9"), ("1.1", "1.10~rc1-1.bookworm"),
+    ("2.6.1", "2.6.10-1.el9"), ("5.0.14", "5.0.1-1.el9"), ("5.0.14", "5.0.140~rc1-1.noble"),
+    ("6.0.0", "6.0.1-beta2_1.el9"), ("6.0.0", "16.0.0~beta2-1.noble"), ("6.0.0", "6.0-1.el9"),
+    # a tag-style expected never matches the GA build, another pre-release or a longer version
+    ("6.0.0-beta2", "6.0.0-1.el9"), ("6.0.0-beta2", "6.0.0-1.noble"),
+    ("6.0.0-beta2", "6.0.0-beta3_1.el9"), ("6.0.0-beta2", "6.0.0~beta3-1.noble"),
+    ("6.0.0-beta2", "6.0.0-beta20_1.el9"), ("6.0.0-beta2", "6.0.0~beta20-1.noble"),
+    ("6.0.0-beta2", "6.0.0-beta2.el9"), ("6.0.0-beta2", "6.0.0~beta2"), ("6.0.0-beta2", "6.0.0-beta2"),
+    ("6.0.0-beta2", "6.0.10-beta2_1.el9"), ("1.1-rc1", "1.10-rc1_1.el9"), ("1.1-rc1", "11.1~rc1-1.jammy"),
+    ("1.1-rc1", "1.1-rc1_1-1.el9"), ("1.1-rc1", "1.1~rc1~x-1.jammy"),
+])
+def test_component_version_matches_rejects_wrong_versions_in_realistic_identities(expected, observed):
     assert pid.component_version_matches(expected, observed) is False

@@ -27,6 +27,10 @@ _BINARY_VERSION_RE = re.compile(r"^\s*version\s*:\s*(\S+)", re.IGNORECASE | re.M
 # (pep_request._BUILDNUM_RE). Neither an RPM release nor a DEB revision contains '-'.
 _PRE_RELEASE = r"~[A-Za-z0-9.]+"
 _RELEASE = r"-[A-Za-z0-9._]+"
+# An expected version may also be written the way a tag reads, <version>-<pretag> (1.0.0-beta2):
+# pep-integration.yml's expected_version is a free string, so a direct caller can pass one. The
+# release planner never does (it pins pkg/common.sh's split: version 1.0.0, buildnum beta2_1).
+_HYPHENATED_EXPECTED = re.compile(r"([0-9][A-Za-z0-9.]*)-([A-Za-z][A-Za-z0-9.]*)")
 
 
 def canonical_rpm(identity: str, package_name: str | None = None) -> str:
@@ -90,11 +94,22 @@ def component_version_matches(expected: str, observed: str) -> bool:
     `-<release>` (`_PRE_RELEASE`, `_RELEASE`). The release itself (build number,
     pre-release in an RPM release, dist or codename) is L2a's to prove exactly,
     so this confirms the component version, not the build.
+
+    An expected `<version>-<pretag>` (`1.0.0-beta2`, `1.1-rc1`) names that
+    pre-release build and is accepted deliberately and strictly: it matches only
+    the two forms the builders produce for it, RPM `<version>-<pretag>_<n>.<dist>`
+    (`1.0.0-beta2_1.el9`) and DEB `<version>~<pretag>-<n>.<codename>`
+    (`1.0.0~beta2-1.noble`), never the GA build or another pre-release.
     """
     expected, observed = expected.strip(), observed.strip()
     if not expected:
         return False
-    pattern = "%s(?:%s)?(?:%s)?" % (re.escape(expected), _PRE_RELEASE, _RELEASE)
+    hyphenated = _HYPHENATED_EXPECTED.fullmatch(expected)
+    if hyphenated:
+        version, pretag = (re.escape(g) for g in hyphenated.groups())
+        pattern = "%s(?:-%s_[A-Za-z0-9._]+|~%s%s)" % (version, pretag, pretag, _RELEASE)
+    else:
+        pattern = "%s(?:%s)?(?:%s)?" % (re.escape(expected), _PRE_RELEASE, _RELEASE)
     return re.fullmatch(pattern, observed) is not None
 
 

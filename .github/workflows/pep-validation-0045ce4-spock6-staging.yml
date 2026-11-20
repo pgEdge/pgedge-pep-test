@@ -1,0 +1,484 @@
+name: PEP 0045ce4 Spock 6 beta.2 staging existing-package validation (temporary)
+# Temporary, branch-scoped caller; never merged. Integration validation of ALREADY-PUBLISHED staging
+# packages, NOT QA certification and NOT a build-to-test release: the spock60 6.0.0-beta2 packages
+# that pgEdge/spock Release run 44045406576 (tag v6.0.0-beta.2 at d05e2e2b) pushed to staging are
+# installed by exact version through pep-integration.yml at the PEP candidate 0045ce4 (draft PR #49)
+# on the 14 certified OS/arch cells x PG16/17/18, plus ONE control call at v1_STABLE f16d9f5.
+# No build receipts exist for these packages; the sha256 values below come from the staging
+# repository metadata read on 2026-11-20 and are NOT receipts. Observe mode keeps failing product
+# tests green, so `assert` checks the uploaded evidence, never job colours. Nothing is published.
+# Fresh run only: never re-run jobs of this run; push a new commit for a new run.
+on:
+  push:
+    branches: [validate/pep-0045ce4-spock6-staging]
+permissions: {}
+concurrency:
+  group: validate-pep-0045ce4-spock6-staging
+  cancel-in-progress: false
+
+env:
+  EXPECTED_VERSION: "6.0.0"
+  EXPECTED_BUILDNUM: "beta2_1"
+  # One line per case: the single source of the 42-cell matrix and of the assertions.
+  CASES_JSON: |
+    [
+      {"alias":"oel9-amd64","container":"auto-oel9-amd","family":"rpm","arch":"amd64","pg":"16","package":"pgedge-spock60_16","token":"6.0.0-beta2_1.el9","sha256":"bf12ad21e204e20f28d04459acd86e5af7a247d352d6eb21e504ef019d8df68d","iid":"v0045ce4-s6-oel9-amd64-pg16","staging_pg_server":"16.16-1.el9"},
+      {"alias":"oel9-amd64","container":"auto-oel9-amd","family":"rpm","arch":"amd64","pg":"17","package":"pgedge-spock60_17","token":"6.0.0-beta2_1.el9","sha256":"831bf694576145db1164a600ef26998cf9151ebfa31fff51d343241695ad8121","iid":"v0045ce4-s6-oel9-amd64-pg17","staging_pg_server":"17.12-1.el9"},
+      {"alias":"oel9-amd64","container":"auto-oel9-amd","family":"rpm","arch":"amd64","pg":"18","package":"pgedge-spock60_18","token":"6.0.0-beta2_1.el9","sha256":"16e6032a4c6f7007886c554c1577a320cf156037f551ceea21c0c1f354effd46","iid":"v0045ce4-s6-oel9-amd64-pg18","staging_pg_server":"18.7-1.el9"},
+      {"alias":"alma9-arm64","container":"auto-alma9-arm","family":"rpm","arch":"arm64","pg":"16","package":"pgedge-spock60_16","token":"6.0.0-beta2_1.el9","sha256":"213f27e5a7496c1be1e64d0d97ebae2430a9412b8f78a248e8b5bc8cfe209860","iid":"v0045ce4-s6-alma9-arm64-pg16","staging_pg_server":"16.16-1.el9"},
+      {"alias":"alma9-arm64","container":"auto-alma9-arm","family":"rpm","arch":"arm64","pg":"17","package":"pgedge-spock60_17","token":"6.0.0-beta2_1.el9","sha256":"846e8f64752dc5d08410d68dec9501a878ac35078d0fa812f02a425443392e8e","iid":"v0045ce4-s6-alma9-arm64-pg17","staging_pg_server":"17.12-1.el9"},
+      {"alias":"alma9-arm64","container":"auto-alma9-arm","family":"rpm","arch":"arm64","pg":"18","package":"pgedge-spock60_18","token":"6.0.0-beta2_1.el9","sha256":"6ac46f86dcc869af904b6ef6992f197c4f84cab46c5a15b9b49bec54349f2cb0","iid":"v0045ce4-s6-alma9-arm64-pg18","staging_pg_server":"18.7-1.el9"},
+      {"alias":"alma10-amd64","container":"auto-alma10-amd","family":"rpm","arch":"amd64","pg":"16","package":"pgedge-spock60_16","token":"6.0.0-beta2_1.el10","sha256":"79e3bcc7e75857375477bb46cf55718e43cf4841e74c705f94adfb001d0d824a","iid":"v0045ce4-s6-alma10-amd64-pg16","staging_pg_server":"16.16-1.el10"},
+      {"alias":"alma10-amd64","container":"auto-alma10-amd","family":"rpm","arch":"amd64","pg":"17","package":"pgedge-spock60_17","token":"6.0.0-beta2_1.el10","sha256":"dea62eb3a86f1d6409d7cd65a8192eb95b81bd1e4ced5c837852a92fe04000c2","iid":"v0045ce4-s6-alma10-amd64-pg17","staging_pg_server":"17.12-1.el10"},
+      {"alias":"alma10-amd64","container":"auto-alma10-amd","family":"rpm","arch":"amd64","pg":"18","package":"pgedge-spock60_18","token":"6.0.0-beta2_1.el10","sha256":"cbe0521fad70d0994a1fa72474441fcdb0a2c9e13311577486280c1b390b902f","iid":"v0045ce4-s6-alma10-amd64-pg18","staging_pg_server":"18.7-1.el10"},
+      {"alias":"alma10-arm64","container":"auto-alma10-arm","family":"rpm","arch":"arm64","pg":"16","package":"pgedge-spock60_16","token":"6.0.0-beta2_1.el10","sha256":"b89e01dd5af82dd6e199a6af0ee1caac4421ad5447ecc7c4d417c47dd9453728","iid":"v0045ce4-s6-alma10-arm64-pg16","staging_pg_server":"16.16-1.el10"},
+      {"alias":"alma10-arm64","container":"auto-alma10-arm","family":"rpm","arch":"arm64","pg":"17","package":"pgedge-spock60_17","token":"6.0.0-beta2_1.el10","sha256":"10142d8b60bb336e6afe3ea958eca1bf9a62bde8b491dd5c8945a3aaa991218c","iid":"v0045ce4-s6-alma10-arm64-pg17","staging_pg_server":"17.12-1.el10"},
+      {"alias":"alma10-arm64","container":"auto-alma10-arm","family":"rpm","arch":"arm64","pg":"18","package":"pgedge-spock60_18","token":"6.0.0-beta2_1.el10","sha256":"36209b45a720272764f577e6fbd9cc6cee836ccfef4959e2be0487b3d2ddb83f","iid":"v0045ce4-s6-alma10-arm64-pg18","staging_pg_server":"18.7-1.el10"},
+      {"alias":"ubuntu2204-amd64","container":"auto-ubuntu2204-amd","family":"deb","arch":"amd64","pg":"16","package":"pgedge-postgresql-16-spock60","token":"6.0.0~beta2-1.jammy","sha256":"d15ce93d290704b3363e73b6d6dba75261ed9f312a57f111e0cb1f5cfedfbfe6","iid":"v0045ce4-s6-ubuntu2204-amd64-pg16","staging_pg_server":"16.16-1.jammy"},
+      {"alias":"ubuntu2204-amd64","container":"auto-ubuntu2204-amd","family":"deb","arch":"amd64","pg":"17","package":"pgedge-postgresql-17-spock60","token":"6.0.0~beta2-1.jammy","sha256":"14992f492fdf495871107b333a7dc5b18af4cfbf9b37cb20fca51597c8010806","iid":"v0045ce4-s6-ubuntu2204-amd64-pg17","staging_pg_server":"17.12-1.jammy"},
+      {"alias":"ubuntu2204-amd64","container":"auto-ubuntu2204-amd","family":"deb","arch":"amd64","pg":"18","package":"pgedge-postgresql-18-spock60","token":"6.0.0~beta2-1.jammy","sha256":"b3d79f3f1fdbdaa43f1bb43e7e7ad606f38a6ea1d52325af99fc02bb5559dbbd","iid":"v0045ce4-s6-ubuntu2204-amd64-pg18","staging_pg_server":"18.7-1.jammy"},
+      {"alias":"ubuntu2204-arm64","container":"auto-ubuntu2204-arm","family":"deb","arch":"arm64","pg":"16","package":"pgedge-postgresql-16-spock60","token":"6.0.0~beta2-1.jammy","sha256":"c8a141a31d68e2c1825ea201449e075d5a20768edffb1d26b454332cfbfbd459","iid":"v0045ce4-s6-ubuntu2204-arm64-pg16","staging_pg_server":"16.16-1.jammy"},
+      {"alias":"ubuntu2204-arm64","container":"auto-ubuntu2204-arm","family":"deb","arch":"arm64","pg":"17","package":"pgedge-postgresql-17-spock60","token":"6.0.0~beta2-1.jammy","sha256":"17b27a3b4aa73396627ceab35109efd236c1a022b69c16cea45a1cdb16723102","iid":"v0045ce4-s6-ubuntu2204-arm64-pg17","staging_pg_server":"17.12-1.jammy"},
+      {"alias":"ubuntu2204-arm64","container":"auto-ubuntu2204-arm","family":"deb","arch":"arm64","pg":"18","package":"pgedge-postgresql-18-spock60","token":"6.0.0~beta2-1.jammy","sha256":"9d301ed19878bf82cac04c97c6df3dd9f2e0547bd3df5fd65d56b18efe5ddc9c","iid":"v0045ce4-s6-ubuntu2204-arm64-pg18","staging_pg_server":"18.7-1.jammy"},
+      {"alias":"ubuntu2404-amd64","container":"auto-ubuntu2404-amd","family":"deb","arch":"amd64","pg":"16","package":"pgedge-postgresql-16-spock60","token":"6.0.0~beta2-1.noble","sha256":"af02256642fe8c398205dff15089289c4e837512b7fe1d6d4c533a117eea0e92","iid":"v0045ce4-s6-ubuntu2404-amd64-pg16","staging_pg_server":"16.16-1.noble"},
+      {"alias":"ubuntu2404-amd64","container":"auto-ubuntu2404-amd","family":"deb","arch":"amd64","pg":"17","package":"pgedge-postgresql-17-spock60","token":"6.0.0~beta2-1.noble","sha256":"db4a734727549f17a8b43ed172ba87232254a64c931638cb6c0993a3531bb35d","iid":"v0045ce4-s6-ubuntu2404-amd64-pg17","staging_pg_server":"17.12-1.noble"},
+      {"alias":"ubuntu2404-amd64","container":"auto-ubuntu2404-amd","family":"deb","arch":"amd64","pg":"18","package":"pgedge-postgresql-18-spock60","token":"6.0.0~beta2-1.noble","sha256":"46953dbf5aea9acb05879ac43a10049a54dd748ae561a6844ce1e1926b5aaca5","iid":"v0045ce4-s6-ubuntu2404-amd64-pg18","staging_pg_server":"18.7-1.noble"},
+      {"alias":"ubuntu2404-arm64","container":"auto-ubuntu2404-arm","family":"deb","arch":"arm64","pg":"16","package":"pgedge-postgresql-16-spock60","token":"6.0.0~beta2-1.noble","sha256":"95089ce4589664370c0456ec87bd998c29ad54fb4cd91e1812f7240a955dd596","iid":"v0045ce4-s6-ubuntu2404-arm64-pg16","staging_pg_server":"16.16-1.noble"},
+      {"alias":"ubuntu2404-arm64","container":"auto-ubuntu2404-arm","family":"deb","arch":"arm64","pg":"17","package":"pgedge-postgresql-17-spock60","token":"6.0.0~beta2-1.noble","sha256":"14fce9a7d8ddefd6650a6a3ff8d3ceaab429bccadc25e01a8bce7c77a62a7da7","iid":"v0045ce4-s6-ubuntu2404-arm64-pg17","staging_pg_server":"17.12-1.noble"},
+      {"alias":"ubuntu2404-arm64","container":"auto-ubuntu2404-arm","family":"deb","arch":"arm64","pg":"18","package":"pgedge-postgresql-18-spock60","token":"6.0.0~beta2-1.noble","sha256":"ea465a5e27da98f7181ec481b105696d932ddb2db97b6c922329c250fc2246b5","iid":"v0045ce4-s6-ubuntu2404-arm64-pg18","staging_pg_server":"18.7-1.noble"},
+      {"alias":"debian12-amd64","container":"auto-debian12-amd","family":"deb","arch":"amd64","pg":"16","package":"pgedge-postgresql-16-spock60","token":"6.0.0~beta2-1.bookworm","sha256":"8cc00517146cfe1c66b3e7008f940b5eec32c40dcc2b4a444fe8dfb45157826c","iid":"v0045ce4-s6-debian12-amd64-pg16","staging_pg_server":"16.16-1.bookworm"},
+      {"alias":"debian12-amd64","container":"auto-debian12-amd","family":"deb","arch":"amd64","pg":"17","package":"pgedge-postgresql-17-spock60","token":"6.0.0~beta2-1.bookworm","sha256":"e2343af0491c1b05d1c28521a1e9c9627fb71a3fc97ede8982bfc92f9ae07832","iid":"v0045ce4-s6-debian12-amd64-pg17","staging_pg_server":"17.12-1.bookworm"},
+      {"alias":"debian12-amd64","container":"auto-debian12-amd","family":"deb","arch":"amd64","pg":"18","package":"pgedge-postgresql-18-spock60","token":"6.0.0~beta2-1.bookworm","sha256":"5b34f82e76ee5e551e375da3a7fd0eeeb403b4a1538fa3dddb30e4956e6daae5","iid":"v0045ce4-s6-debian12-amd64-pg18","staging_pg_server":"18.7-1.bookworm"},
+      {"alias":"debian12-arm64","container":"auto-debian12-arm","family":"deb","arch":"arm64","pg":"16","package":"pgedge-postgresql-16-spock60","token":"6.0.0~beta2-1.bookworm","sha256":"c793e2fc43164669eed83fb9119e724ada36c9dc904299e92931f74874a51c20","iid":"v0045ce4-s6-debian12-arm64-pg16","staging_pg_server":"16.16-1.bookworm"},
+      {"alias":"debian12-arm64","container":"auto-debian12-arm","family":"deb","arch":"arm64","pg":"17","package":"pgedge-postgresql-17-spock60","token":"6.0.0~beta2-1.bookworm","sha256":"d2a4a766477459aaad95561289fbaaac5105965b3e094dd26e9de86847c7c52e","iid":"v0045ce4-s6-debian12-arm64-pg17","staging_pg_server":"17.12-1.bookworm"},
+      {"alias":"debian12-arm64","container":"auto-debian12-arm","family":"deb","arch":"arm64","pg":"18","package":"pgedge-postgresql-18-spock60","token":"6.0.0~beta2-1.bookworm","sha256":"c9f3af347f9a83af2b26a3c3ac867596c57d43b7ad9415f694f3fceaeed4df00","iid":"v0045ce4-s6-debian12-arm64-pg18","staging_pg_server":"18.7-1.bookworm"},
+      {"alias":"debian13-amd64","container":"auto-debian13-amd","family":"deb","arch":"amd64","pg":"16","package":"pgedge-postgresql-16-spock60","token":"6.0.0~beta2-1.trixie","sha256":"c91a676104ca0299e8f16dff3647da0f9c51a2779f9752cd61e7907e4865c8e2","iid":"v0045ce4-s6-debian13-amd64-pg16","staging_pg_server":"16.16-1.trixie"},
+      {"alias":"debian13-amd64","container":"auto-debian13-amd","family":"deb","arch":"amd64","pg":"17","package":"pgedge-postgresql-17-spock60","token":"6.0.0~beta2-1.trixie","sha256":"7f002c8e5f4cea19d8c46ecf196d1c501a7c737f348d66c5ad936345da533afd","iid":"v0045ce4-s6-debian13-amd64-pg17","staging_pg_server":"17.12-1.trixie"},
+      {"alias":"debian13-amd64","container":"auto-debian13-amd","family":"deb","arch":"amd64","pg":"18","package":"pgedge-postgresql-18-spock60","token":"6.0.0~beta2-1.trixie","sha256":"c4071a6c5b5bf87026290c346576e4e753430bcc2b99967b5db961e598b43515","iid":"v0045ce4-s6-debian13-amd64-pg18","staging_pg_server":"18.7-1.trixie"},
+      {"alias":"debian13-arm64","container":"auto-debian13-arm","family":"deb","arch":"arm64","pg":"16","package":"pgedge-postgresql-16-spock60","token":"6.0.0~beta2-1.trixie","sha256":"b7a8d970b5d7bc4b4824a508cdd8e23626d6c7d58c18105a4971f9c28992925d","iid":"v0045ce4-s6-debian13-arm64-pg16","staging_pg_server":"16.16-1.trixie"},
+      {"alias":"debian13-arm64","container":"auto-debian13-arm","family":"deb","arch":"arm64","pg":"17","package":"pgedge-postgresql-17-spock60","token":"6.0.0~beta2-1.trixie","sha256":"641cacd411a51b073dd06f1a8bc4335316acb47f28a426cd17ef46b00c6b4e8a","iid":"v0045ce4-s6-debian13-arm64-pg17","staging_pg_server":"17.12-1.trixie"},
+      {"alias":"debian13-arm64","container":"auto-debian13-arm","family":"deb","arch":"arm64","pg":"18","package":"pgedge-postgresql-18-spock60","token":"6.0.0~beta2-1.trixie","sha256":"0ba73ef1d092afcc2ea804310885cc0662a1fc21d8a61ea1f65fac0edc643beb","iid":"v0045ce4-s6-debian13-arm64-pg18","staging_pg_server":"18.7-1.trixie"},
+      {"alias":"ubuntu2604-amd64","container":"auto-ubuntu2604-amd","family":"deb","arch":"amd64","pg":"16","package":"pgedge-postgresql-16-spock60","token":"6.0.0~beta2-1.resolute","sha256":"0c4206769f96726ada8c7b8681098a4085e3798c7f8fac00db2c5528cfc26ce1","iid":"v0045ce4-s6-ubuntu2604-amd64-pg16","staging_pg_server":"16.16-1.resolute"},
+      {"alias":"ubuntu2604-amd64","container":"auto-ubuntu2604-amd","family":"deb","arch":"amd64","pg":"17","package":"pgedge-postgresql-17-spock60","token":"6.0.0~beta2-1.resolute","sha256":"1b6067a8b641f595c95575e2e9d8f5ee2a2352cab54324db0c572499b8d01b2c","iid":"v0045ce4-s6-ubuntu2604-amd64-pg17","staging_pg_server":"17.12-1.resolute"},
+      {"alias":"ubuntu2604-amd64","container":"auto-ubuntu2604-amd","family":"deb","arch":"amd64","pg":"18","package":"pgedge-postgresql-18-spock60","token":"6.0.0~beta2-1.resolute","sha256":"d075eeb909825a6b81ae8b2d3018db5b1678080a4df2a2333e624f0339eae42a","iid":"v0045ce4-s6-ubuntu2604-amd64-pg18","staging_pg_server":"18.7-1.resolute"},
+      {"alias":"ubuntu2604-arm64","container":"auto-ubuntu2604-arm","family":"deb","arch":"arm64","pg":"16","package":"pgedge-postgresql-16-spock60","token":"6.0.0~beta2-1.resolute","sha256":"e8b9fa87ad4645c2a41998dd5b0ede16bcf92ae8974750c5bba7db437ca48f78","iid":"v0045ce4-s6-ubuntu2604-arm64-pg16","staging_pg_server":"16.16-1.resolute"},
+      {"alias":"ubuntu2604-arm64","container":"auto-ubuntu2604-arm","family":"deb","arch":"arm64","pg":"17","package":"pgedge-postgresql-17-spock60","token":"6.0.0~beta2-1.resolute","sha256":"0dae4a9a23c501aa13d0c33bb4063f03bfd8d0bfbd5f39745dad24e7e04a11b4","iid":"v0045ce4-s6-ubuntu2604-arm64-pg17","staging_pg_server":"17.12-1.resolute"},
+      {"alias":"ubuntu2604-arm64","container":"auto-ubuntu2604-arm","family":"deb","arch":"arm64","pg":"18","package":"pgedge-postgresql-18-spock60","token":"6.0.0~beta2-1.resolute","sha256":"aed828593dbb2a507876a4081a92e7a221b8514429ba07faf2da219f7d3f6ad4","iid":"v0045ce4-s6-ubuntu2604-arm64-pg18","staging_pg_server":"18.7-1.resolute"}
+    ]
+
+jobs:
+  cases:
+    name: case fixture (42 staging cells; consistency only, no network)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions: {}
+    outputs:
+      matrix: ${{ steps.fixture.outputs.matrix }}
+    steps:
+      - name: Check the fixture and emit the matrix
+        id: fixture
+        run: |
+          python3 - <<'PY'
+          import json, os, re
+          E = os.environ
+          ver, bn = E["EXPECTED_VERSION"], E["EXPECTED_BUILDNUM"]
+          cases = json.loads(E["CASES_JSON"])
+          cells = {"oel9-amd64": ("rpm", "amd64", "el9"), "alma9-arm64": ("rpm", "arm64", "el9"),
+                   "alma10-amd64": ("rpm", "amd64", "el10"), "alma10-arm64": ("rpm", "arm64", "el10"),
+                   "ubuntu2204-amd64": ("deb", "amd64", "jammy"), "ubuntu2204-arm64": ("deb", "arm64", "jammy"),
+                   "ubuntu2404-amd64": ("deb", "amd64", "noble"), "ubuntu2404-arm64": ("deb", "arm64", "noble"),
+                   "debian12-amd64": ("deb", "amd64", "bookworm"), "debian12-arm64": ("deb", "arm64", "bookworm"),
+                   "debian13-amd64": ("deb", "amd64", "trixie"), "debian13-arm64": ("deb", "arm64", "trixie"),
+                   "ubuntu2604-amd64": ("deb", "amd64", "resolute"), "ubuntu2604-arm64": ("deb", "arm64", "resolute")}
+          pre, _, n = bn.rpartition("_")
+          bad = []
+          keys = sorted((c["alias"], c["pg"]) for c in cases)
+          if keys != sorted((a, p) for a in cells for p in ("16", "17", "18")):
+              bad.append("cells %r" % keys)
+          for c in cases:
+              fam, arch, dist = cells.get(c["alias"], (None, None, None))
+              pkg = ("pgedge-spock60_%s" if fam == "rpm" else "pgedge-postgresql-%s-spock60") % c["pg"]
+              tok = ("%s-%s.%s" % (ver, bn, dist)) if fam == "rpm" else ("%s~%s-%s.%s" % (ver, pre, n, dist))
+              want = {"family": fam, "arch": arch, "package": pkg, "token": tok,
+                      "container": "auto-%s-%s" % (c["alias"].rsplit("-", 1)[0], arch[:3]),
+                      "iid": "v0045ce4-s6-%s-pg%s" % (c["alias"], c["pg"])}
+              got = {k: c.get(k) for k in want}
+              if got != want:
+                  bad.append("%s pg%s: %r != %r" % (c["alias"], c["pg"], got, want))
+              if not re.fullmatch(r"[0-9a-f]{64}", c.get("sha256", "")):
+                  bad.append("%s pg%s: sha256 malformed" % (c["alias"], c["pg"]))
+          if len({c["sha256"] for c in cases}) != 42:
+              bad.append("sha256 values are not 42 distinct digests")
+          if bad:
+              raise SystemExit("fixture problems:\n" + "\n".join(bad))
+          with open(E["GITHUB_OUTPUT"], "a") as f:
+              f.write("matrix=%s\n" % json.dumps({"include": cases}, separators=(",", ":")))
+          print("42 cases consistent")
+          PY
+
+  spock6:
+    name: Spock 6 · ${{ matrix.alias }} · PG${{ matrix.pg }} · ${{ matrix.package }} ${{ matrix.token }} (staging)
+    needs: cases
+    permissions: {contents: read}
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.cases.outputs.matrix) }}
+    uses: pgEdge/pgedge-pep-test/.github/workflows/pep-integration.yml@0045ce4f842eab29ef52574e14dbc02074c116d4
+    with:
+      component: spock
+      package_name: ${{ matrix.package }}
+      channel: staging
+      expected_version: "6.0.0"
+      expected_buildnum: beta2_1
+      expected_rpm: ${{ matrix.family == 'rpm' && matrix.token || '' }}
+      expected_deb: ${{ matrix.family == 'deb' && matrix.token || '' }}
+      container_alias: ${{ matrix.alias }}
+      pg_major: ${{ matrix.pg }}
+      family: ${{ matrix.family }}
+      arch: ${{ matrix.arch }}
+      scenario: certification
+      mode: observe
+      execution_mode: full
+      invocation_id: ${{ matrix.iid }}
+      pep_implementation_ref: 0045ce4f842eab29ef52574e14dbc02074c116d4
+    secrets:
+      # Named explicitly (never `secrets: inherit`). The certificate pair enables the gated pgEdge
+      # repositories inside the test container; the Docker Hub pair only lifts pull rate limits.
+      PGEDGE_REPO_CLIENT_CRT: ${{ secrets.PGEDGE_REPO_CLIENT_CRT }}
+      PGEDGE_REPO_CLIENT_KEY: ${{ secrets.PGEDGE_REPO_CLIENT_KEY }}
+      DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+      DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+
+  # Targeted control: the same staging bytes as the oel9-amd64 PG17 case, through the stable harness.
+  control-stable:
+    name: Control at v1_STABLE f16d9f5 · Spock 6 · oel9-amd64 · PG17 · pgedge-spock60_17 6.0.0-beta2_1.el9 (staging)
+    permissions: {contents: read}
+    uses: pgEdge/pgedge-pep-test/.github/workflows/pep-integration.yml@f16d9f52948706d88957b581747bc4b747f07d47
+    with:
+      component: spock
+      package_name: pgedge-spock60_17
+      channel: staging
+      expected_version: "6.0.0"
+      expected_buildnum: beta2_1
+      expected_rpm: 6.0.0-beta2_1.el9
+      container_alias: oel9-amd64
+      pg_major: "17"
+      family: rpm
+      arch: amd64
+      scenario: certification
+      mode: observe
+      execution_mode: full
+      invocation_id: vf16d9f5-s6ctl-oel9-amd64-pg17
+      pep_implementation_ref: f16d9f52948706d88957b581747bc4b747f07d47
+    secrets:
+      PGEDGE_REPO_CLIENT_CRT: ${{ secrets.PGEDGE_REPO_CLIENT_CRT }}
+      PGEDGE_REPO_CLIENT_KEY: ${{ secrets.PGEDGE_REPO_CLIENT_KEY }}
+      DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+      DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+
+  assert:
+    name: assert validation evidence (42 Spock 6 cases + 1 stable control)
+    needs: [cases, spock6, control-stable]
+    if: ${{ always() }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      actions: read        # run metadata (referenced_workflows), this attempt's jobs, called-job logs
+    env:
+      CANDIDATE: 0045ce4f842eab29ef52574e14dbc02074c116d4
+      STABLE: f16d9f52948706d88957b581747bc4b747f07d47
+      CONTROL_IID: vf16d9f5-s6ctl-oel9-amd64-pg17
+      RESULTS_JSON: ${{ toJSON(needs) }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Download this run's 43 summaries (current attempt only)
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131  # v7.0.0
+        with:
+          pattern: pep-summary-spock-*-r${{ github.run_number }}-a${{ github.run_attempt }}
+          path: summaries
+      - name: Check every case from evidence, not job colour
+        run: |
+          python3 - <<'PY'
+          import http.client, json, os, re, subprocess, sys, time, urllib.error, urllib.request
+          import xml.etree.ElementTree as ET
+          from pathlib import Path
+          from urllib.parse import urlsplit
+
+          E = os.environ
+          CAND, STABLE, REPO = E["CANDIDATE"], E["STABLE"], E["GITHUB_REPOSITORY"]
+          RUN_ID, ATT, RUN_NO = E["GITHUB_RUN_ID"], E["GITHUB_RUN_ATTEMPT"], E["GITHUB_RUN_NUMBER"]
+          VER, BN = E["EXPECTED_VERSION"], E["EXPECTED_BUILDNUM"]
+          NEEDS = json.loads(E["RESULTS_JSON"])
+          ROOT = Path("summaries")
+          SUFFIX = " / full test (install and product tests)"
+          IDENTITY = {"l2a": "proven", "l2b": "not_attempted", "l1": "proven"}
+          SUMMARY_KEYS = {"invocation_id", "execution_status", "test_verdict", "enforcement_mode",
+                          "identity_evidence", "counts", "provenance", "installed_package_sha256"}
+          # Test inventory frozen before launch from component-test/test_pep_spock.py at each PEP commit
+          # (frozen-test-inventory.json): every case must report exactly these testcases, each once, in
+          # this order, parameterised [<container>-<rhel|deb>]; every one passes except the single
+          # documented skip, with exactly this reason. Totals alone are not enough.
+          SPOCK_TESTS = [
+                         "test_install_prerequisites",
+                         "test_configure_repository",
+                         "test_install_spock_packages",
+                         "test_verify_spock_pkg_version",
+                         "test_spock_identity",
+                         "test_verify_bundled_files",
+                         "test_verify_sbom",
+                         "test_initialize_nodes",
+                         "test_setup_cross_wiring",
+                         "test_verify_spock_extension_version",
+                         "test_spock_node",
+                         "test_show_sub_status",
+                         "test_insert_and_verify_replication",
+                         "test_cleanup_nodes",
+                         "test_component_uninstall"]
+          INVENTORY = {CAND: SPOCK_TESTS, STABLE: SPOCK_TESTS}
+          SKIPS = {"test_verify_spock_pkg_version": "integration mode: test_spock_identity checks the exact requested version"}
+          TESTS = len(SPOCK_TESTS)
+          LIBDIR = {"rpm": "/usr/pgsql-%s/lib", "deb": "/usr/lib/postgresql/%s/lib"}
+          PREREQS = {"rpm": ["pgedge-postgresql%s-server", "pgedge-postgresql%s-contrib"], "deb": ["pgedge-postgresql-%s"]}
+
+          cases = []
+          for c in json.loads(E["CASES_JSON"]):
+              cases.append(dict(c, frozen=CAND, job="spock6",
+                                title="Spock 6 · %s · PG%s · %s %s (staging)" % (c["alias"], c["pg"], c["package"], c["token"])))
+          base = next(c for c in cases if (c["alias"], c["pg"]) == ("oel9-amd64", "17"))
+          cases.append(dict(base, frozen=STABLE, job="control-stable", iid=E["CONTROL_IID"],
+                            title="Control at v1_STABLE f16d9f5 · " + base["title"]))
+
+          problems, notes, rows, details = [], [], [], {}
+
+          def check(ok, what):
+              if not ok:
+                  problems.append(what)
+              return ok
+
+          def gh(path, tries=1):
+              for i in range(tries):
+                  r = subprocess.run(["gh", "api", path], capture_output=True, text=True)
+                  if r.returncode == 0:
+                      return r.stdout
+                  if i + 1 < tries:
+                      time.sleep(15)
+              raise RuntimeError("gh api %s failed: %s" % (path, r.stderr.strip()[:300]))
+
+          # Job logs are read as bytes over HTTPS, not through gh (newer gh refuses text with the logs'
+          # colour codes). The token is an unredirected header, so it reaches api.github.com only, never
+          # the signed log URL; redirects must stay on HTTPS. Control sequences are stripped.
+          CONTROL = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)|\x1b[@-_]|[\x00-\x08\x0b-\x1f\x7f-\x9f]")
+
+          class HttpsOnlyRedirect(urllib.request.HTTPRedirectHandler):
+              def redirect_request(self, req, fp, code, msg, headers, newurl):
+                  if urlsplit(newurl).scheme != "https":
+                      raise urllib.error.URLError("refused non-HTTPS redirect")
+                  return super().redirect_request(req, fp, code, msg, headers, newurl)
+
+          def job_log(jid, tries=4):
+              req = urllib.request.Request("https://api.github.com/repos/%s/actions/jobs/%s/logs" % (REPO, jid))
+              req.add_unredirected_header("Authorization", "Bearer " + E.get("GH_TOKEN", ""))
+              err = None
+              for i in range(tries):
+                  try:
+                      with urllib.request.build_opener(HttpsOnlyRedirect).open(req, timeout=120) as r:
+                          return CONTROL.sub("", r.read().decode("utf-8", "replace"))
+                  except (OSError, ValueError, http.client.HTTPException) as e:
+                      err = e
+                  if i + 1 < tries:
+                      time.sleep(15)
+              raise RuntimeError("job %s log: %s" % (jid, err))
+
+          # Run level: both reusable-workflow refs, this run and attempt, and the caller jobs' results.
+          for job in ("cases", "spock6", "control-stable"):
+              check((NEEDS.get(job) or {}).get("result") == "success", "needs.%s.result %r" % (job, (NEEDS.get(job) or {}).get("result")))
+          try:
+              run = json.loads(gh("repos/%s/actions/runs/%s" % (REPO, RUN_ID), 3))
+              refs = sorted((r.get("path"), r.get("sha")) for r in (run.get("referenced_workflows") or []))
+              want_refs = sorted(("pgEdge/pgedge-pep-test/.github/workflows/pep-integration.yml@" + s, s) for s in (CAND, STABLE))
+              check(refs == want_refs, "run: referenced_workflows %r" % refs)
+              check((run.get("head_sha"), str(run.get("run_attempt"))) == (E["GITHUB_SHA"], ATT),
+                    "run: head_sha/run_attempt %r" % ((run.get("head_sha"), run.get("run_attempt")),))
+              jobs = json.loads(gh("repos/%s/actions/runs/%s/attempts/%s/jobs?per_page=100" % (REPO, RUN_ID, ATT), 3))["jobs"]
+          except (RuntimeError, ValueError) as e:
+              problems.append("run: metadata unavailable: %s" % e)
+              jobs = []
+
+          def art(c):
+              return "pep-summary-spock-%s-%s-pg%s-staging-%s-certification-full-%s-r%s-a%s" % (
+                  c["family"], c["arch"], c["pg"], c["alias"], c["iid"], RUN_NO, ATT)
+
+          names = {c["iid"]: art(c) for c in cases}
+          found = sorted(p.name for p in ROOT.iterdir()) if ROOT.is_dir() else []
+          check(found == sorted(names.values()), "artifacts: %d found, %d expected; missing %r; unexpected %r" % (
+              len(found), len(names), sorted(set(names.values()) - set(found)), sorted(set(found) - set(names.values()))))
+          ctl_out = (NEEDS.get("control-stable") or {}).get("outputs") or {}
+          check(ctl_out.get("summary_artifact") == names[E["CONTROL_IID"]], "control summary_artifact %r" % ctl_out.get("summary_artifact"))
+
+          for c in cases:
+              fam, pkg, tok, pg, digest, iid = c["family"], c["package"], c["token"], c["pg"], c["sha256"], c["iid"]
+              tag = iid + ": "
+              d = ROOT / names[iid]
+              det = details[iid] = {"artifact": names[iid], "pep": c["frozen"], "expected_sha256": digest}
+              want_verdict = "pass"
+              target = {"package_name": pkg, "family": fam, "arch": c["arch"], "pg_major": pg,
+                        "container_alias": c["alias"], "channel": "staging"}
+              run_token = "%s-%s" % (RUN_ID, ATT)
+
+              def load(f):
+                  return json.loads((d / f).read_text())
+              try:
+                  s, inst, obs, ide, prov, rc, cur = (load(f) for f in (
+                      "summary.json", "install-evidence.json", "observed-identity.json", "identity-evidence.json",
+                      "provenance.json", "resolved-config.json", "current-run.json"))
+              except (OSError, ValueError) as e:
+                  problems.append(tag + "evidence missing/unreadable: %s" % e)
+                  rows.append("| %s | evidence missing | | | |" % iid)
+                  continue
+              want_prov = {"caller_repo": REPO, "caller_sha": E["GITHUB_SHA"], "caller_ref": E["GITHUB_REF"],
+                           "caller_run_id": RUN_ID, "caller_run_attempt": ATT,
+                           "pep_requested_ref": c["frozen"], "pep_resolved_sha": c["frozen"]}
+              want_counts = {"tests": TESTS, "failures": 0, "errors": 0, "skipped": len(SKIPS)}
+              check(set(s) == SUMMARY_KEYS, tag + "summary keys %r (reason/malformed_reports must be absent)" % sorted(s))
+              check(s.get("invocation_id") == iid, tag + "invocation_id %r" % s.get("invocation_id"))
+              check((s.get("execution_status"), s.get("test_verdict"), s.get("enforcement_mode")) == ("completed", want_verdict, "observe"),
+                    tag + "status %r, expected completed/%s/observe" % ((s.get("execution_status"), s.get("test_verdict"), s.get("enforcement_mode")), want_verdict))
+              if c["job"] == "control-stable":
+                  check((ctl_out.get("execution_status"), ctl_out.get("test_verdict")) == (s.get("execution_status"), s.get("test_verdict")),
+                        tag + "control job outputs disagree with summary.json")
+              check(s.get("identity_evidence") == IDENTITY and ide == IDENTITY, tag + "identity %r / %r" % (s.get("identity_evidence"), ide))
+              check(s.get("counts") == want_counts, tag + "counts %r != %r" % (s.get("counts"), want_counts))
+              check(s.get("installed_package_sha256") == digest, tag + "installed sha256 %r != staging metadata %r" % (s.get("installed_package_sha256"), digest))
+              check(prov == want_prov and s.get("provenance") == want_prov, tag + "provenance %r / %r" % (prov, s.get("provenance")))
+              check(inst == {"run_token": run_token, "installed": True, "install_kind": "pinned", "install_token": tok,
+                             "installed_sha256": digest, "target": target, "expected_version": VER},
+                    tag + "install evidence %r" % inst)
+              ob = obs.get("observed") or {}
+              check(obs.get("run_token") == run_token and obs.get("target") == target
+                    and ob.get("package_manager_version") == tok and ob.get("component_version") == tok
+                    and ob.get("binary_version") is None, tag + "observed identity %r" % obs)
+              check(rc.get("repo") == {"value": "staging", "source": "caller"}
+                    and rc.get("scenario") == {"value": "certification", "source": "caller"}
+                    and (rc.get("upgrade") or {}).get("value") == "false", tag + "resolved-config %r" % rc)
+              det.update(installed_sha256=s.get("installed_package_sha256"), counts=s.get("counts"), observed=ob)
+
+              reports = sorted({re.sub(r"^.*?test-logs/", "", r) for r in (cur.get("reports") or [])})
+              if not check(len(reports) == 1 and Path(reports[0]).name == "report-%s-spock-%s.xml" % (fam, pg),
+                           tag + "reports %r" % cur.get("reports")):
+                  rows.append("| %s | %s/%s | reports wrong | | |" % (iid, s.get("execution_status"), s.get("test_verdict")))
+                  continue
+              try:
+                  xml_root = ET.parse(d / reports[0]).getroot()
+              except (OSError, ET.ParseError) as e:
+                  problems.append(tag + "JUnit unreadable: %s" % e)
+                  continue
+              param = "%s-%s" % (c["container"], "rhel" if fam == "rpm" else "deb")
+              want_names = ["%s[%s]" % (t, param) for t in INVENTORY[c["frozen"]]]
+              want_skips = {"%s[%s]" % (t, param): why for t, why in SKIPS.items()}
+              tcs = list(xml_root.iter("testcase"))
+              names_seen = [tc.get("name") or "" for tc in tcs]
+              dup = sorted({n for n in names_seen if names_seen.count(n) > 1})
+              check(names_seen == want_names, tag + "testcases differ from the frozen inventory: missing %r, unexpected %r, "
+                    "duplicated %r, same set in another order: %s" % (sorted(set(want_names) - set(names_seen)),
+                    sorted(set(names_seen) - set(want_names)), dup, sorted(names_seen) == sorted(want_names) and names_seen != want_names))
+              skipped, failed = {}, {}
+              for tc in tcs:
+                  nm = tc.get("name") or ""
+                  check(tc.get("classname") == "component-test.test_pep_spock", tag + "%s classname %r" % (nm, tc.get("classname")))
+                  kinds = [k for k in ("failure", "error", "skipped") if tc.find(k) is not None]
+                  if kinds == ["skipped"]:
+                      skipped[nm] = tc.find("skipped").get("message")
+                  elif kinds:
+                      el = tc.find(kinds[0])
+                      failed[nm] = "/".join(kinds) + ": " + (el.get("message") or "") + "\n" + (el.text or "")
+              check(not failed, tag + "failed or errored testcases %r" % {k: v[:300] for k, v in failed.items()})
+              check(skipped == want_skips, tag + "skips %r != %r" % (skipped, want_skips))
+              passed = [n for n in names_seen if n not in skipped and n not in failed]
+              check(passed == [n for n in want_names if n not in want_skips], tag + "passed testcases %r" % passed)
+              suites = list(xml_root.iter("testsuite"))
+              totals = {k: sum(int(ts.get(k) or 0) for ts in suites) for k in ("tests", "failures", "errors", "skipped")}
+              check(len(suites) == 1 and totals == want_counts, tag + "JUnit testsuite totals %r != %r" % (totals, want_counts))
+              det.update(passed=len(passed), skipped=skipped, failed=sorted(failed), testcases=names_seen)
+
+              try:
+                  pv = load("prerequisite-versions.json")
+              except (OSError, ValueError) as e:
+                  pv = {}
+                  problems.append(tag + "prerequisite-versions.json: %s" % e)
+              iv = pv.get("installed_versions") or {}
+              prereqs = [p % pg for p in PREREQS[fam]]
+              pre_vers = {iv.get(k) for k in prereqs}
+              pre = next(iter(pre_vers)) if len(pre_vers) == 1 else None
+              mm = re.fullmatch(r"%s\.(\d+)-\S+" % pg, pre or "")
+              check(pv.get("channel") == "staging" and pv.get("pg_major") == pg and pv.get("requested_package") == pkg
+                    and set(iv) == set(prereqs) | {pkg} and iv.get(pkg) == tok and mm is not None,
+                    tag + "prerequisites %r" % pv)
+              if pre != c["staging_pg_server"]:
+                  notes.append(tag + "PostgreSQL companion %s differs from the %s staging served at prep time" % (pre, c["staging_pg_server"]))
+              want_num = "%s00%02d" % (pg, int(mm.group(1))) if mm else None
+
+              # Prefix + suffix, as in the 0d31b9c caller, in case GitHub decorates matrix job names.
+              jid = [j["id"] for j in jobs if j["name"].startswith(c["title"]) and j["name"].endswith(SUFFIX)]
+              log = ""
+              if check(len(jid) == 1 and all(j["conclusion"] == "success" for j in jobs if j["id"] in jid), tag + "called job %r" % jid):
+                  try:
+                      log = job_log(jid[0])
+                  except RuntimeError as e:
+                      problems.append(tag + "job log unavailable: %s" % e)
+              esc = re.escape(pkg)
+              markers = {
+                  "prereq_installed": r"installed %s = (%s\.\d+-\S+)" % (re.escape(prereqs[0]), pg),
+                  "spock_installed": r"installed %s = (%s)\s" % (esc, re.escape(tok)),
+                  "pinned_install": r"pinned install: %s=%s sha256=%s" % (esc, re.escape(tok), digest),
+                  "single_spock_pkg": r"Only %s is installed among spock packages" % esc,
+                  "library_owner": r"(%s/spock\.so) belongs to (%s)\s" % (re.escape(LIBDIR[fam] % pg), esc),
+                  "n1": r"n1: PostgreSQL (\d+), spock (\S+)",
+                  "n2": r"n2: PostgreSQL (\d+), spock (\S+)",
+                  "sub_status": r"spock\.sub_show_status\(\) indicates subscription is replicating",
+                  "n1_rows": r"n1 has rows from both n1 and n2",
+                  "n2_rows": r"n2 has rows from both n1 and n2",
+                  "bidirectional": r"Bidirectional replication verified between n1 and n2",
+              }
+              seen = {}
+              for key, pat in markers.items():
+                  m = re.search(pat, log)
+                  seen[key] = m.group(0).strip() if m else None
+                  check(m is not None, tag + "job log lacks %s (%r)" % (key, pat))
+                  if m and key in ("n1", "n2"):
+                      check(m.group(1) == want_num and m.group(2) == VER,
+                            tag + "%s runs PostgreSQL %s spock %s, expected %s / %s" % (key, m.group(1), m.group(2), want_num, VER))
+                  if m and key == "prereq_installed":
+                      check(m.group(1) == pre, tag + "log prerequisite %s != evidence %s" % (m.group(1), pre))
+              det.update(prerequisites=iv, log_markers=seen, called_job_id=jid[0] if jid else None)
+              rows.append("| %s | %s | %s/%s | %d passed, %d skipped, %d failed | `%s` | %s |" % (
+                  iid, c["frozen"][:7], s.get("execution_status"), s.get("test_verdict"), len(passed), len(skipped), len(failed),
+                  s.get("installed_package_sha256"),
+                  "match" if s.get("installed_package_sha256") == digest else "MISMATCH"))
+
+          verdict = "fail" if problems else "pass"
+          Path("validation-result.json").write_text(json.dumps(
+              {"candidate_pep": CAND, "control_pep": STABLE, "run_id": RUN_ID, "run_attempt": ATT,
+               "caller_sha": E["GITHUB_SHA"], "test_inventory": INVENTORY, "verdict": verdict,
+               "problems": problems, "notes": notes, "cases": details}, indent=1, sort_keys=True))
+          head = "All 43 cases verified from evidence: the frozen 15-test inventory, 14 passed and only the documented skip each.\n"
+          with open(E["GITHUB_STEP_SUMMARY"], "a") as f:
+              f.write("### PEP 0045ce4 Spock 6 beta.2 staging integration validation (existing packages; not QA certification)\n\n"
+                      "| case | PEP | status | testcases | installed sha256 | vs staging metadata |\n|---|---|---|---|---|---|\n"
+                      + "\n".join(rows) + "\n\n"
+                      + ("**FAILED**\n\n" + "\n".join("- " + p for p in problems) if problems else head)
+                      + ("\n\nNotes:\n" + "\n".join("- " + n for n in notes) if notes else ""))
+          print("\n".join(rows))
+          if notes:
+              print("\n".join(notes))
+          if problems:
+              print("\n".join(problems), file=sys.stderr)
+              sys.exit(1)
+          print(head)
+          PY
+      - name: Upload the assertion result
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
+        with:
+          name: pep-validation-0045ce4-spock6-staging-result-r${{ github.run_number }}-a${{ github.run_attempt }}
+          path: validation-result.json
+          if-no-files-found: warn

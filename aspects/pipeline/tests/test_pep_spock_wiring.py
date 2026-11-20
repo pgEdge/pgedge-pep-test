@@ -403,3 +403,90 @@ def test_a_prerelease_request_accepts_the_extension_version_its_package_ships(mo
     for wrong in (other, shipped + "~beta1", shipped + "-rc.1"):    # still exact: no prefix or substring match
         with pytest.raises(AssertionError, match="spock extension version is %r" % wrong):
             m.verify_nodes_use_requested_spock(_Container(_nodes(owner=owner, ext=(wrong, wrong))), ctype, cfg)
+
+
+# --------------------------------------------------------------------------- spock 6 release identity
+# Tag v6.0.0-beta.2 -> release intent 6.0.0 / beta2_1. Its exact spock60 packages are RPM
+# pgedge-spock60_<pg> 6.0.0-beta2_1.el<N> and DEB pgedge-postgresql-<pg>-spock60 6.0.0~beta2-1.<codename>;
+# the extension both ship is 6.0.0 (include/spock.h SPOCK_VERSION, spock.control default_version).
+_BETA2_RPM = dict(_V5_RPM, PEP_PACKAGE_NAME="pgedge-spock60_17", PEP_EXPECTED_VERSION="6.0.0",
+                  PEP_EXPECTED_BUILDNUM="beta2_1", PEP_EXPECTED_RPM="6.0.0-beta2_1.el9")
+_BETA2_DEB = dict(_V6_DEB, PEP_EXPECTED_BUILDNUM="beta2_1", PEP_EXPECTED_DEB="6.0.0~beta2-1.noble",
+                  PEP_CONTAINER_ALIAS="ubuntu2404-arm64", PEP_ARCH_FILTER="arm64", DEB_CONTAINERS="ubuntu2404-arm64")
+
+
+@pytest.mark.parametrize("env,series,package", [
+    (dict(_BETA2_RPM, SPOCK_MAJOR="50"), "60", "pgedge-spock60_17"),
+    (dict(_BETA2_DEB, SPOCK_MAJOR=None), "60", "pgedge-postgresql-17-spock60"),
+], ids=["rpm-env-50", "deb-default-50"])
+def test_a_spock6_release_tests_its_own_spock60_package_whatever_spock_major_says(monkeypatch, env, series, package):
+    m = load(monkeypatch, env)
+    assert m.INTEGRATION_PROBLEM is None and m.spock_major == series
+    assert m.get_spock_pkg_name("rhel") == m.get_spock_pkg_name("deb") == package
+
+
+@pytest.mark.parametrize("env,ctype,observed,ok", [
+    (_BETA2_RPM, "rhel", "6.0.0-beta2_1.el9", True),
+    (_BETA2_RPM, "rhel", "6.0.0-beta1_1.el9", False),          # the previous beta
+    (_BETA2_RPM, "rhel", "6.0.0-1.el9", False),                # the final release
+    (_BETA2_DEB, "deb", "6.0.0~beta2-1.noble", True),
+    (_BETA2_DEB, "deb", "6.0.0~beta2-1.jammy", False),         # another codename
+    (_BETA2_DEB, "deb", "6.0.0-1.noble", False),
+], ids=["rpm-exact", "rpm-beta1", "rpm-final", "deb-exact", "deb-codename", "deb-final"])
+def test_spock6_beta_identity_is_the_exact_package_build(monkeypatch, tmp_path, env, ctype, observed, ok):
+    m = load(monkeypatch, env)
+    _wire(monkeypatch, tmp_path, m, _Container(_pkg_list()))
+    pin = env.get("PEP_EXPECTED_RPM") or env["PEP_EXPECTED_DEB"]
+    m.pep_integration_mode.pep_evidence.write_install_evidence(
+        m.INTEGRATION_REQUEST, "run-A", "pinned", pin, str(tmp_path / "install-evidence.json"),
+        installed_sha256="f" * 64)
+    monkeypatch.setattr(m.package_management, "query_installed_version", lambda c, n: observed)
+    container = env["CONTAINERS"] if ctype == "rhel" else env["DEB_CONTAINERS"]
+    if ok:
+        m.test_spock_identity(container, ctype)
+    else:
+        with pytest.raises(AssertionError, match="not proven"):
+            m.test_spock_identity(container, ctype)
+    assert json.loads((tmp_path / "identity-evidence.json").read_text())["l2a"] == ("proven" if ok else "not_proven")
+
+
+def test_spock6_beta_nodes_must_run_extension_6_0_0_exactly(monkeypatch):
+    m = load(monkeypatch, _BETA2_RPM)
+    cfg = m.get_container_config("rhel")
+    m.verify_nodes_use_requested_spock(_Container(_nodes(owner="pgedge-spock60_17", ext=("6.0.0", "6.0.0"))),
+                                       "rhel", cfg)
+    for wrong in ("5.0.14", "6.0.0-beta2", "6.0.0beta2"):
+        with pytest.raises(AssertionError, match="spock extension version is %r" % wrong):
+            m.verify_nodes_use_requested_spock(_Container(_nodes(owner="pgedge-spock60_17", ext=(wrong, wrong))),
+                                               "rhel", cfg)
+
+
+# --------------------------------------------------------------------------- standalone extension version
+@pytest.mark.parametrize("configured,extension", [
+    ("5.0.14", "5.0.14"), ("5.0.4", "5.0.4"),                  # Spock 5 configuration: unchanged
+    ("6.0.0beta2", "6.0.0"), ("6.0.0-beta2", "6.0.0"), ("6.0.0~beta2", "6.0.0"), ("6.0.0", "6.0.0"),
+])
+def test_extension_version_drops_only_a_pre_release_tag(monkeypatch, configured, extension):
+    assert load(monkeypatch, {"PG_MAJOR_VERSION": "17"}).extension_version_for(configured) == extension
+
+
+def _standalone_extension_check(monkeypatch, spock_major, configured, ext):
+    m = load(monkeypatch, {"PG_MAJOR_VERSION": "17", "SPOCK_MAJOR": spock_major})
+    monkeypatch.setenv("PGEDGE_SPOCK%s_17_VERSION" % spock_major, configured)
+    c = _Container(_nodes(ext=(ext, ext)))
+    monkeypatch.setattr(m, "client", _Client(c))
+    m.test_verify_spock_extension_version("rocky9-amd64", "rhel")
+    return c
+
+
+def test_standalone_spock6_beta_accepts_the_extension_its_package_ships(monkeypatch):
+    c = _standalone_extension_check(monkeypatch, "60", "6.0.0beta2", "6.0.0")
+    assert sum(1 for cmd in c.cmds if cmd[0] == "psql" and "extversion" in cmd[-1]) == 2
+    with pytest.raises(AssertionError, match="expected '6.0.0', got '5.0.14'"):
+        _standalone_extension_check(monkeypatch, "60", "6.0.0beta2", "5.0.14")
+
+
+def test_standalone_spock5_extension_check_is_unchanged(monkeypatch):
+    _standalone_extension_check(monkeypatch, "50", "5.0.14", "5.0.14")
+    with pytest.raises(AssertionError, match="expected '5.0.14', got '5.0.13'"):
+        _standalone_extension_check(monkeypatch, "50", "5.0.14", "5.0.13")

@@ -529,6 +529,16 @@ def test_binding_accepts_the_release_series_with_at_most_a_pre_release_marker(mo
     assert ("postgres", "preload") in [(r, k) for r, k, _ in c.sessions]
 
 
+@pytest.mark.parametrize("ext,ok", [("1.1-beta2", True), ("1.1", True), ("1.2-beta2", False)])
+def test_binding_holds_a_tag_style_request_to_its_series(monkeypatch, ext, ok):
+    env = dict(_RPM, PEP_EXPECTED_VERSION="1.1-beta2", PEP_EXPECTED_BUILDNUM="beta2_1",
+               PEP_EXPECTED_RPM="1.1-beta2_1.el9")
+    (outcome, msg), _ = _binding(monkeypatch, env, ext=ext)
+    assert (outcome == "passed") is ok, (outcome, msg)
+    if not ok:
+        assert "pgedge_safesession extension version is '1.2-beta2'" in msg, msg
+
+
 def test_binding_passes_on_deb(monkeypatch):
     (outcome, msg), _ = _binding(monkeypatch, _DEB, "deb", owner="pgedge-postgresql-17-safesession",
                                  libdir="/usr/lib/postgresql/17/lib")

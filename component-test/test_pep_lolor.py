@@ -128,7 +128,7 @@ def _integration_problem(request, pg_major_env):
 INTEGRATION_PROBLEM = _integration_problem(INTEGRATION_REQUEST, pg_major_version)
 
 # ============================================================================
-# lolor facts, from the source of the release line under test (lolor v1_STABLE, 1.2.x)
+# lolor facts, from the source of the release lines under test (lolor v1_STABLE 1.2.x, main 2.0.0)
 # ============================================================================
 # Makefile: MODULE_big = lolor; lolor.control: module_pathname = '$libdir/lolor', schema = lolor.
 LOLOR_EXTENSION = "lolor"
@@ -179,6 +179,45 @@ SWAPPED_FUNCTIONS = (
 # with a primary key (lolor--1.0.sql:7-20); a replicated deployment publishes both
 # (docs/install_configure.md:41-46).
 LOLOR_TABLES = ("lolor.pg_largeobject", "lolor.pg_largeobject_metadata")
+
+# lolor 2.0.0 (lolor main; numbered 1.3.0 before the 2.0.0 rename) changes the lifecycle. Each
+# change is detected on the installed extension, so a 1.2.x install keeps its own behaviour:
+# - a third table parks the comment of each stored object (lolor--1.2.3--1.3.0.sql:502-506), and
+#   the documented replicated set is all three tables (docs/install_configure.md:45, README.md:74
+#   and 184-188 on main). 1.2.x has only LOLOR_TABLES.
+# - DROP EXTENSION no longer discards stored objects: it is refused while lolor storage holds any
+#   (src/lolor.c:613-663, 1007-1018 on main), and the supported removal migrates them back first
+#   with lolor.migrate_to_native() (README.md:95-100 and 160-237 on main; t/008_drop_paths.pl).
+#   1.2.x has no migration function, and its drop discards the lolor tables with their contents.
+LOLOR_DESCRIPTION_TABLE = "lolor.pg_largeobject_description"
+MIGRATE_TO_NATIVE = "lolor.migrate_to_native()"
+# The release contract decides which lifecycle an installed lolor must follow; the probed
+# capabilities are then checked against it, so a release that should be 2.0 but lacks either
+# feature fails instead of quietly taking the 1.2.x path. Both features arrive in
+# lolor--1.2.3--1.3.0.sql (main; #86 renames it lolor--1.2.3--2.0.0.sql), so every lolor whose SQL
+# extension version is 1.3.0 or later must provide both, and no earlier one has either.
+LOLOR_CAPABILITIES = ("migrate_to_native", "description_table")
+LOLOR_2_LIFECYCLE_FROM = (1, 3, 0)
+# The SQL scripts each lolor release installs into the extension directory: the owner's Makefile
+# DATA at that release (tag v1.2.2 for 1.2.2, this module's standalone fallback; v1_STABLE for
+# 1.2.3, main for 1.3.0, #86 for 2.0.0). The generic bundled-
+# file check normalizes version numbers in file names, so it cannot tell a base script from an
+# upgrade script; this list can. A release missing here fails the SQL-script check until its
+# Makefile DATA is recorded.
+_LOLOR_1_2_3_SQL = ("lolor--1.0.sql", "lolor--1.0--1.2.1.sql", "lolor--1.2.1--1.2.2.sql",
+                    "lolor--1.2.2--1.2.3.sql")
+LOLOR_SQL_SCRIPTS = {
+    "1.2.2": _LOLOR_1_2_3_SQL[:3],
+    "1.2.3": _LOLOR_1_2_3_SQL,
+    "1.3.0": _LOLOR_1_2_3_SQL + ("lolor--1.2.3--1.3.0.sql",),
+    "2.0.0": ("lolor--2.0.0.sql",) + _LOLOR_1_2_3_SQL + ("lolor--1.2.3--2.0.0.sql",),
+}
+_LOLOR_SQL_RE = re.compile(r"lolor--[0-9][^/]*\.sql")
+_DEFAULT_VERSION_RE = re.compile(r"""\s*default_version\s*=\s*'([^']*)'\s*""")
+STORAGE_DROP_REFUSAL = "cannot drop lolor storage while it holds"
+# The object the drop check stores before removing the extension, so the drop always meets a
+# non-empty lolor storage whatever the earlier checks left behind.
+DROP_PAYLOAD = bytes((i * 53 + 3) % 256 for i in range(700))
 
 # Round-trip data: binary (every byte value, NULs included) and longer than two large-object pages
 # (LOBLKSIZE = BLCKSZ/4), truncated to a length that is not a page multiple.
@@ -322,6 +361,100 @@ def _expect(values, key, want, problems):
     if got != str(want):
         problems.append(f"{key} = {_show(got)}, expected {_show(want)}")
     return got
+
+
+def lolor_capabilities_sql():
+    """What the installed lolor provides, probed by name. Each probe prints exactly 't' or 'f':
+    concatenating a boolean to text prints 'true'/'false', so the CASE fixes the answer form."""
+    return "\n".join([
+        "SELECT 'extversion=' || extversion FROM pg_catalog.pg_extension WHERE extname = 'lolor';",
+        f"SELECT 'migrate_to_native=' || CASE WHEN pg_catalog.to_regprocedure('{MIGRATE_TO_NATIVE}') "
+        "IS NOT NULL THEN 't' ELSE 'f' END;",
+        f"SELECT 'description_table=' || CASE WHEN pg_catalog.to_regclass('{LOLOR_DESCRIPTION_TABLE}') "
+        "IS NOT NULL THEN 't' ELSE 'f' END;",
+    ])
+
+
+def version_tuple(text):
+    """``(major, minor, patch)`` of a dotted numeric version such as 2.0.0 or 1.2.3; None for
+    anything else."""
+    match = re.fullmatch(r"(\d+)\.(\d+)(?:\.(\d+))?", (text or "").strip())
+    return None if match is None else tuple(int(part or 0) for part in match.groups())
+
+
+def lolor_lifecycle_2(extversion):
+    """True when the release contract requires the 2.0 lifecycle (migration function and the
+    description table) for SQL extension version ``extversion``; fails on an unreadable version."""
+    parsed = version_tuple(extversion)
+    assert parsed is not None, f"lolor extension version {_show(extversion)} is not a dotted version"
+    return parsed >= LOLOR_2_LIFECYCLE_FROM
+
+
+def parse_lolor_capabilities(values, port):
+    """``{"extversion", "migrate_to_native", "description_table", "lifecycle_2"}`` from the labelled
+    output of lolor_capabilities_sql(), checked against the release contract: a version that requires
+    the 2.0 lifecycle must provide both features and an earlier one must provide neither. An answer
+    that is not exactly 't' or 'f', or a capability set that does not match the version, fails the
+    check rather than choosing a lifecycle."""
+    extversion = _one(values, "extversion")
+    assert extversion is not None, f"lolor is not installed on port {port} (no extversion answer)"
+    caps = {"extversion": extversion}
+    for key in LOLOR_CAPABILITIES:
+        got = _one(values, key)
+        assert got in ("t", "f"), (f"lolor capability {key} on port {port} = {_show(got)}, expected 't' or 'f' "
+                                   f"(extension version {_show(extversion)})")
+        caps[key] = got == "t"
+    caps["lifecycle_2"] = lolor_lifecycle_2(extversion)
+    if caps["lifecycle_2"]:
+        missing = [key for key in LOLOR_CAPABILITIES if not caps[key]]
+        assert not missing, (f"lolor {extversion} on port {port} lacks {', '.join(missing)}, which every "
+                             f"lolor from 1.3.0/2.0.0 provides (lolor--1.2.3--1.3.0.sql); refusing to test it "
+                             f"as 1.2.x")
+    else:
+        present = [key for key in LOLOR_CAPABILITIES if caps[key]]
+        assert not present, (f"lolor {extversion} on port {port} reports {', '.join(present)}, which no "
+                             f"lolor before 1.3.0 has: the installed version and features disagree")
+    return caps
+
+
+def lolor_capabilities(container, pgbin, port, pguser):
+    """The lolor installed on ``port``, probed and checked by parse_lolor_capabilities (see the
+    2.0.0 notes at LOLOR_DESCRIPTION_TABLE)."""
+    values = sql_values(container, pgbin, port, pguser, lolor_capabilities_sql(), "lolor capabilities")
+    return parse_lolor_capabilities(values, port)
+
+
+def lolor_sql_script_problems(paths, default_version):
+    """Why the lolor SQL scripts in ``paths`` (a package file listing) are not exactly the set the
+    release with control-file ``default_version`` installs (LOLOR_SQL_SCRIPTS); empty if they are."""
+    expected = LOLOR_SQL_SCRIPTS.get((default_version or "").strip())
+    if expected is None:
+        return [f"no SQL-script contract is recorded for lolor {_show(default_version)}; add its "
+                f"Makefile DATA to LOLOR_SQL_SCRIPTS"]
+    installed = sorted(os.path.basename(p.strip()) for p in paths
+                       if "/extension/" in p and _LOLOR_SQL_RE.fullmatch(os.path.basename(p.strip())))
+    problems = []
+    duplicates = sorted({name for name in installed if installed.count(name) > 1})
+    if duplicates:
+        problems.append(f"installed more than once: {', '.join(duplicates)}")
+    missing = sorted(set(expected) - set(installed))
+    if missing:
+        problems.append(f"missing for lolor {default_version}: {', '.join(missing)}")
+    extra = sorted(set(installed) - set(expected))
+    if extra:
+        problems.append(f"not part of lolor {default_version}: {', '.join(extra)}")
+    return problems
+
+
+def control_default_version(text):
+    """The default_version a lolor.control file sets, or None."""
+    found = [m.group(1) for line in (text or "").splitlines() if (m := _DEFAULT_VERSION_RE.fullmatch(line))]
+    return found[0] if len(found) == 1 else None
+
+
+def replicated_tables(caps):
+    """The lolor tables a replicated deployment of this version publishes."""
+    return LOLOR_TABLES + ((LOLOR_DESCRIPTION_TABLE,) if caps["description_table"] else ())
 
 
 def node_encoding_problem(text, node):
@@ -541,12 +674,12 @@ def subscription_sync_sql():
             f"WHERE s.subname = '{SUBSCRIPTION}';")
 
 
-def wait_for_initial_sync(container, pgbin, port, pguser):
-    """Poll the subscriber on ``port`` until both lolor tables have finished their initial table
-    sync (pg_subscription_rel state 'r'), for at most REPLICATION_TIMEOUT_S seconds. Only then is
-    the large object written, so it can reach the subscriber only as a change the apply worker
-    decodes from the publisher's WAL, never inside the initial COPY."""
-    want = f"{len(LOLOR_TABLES)}/{len(LOLOR_TABLES)}"
+def wait_for_initial_sync(container, pgbin, port, pguser, tables=LOLOR_TABLES):
+    """Poll the subscriber on ``port`` until every published lolor table (``tables``) has finished
+    its initial table sync (pg_subscription_rel state 'r'), for at most REPLICATION_TIMEOUT_S
+    seconds. Only then is the large object written, so it can reach the subscriber only as a change
+    the apply worker decodes from the publisher's WAL, never inside the initial COPY."""
+    want = f"{len(tables)}/{len(tables)}"
     deadline = time.monotonic() + REPLICATION_TIMEOUT_S
     last = "no answer yet"
     while True:
@@ -562,7 +695,7 @@ def wait_for_initial_sync(container, pgbin, port, pguser):
         if time.monotonic() >= deadline:
             pytest.fail(
                 f"subscription {SUBSCRIPTION} on port {port} did not finish the initial sync of "
-                f"{', '.join(LOLOR_TABLES)} within {REPLICATION_TIMEOUT_S}s ({last}); nothing was written")
+                f"{', '.join(tables)} within {REPLICATION_TIMEOUT_S}s ({last}); nothing was written")
         time.sleep(REPLICATION_POLL_S)
 
 
@@ -965,6 +1098,31 @@ def test_verify_bundled_files(container_name, container_type):
 
 
 @pytest.mark.parametrize("container_name,container_type", all_containers)
+def test_verify_sql_scripts(container_name, container_type):
+    """The package installs exactly the SQL scripts its release defines (LOLOR_SQL_SCRIPTS), keyed
+    by the default_version of the lolor.control it ships. Unlike the generic bundled-file check this
+    tells a base script from an upgrade script, so a missing base or upgrade script fails."""
+    container = _running_container(container_name)
+    package = get_container_config(container_type)["lolor_package"]
+    cmd = ["rpm", "-ql", package] if container_type == "rhel" else ["dpkg", "-L", package]
+    exit_code, output = container.exec_run(cmd, user="root")
+    listing = output.decode(errors="replace").strip()
+    assert exit_code == 0, f"listing the files of {package} failed: {listing}"
+    paths = [line.strip() for line in listing.splitlines() if line.strip()]
+    controls = [p for p in paths if p.endswith("/extension/lolor.control")]
+    assert len(controls) == 1, f"{package} ships {len(controls)} lolor.control files: {controls}"
+    exit_code, output = container.exec_run(["cat", controls[0]], user="root")
+    text = output.decode(errors="replace")
+    assert exit_code == 0, f"reading {controls[0]} failed: {text.strip()}"
+    default_version = control_default_version(text)
+    assert default_version is not None, f"{controls[0]} sets no single default_version"
+    problems = lolor_sql_script_problems(paths, default_version)
+    assert not problems, f"{package} SQL scripts:\n  " + "\n  ".join(problems)
+    print(f"✅ {package} installs exactly the {len(LOLOR_SQL_SCRIPTS[default_version])} SQL scripts of "
+          f"lolor {default_version}")
+
+
+@pytest.mark.parametrize("container_name,container_type", all_containers)
 def test_init_cluster(container_name, container_type):
     """Initialize PostgreSQL cluster with LOLOR-specific GUC parameters using pg_server_management module"""
     container = _running_container(container_name)
@@ -1149,9 +1307,10 @@ def test_lolor_node_must_be_set(container_name, container_type):
 
 @pytest.mark.parametrize("container_name,container_type", all_containers)
 def test_lolor_native_logical_replication(container_name, container_type):
-    """Native PostgreSQL logical replication (a publication of lolor's two tables and a
-    subscription; not Spock) to a second cluster in the same container. Once both tables have
-    finished their initial sync, a large object written through lolor on the publisher must be read
+    """Native PostgreSQL logical replication (a publication of the lolor tables this version
+    documents as replicated, see replicated_tables, and a subscription; not Spock) to a second
+    cluster in the same container. Once every table has finished its initial sync, a large object
+    written through lolor on the publisher must be read
     back with identical bytes through lolor on the subscriber within a fixed time, so it arrived as
     a streamed change. On failure the subscriber's log tail is shown. Both clusters are cleaned up."""
     if not check_extensions:
@@ -1161,9 +1320,11 @@ def test_lolor_native_logical_replication(container_name, container_type):
     config = get_container_config(container_type)
     pgbin, pguser = config["pgbin"], config["pguser"]
 
-    print(f"\n--- Native logical replication of {', '.join(LOLOR_TABLES)}: port {pgport} -> {REPLICA_PORT} ---")
+    print(f"\n--- Native logical replication of the lolor tables: port {pgport} -> {REPLICA_PORT} ---")
     replica_started = passed = False
     try:
+        tables = replicated_tables(lolor_capabilities(container, pgbin, pgport, pguser))
+        print(f"Publishing {', '.join(tables)}")
         success, _conf, message = pg_server_management.init_cluster(
             container, pgbin, REPLICA_PGDATA, pguser, lolor_guc_parameters(REPLICA_NODE))
         assert success, f"Subscriber cluster initialization failed: {message}"
@@ -1177,14 +1338,14 @@ def test_lolor_native_logical_replication(container_name, container_type):
         if INTEGRATION_REQUEST is not None:
             verify_binding(container, container_type, config, [int(REPLICA_PORT)])
         sql_values(container, pgbin, pgport, pguser,
-                   f"CREATE PUBLICATION {PUBLICATION} FOR TABLE {', '.join(LOLOR_TABLES)};",
+                   f"CREATE PUBLICATION {PUBLICATION} FOR TABLE {', '.join(tables)};",
                    "create the publication")
         sql_values(container, pgbin, REPLICA_PORT, pguser,
                    f"CREATE SUBSCRIPTION {SUBSCRIPTION} CONNECTION "
                    f"'host=localhost port={pgport} dbname=postgres user={pguser} "
                    f"connect_timeout={PG_CONNECT_TIMEOUT_S}' PUBLICATION {PUBLICATION};",
                    "create the subscription")
-        wait_for_initial_sync(container, pgbin, REPLICA_PORT, pguser)
+        wait_for_initial_sync(container, pgbin, REPLICA_PORT, pguser, tables)
 
         written = sql_values(container, pgbin, pgport, pguser, replication_write_sql(),
                              "write a large object on the publisher")
@@ -1209,35 +1370,98 @@ def test_lolor_native_logical_replication(container_name, container_type):
     assert not cleanup, "replication cleanup failed: " + "; ".join(cleanup)
 
 
-@pytest.mark.parametrize("container_name,container_type", all_containers)
-def test_lolor_drop_restores_lo_functions(container_name, container_type):
-    """DROP EXTENSION lolor restores the built-in large-object functions, leaves no *_orig or
-    lolor_* function, lolor table or event trigger behind, and lo_creat then works without
-    lolor.node (the built-in)."""
-    if not check_extensions:
-        pytest.skip("Extension check disabled via env")
+def drop_store_sql():
+    """Store DROP_PAYLOAD in a new large object through lolor and count what lolor storage holds."""
+    return "\n".join([
+        f"SELECT 'drop_loid=' || lo_from_bytea(0, decode('{DROP_PAYLOAD.hex()}', 'hex'));",
+        "SELECT 'lolor_objects=' || count(*) FROM lolor.pg_largeobject_metadata;",
+    ])
 
-    container = _running_container(container_name)
-    config = get_container_config(container_type)
 
-    sql = "\n".join([
+def migrate_to_native_sql():
+    """The documented step before a 2.0.0 drop: move every object back to native storage."""
+    return "\n".join([
+        f"SELECT 'migrated=' || {MIGRATE_TO_NATIVE};",
+        "SELECT 'lolor_objects_after=' || count(*) FROM lolor.pg_largeobject_metadata;",
+    ])
+
+
+def drop_sql(loid):
+    """DROP EXTENSION lolor, then what it left: the function state, any lolor table or event
+    trigger, whether large object ``loid`` is in native storage and its bytes there, and the
+    built-in lo_creat working without lolor.node."""
+    lo = f"'{loid}'::oid"
+    native = f"EXISTS (SELECT 1 FROM pg_catalog.pg_largeobject_metadata WHERE oid = {lo})"
+    return "\n".join([
         f"DROP EXTENSION {LOLOR_EXTENSION};",
         function_state_sql(),
         "SELECT 'lolor_tables=' || count(*) FROM pg_catalog.pg_class c JOIN pg_catalog.pg_namespace n "
         "ON n.oid = c.relnamespace WHERE n.nspname = 'lolor' "
-        "AND c.relname IN ('pg_largeobject', 'pg_largeobject_metadata');",
+        "AND c.relname IN ('pg_largeobject', 'pg_largeobject_metadata', 'pg_largeobject_description');",
         "SELECT 'event_trigger=' || count(*) FROM pg_catalog.pg_event_trigger WHERE evtname = 'lo_on_drop_extension';",
+        f"SELECT 'kept_meta=' || count(*) FROM pg_catalog.pg_largeobject_metadata WHERE oid = {lo};",
+        f"SELECT 'kept=' || CASE WHEN {native} THEN encode(lo_get({lo}), 'hex') ELSE '' END;",
         "SET lolor.node = 0;",
         "SELECT lo_creat(-1) AS core_loid \\gset",
         "SELECT 'core_meta=' || count(*) FROM pg_catalog.pg_largeobject_metadata WHERE oid = :'core_loid'::oid;",
         "SELECT 'core_unlink=' || lo_unlink(:'core_loid'::oid);",
     ])
-    values = sql_values(container, config["pgbin"], pgport, config["pguser"], sql, "DROP EXTENSION lolor")
+
+
+@pytest.mark.parametrize("container_name,container_type", all_containers)
+def test_lolor_drop_restores_lo_functions(container_name, container_type):
+    """Removing lolor the way the installed version supports it restores the built-in
+    large-object functions and leaves no *_orig or lolor_* function, lolor table or event trigger
+    behind; lo_creat then works without lolor.node (the built-in).
+
+    A large object is stored first, so the drop always meets a non-empty lolor storage. With
+    lolor.migrate_to_native() (2.0.0) the drop must be refused while that object is stored, the
+    migration must move every stored object, and after the drop the object must be in native
+    storage with its bytes. Without it (1.2.x) the drop runs directly and discards lolor storage
+    with the lolor tables, as that release line does. lolor.allow_unsafe_drop is never used."""
+    if not check_extensions:
+        pytest.skip("Extension check disabled via env")
+
+    container = _running_container(container_name)
+    config = get_container_config(container_type)
+    pgbin, pguser = config["pgbin"], config["pguser"]
+
+    caps = lolor_capabilities(container, pgbin, pgport, pguser)
+    stored = sql_values(container, pgbin, pgport, pguser, drop_store_sql(), "store a large object before the drop")
+    loid = _one(stored, "drop_loid")
+    why = node_encoding_problem(loid, PRIMARY_NODE)
+    assert why is None, f"storing a large object before the drop: {why}"
+    held = _one(stored, "lolor_objects")
+    assert held is not None and held.isdigit() and int(held) >= 1, (
+        f"lolor storage holds {_show(held)} objects after storing large object {loid}, expected at least 1")
+
+    if caps["migrate_to_native"]:
+        exit_code, output = run_sql(container, pgbin, pgport, pguser, f"DROP EXTENSION {LOLOR_EXTENSION};",
+                                    "DROP EXTENSION lolor while lolor storage holds objects")
+        assert exit_code != 0 and STORAGE_DROP_REFUSAL in output, (
+            f"lolor {caps['extversion']} must refuse DROP EXTENSION while its storage holds {held} "
+            f"object(s) ({STORAGE_DROP_REFUSAL!r}); psql exited {exit_code}:\n{output.strip()}")
+        migrated = sql_values(container, pgbin, pgport, pguser, migrate_to_native_sql(),
+                              "migrate lolor storage to native")
+        problems = []
+        _expect(migrated, "migrated", held, problems)
+        _expect(migrated, "lolor_objects_after", 0, problems)
+        assert not problems, f"{MIGRATE_TO_NATIVE}: " + "; ".join(problems)
+        kept_meta, kept = 1, DROP_PAYLOAD.hex()
+    else:
+        kept_meta, kept = 0, ""          # 1.2.x drops the lolor tables together with their contents
+
+    values = sql_values(container, pgbin, pgport, pguser, drop_sql(loid), "DROP EXTENSION lolor")
     problems = function_state_problems(values.get("fn", []), enabled=False)
-    for key, want in (("lolor_tables", 0), ("event_trigger", 0), ("core_meta", 1), ("core_unlink", 1)):
+    for key, want in (("lolor_tables", 0), ("event_trigger", 0), ("kept_meta", kept_meta), ("kept", kept),
+                      ("core_meta", 1), ("core_unlink", 1)):
         _expect(values, key, want, problems)
     assert not problems, "DROP EXTENSION lolor: " + "; ".join(problems)
-    print("✅ DROP EXTENSION lolor restored the built-in large-object functions")
+    if caps["migrate_to_native"]:
+        print(f"✅ lolor {caps['extversion']} refused the drop while storage held {held} object(s); after "
+              f"{MIGRATE_TO_NATIVE} the drop restored the built-ins and kept large object {loid} natively")
+    else:
+        print(f"✅ DROP EXTENSION lolor {caps['extversion']} restored the built-in large-object functions")
 
 
 @pytest.mark.parametrize("container_name,container_type", all_containers)

@@ -3,6 +3,7 @@
 /usr/lib/postgresql/17/lib/bitcode/spock/src/spock_apply.bc
 /usr/lib/postgresql/17/lib/bitcode/spock/src/spock_apply_heap.bc
 /usr/lib/postgresql/17/lib/bitcode/spock/src/spock_autoddl.bc
+/usr/lib/postgresql/17/lib/bitcode/spock/src/spock_change_log.bc
 /usr/lib/postgresql/17/lib/bitcode/spock/src/spock_common.bc
 /usr/lib/postgresql/17/lib/bitcode/spock/src/spock_conflict.bc
 /usr/lib/postgresql/17/lib/bitcode/spock/src/spock_conflict_stat.bc
@@ -16,7 +17,7 @@
 /usr/lib/postgresql/17/lib/bitcode/spock/src/spock_injection.bc
 /usr/lib/postgresql/17/lib/bitcode/spock/src/spock_jsonb_utils.bc
 /usr/lib/postgresql/17/lib/bitcode/spock/src/spock_manager.bc
-/usr/lib/postgresql/17/lib/bitcode/spock/src/spock_monitoring.bc
+/usr/lib/postgresql/17/lib/bitcode/spock/src/spock_monitor.bc
 /usr/lib/postgresql/17/lib/bitcode/spock/src/spock_node.bc
 /usr/lib/postgresql/17/lib/bitcode/spock/src/spock_output_config.bc
 /usr/lib/postgresql/17/lib/bitcode/spock/src/spock_output_plugin.bc
@@ -48,12 +49,12 @@
 /usr/share/doc/pgedge-postgresql-17-spock60/changelog.Debian.gz
 /usr/share/postgresql/17/extension/spock--5.0.0--5.0.1.sql
 /usr/share/postgresql/17/extension/spock--5.0.1--5.0.2.sql
+/usr/share/postgresql/17/extension/spock--5.0.14--6.0.0.sql
 /usr/share/postgresql/17/extension/spock--5.0.2--5.0.3.sql
 /usr/share/postgresql/17/extension/spock--5.0.3--5.0.4.sql
 /usr/share/postgresql/17/extension/spock--5.0.4--5.0.5.sql
 /usr/share/postgresql/17/extension/spock--5.0.5--5.0.6.sql
 /usr/share/postgresql/17/extension/spock--5.0.6--5.0.7.sql
 /usr/share/postgresql/17/extension/spock--5.0.7--5.0.8.sql
-/usr/share/postgresql/17/extension/spock--5.0.8--6.0.0.sql
 /usr/share/postgresql/17/extension/spock--6.0.0.sql
 /usr/share/postgresql/17/extension/spock.control

@@ -337,6 +337,47 @@ def test_identity_proves_the_exact_requested_package_version(monkeypatch, tmp_pa
     assert json.loads((tmp_path / "identity-evidence.json").read_text())["l2a"] == ("proven" if ok else "not_proven")
 
 
+def _identity_with_pin(monkeypatch, tmp_path, env, buildnum, pin, observed):
+    """Run the real test_safesession_identity for release 1.1 pinned to ``pin`` with ``observed``
+    installed. Returns (outcome, message, evidence)."""
+    key = "PEP_EXPECTED_RPM" if env["PEP_FAMILY"] == "rpm" else "PEP_EXPECTED_DEB"
+    m = load(monkeypatch, dict(env, **{key: pin, "PEP_EXPECTED_BUILDNUM": buildnum}))
+    _wire(monkeypatch, tmp_path, m, _Container(_pkg_list()))
+    m.pep_integration_mode.pep_evidence.write_install_evidence(
+        m.INTEGRATION_REQUEST, "run-A", "pinned", pin, str(tmp_path / "install-evidence.json"),
+        installed_sha256="f" * 64)
+    monkeypatch.setattr(m.package_management, "query_installed_version", lambda c, n: observed)
+    ctype = "rhel" if env["PEP_FAMILY"] == "rpm" else "deb"
+    outcome, msg = _outcome(m.test_safesession_identity, env["PEP_CONTAINER_ALIAS"], ctype)
+    return outcome, msg, json.loads((tmp_path / "identity-evidence.json").read_text())
+
+
+# SafeSession's version is major.minor: 1.1 is the whole version. These are the pins the release
+# plan builds for 1.1 (RPM <version>-<buildnum>.<dist>, DEB <version>[~<pretag>]-<n>.<codename>).
+@pytest.mark.parametrize("env,buildnum,pin", [
+    (_RPM, "1", "1.1-1.el9"), (_RPM, "test1_1", "1.1-test1_1.el9"),
+    (_RPM, "rc1_1", "1.1-rc1_1.el9"), (_RPM, "beta1_1", "1.1-beta1_1.el9"),
+    (_DEB, "1", "1.1-1.trixie"), (_DEB, "test1_1", "1.1~test1-1.trixie"),
+    (_DEB, "rc1_1", "1.1~rc1-1.trixie"), (_DEB, "beta1_1", "1.1~beta1-1.trixie"),
+], ids=["rpm-ga", "rpm-test", "rpm-rc", "rpm-beta", "deb-ga", "deb-test", "deb-rc", "deb-beta"])
+def test_identity_proves_a_two_part_release_in_every_build_form(monkeypatch, tmp_path, env, buildnum, pin):
+    outcome, msg, ev = _identity_with_pin(monkeypatch, tmp_path, env, buildnum, pin, pin)
+    assert (outcome, msg) == ("passed", "")
+    assert ev == {"l2a": "proven", "l2b": "not_attempted", "l1": "proven"}
+
+
+# The installed package is exactly the pin, but its component version is not 1.1: L1 alone must
+# fail the identity step (the pin here is deliberately wrong, so L2a cannot be what rejects it).
+@pytest.mark.parametrize("env,pin", [
+    (_DEB, "11.1-1.trixie"), (_DEB, "1.10~test1-1.trixie"), (_RPM, "1.1.1-1.el9"),
+    (_RPM, "1.1.0-1.el9"), (_RPM, "21.1-test1_1.el9"),
+], ids=["11.1", "1.10-test", "1.1.1", "1.1.0", "21.1-test"])
+def test_identity_fails_when_the_component_version_is_not_the_release(monkeypatch, tmp_path, env, pin):
+    outcome, msg, ev = _identity_with_pin(monkeypatch, tmp_path, env, "1", pin, pin)
+    assert outcome == "assert" and "component-version match failed" in msg
+    assert ev == {"l2a": "proven", "l2b": "not_attempted", "l1": "not_proven"}
+
+
 def test_identity_without_install_evidence_fails_with_persisted_evidence(monkeypatch, tmp_path):
     m = load(monkeypatch, _RPM)
     _wire(monkeypatch, tmp_path, m, _Container(_pkg_list()))
@@ -486,6 +527,16 @@ def test_binding_accepts_the_release_series_with_at_most_a_pre_release_marker(mo
     assert outcome == "passed", msg
     assert ["rpm", "-qf", "--queryformat", "%{NAME}\\n", "/usr/pgsql-17/lib/pgedge_safesession.so"] in c.cmds
     assert ("postgres", "preload") in [(r, k) for r, k, _ in c.sessions]
+
+
+@pytest.mark.parametrize("ext,ok", [("1.1-beta2", True), ("1.1", True), ("1.2-beta2", False)])
+def test_binding_holds_a_tag_style_request_to_its_series(monkeypatch, ext, ok):
+    env = dict(_RPM, PEP_EXPECTED_VERSION="1.1-beta2", PEP_EXPECTED_BUILDNUM="beta2_1",
+               PEP_EXPECTED_RPM="1.1-beta2_1.el9")
+    (outcome, msg), _ = _binding(monkeypatch, env, ext=ext)
+    assert (outcome == "passed") is ok, (outcome, msg)
+    if not ok:
+        assert "pgedge_safesession extension version is '1.2-beta2'" in msg, msg
 
 
 def test_binding_passes_on_deb(monkeypatch):
@@ -642,6 +693,160 @@ def test_disabled_extension_checks_skip_standalone_and_fail_integration(monkeypa
     for fn, args in ((m.test_safesession_enforcement, ()), (m.test_create_extensions, ("pgedge_safesession",)),
                      (m.test_extension_version, ("pgedge_safesession",))):
         assert _outcome(fn, "rocky9-amd64", "rhel", *args)[0] == want
+
+
+# --------------------------------------------------------------------------- functional tests
+# The single-session functional tests (added alongside test_safesession_enforcement) run in both modes,
+# so integration mode must fail them, never skip, when they cannot run.
+_FUNCTIONAL = ["test_safesession_restricted_role_blocks_writes", "test_safesession_blocks_ddl",
+               "test_safesession_is_restricted_status", "test_safesession_superuser_not_restricted",
+               "test_safesession_set_role_cannot_bypass", "test_safesession_unlisted_role_is_not_restricted"]
+
+
+@pytest.mark.parametrize("env,want", [(_STANDALONE, "skipped"), (_RPM, "failed")], ids=["standalone", "integration"])
+def test_functional_tests_skip_standalone_and_fail_integration_when_disabled(monkeypatch, env, want):
+    m = load(monkeypatch, dict(env, CHECK_EXTENSIONS="false"))
+    monkeypatch.setattr(m, "client", _Client(_Cluster()))
+    for step in _FUNCTIONAL:
+        assert (_outcome(getattr(m, step), "rocky9-amd64", "rhel")[0], step) == (want, step)
+
+
+@pytest.mark.parametrize("env,want", [(_STANDALONE, "skipped"), (_RPM, "failed")], ids=["standalone", "integration"])
+def test_functional_tests_fail_integration_and_skip_standalone_without_a_container(monkeypatch, env, want):
+    m = load(monkeypatch, env)
+    monkeypatch.setattr(m, "client", _Client(None))
+    for step in _FUNCTIONAL:
+        outcome, msg = _outcome(getattr(m, step), "rocky9-amd64", "rhel")
+        assert (outcome, step) == (want, step) and "not found or not running" in msg
+
+
+# What each functional test's single psql session prints when SafeSession behaves as documented:
+# the IDENTITY line (session_user/current_user) printed just before the statement under test, and
+# SafeSession's error plus its hint for each expected rejection.
+_H = "HINT:  This session is restricted to read-only access by the pgedge_safesession extension.\n"
+
+
+def _rej(cmd):
+    return "psql:<stdin>:12: ERROR:  cannot execute %s in a read-only session\n" % cmd + _H
+
+
+_FUNCTIONAL_OK = {
+    "test_safesession_restricted_role_blocks_writes":
+        " IDENTITY=pep_ss_readonly/pep_ss_readonly\n alpha\n beta\n" + _rej("INSERT") + _rej("UPDATE")
+        + _rej("DELETE") + " FINAL_ROWS=2\n",
+    "test_safesession_blocks_ddl": " IDENTITY=pep_ss_ddl/pep_ss_ddl\n" + _rej("CREATE TABLE") + " DDL_TABLE_EXISTS=0\n",
+    "test_safesession_is_restricted_status":
+        " SUPER_RESTRICTED=false\n IDENTITY=pep_ss_status/pep_ss_status\n ROLE_RESTRICTED=true\n",
+    "test_safesession_superuser_not_restricted": " IDENTITY=pep_ss_super/pep_ss_super\n SUPER_ROWS=1\n",
+    "test_safesession_set_role_cannot_bypass": " IDENTITY=pep_ss_byp_ro/pep_ss_byp_rw\n" + _rej("INSERT") + " BYPASS_ROWS=0\n",
+    "test_safesession_unlisted_role_is_not_restricted": " IDENTITY=pep_ss_free/pep_ss_free\n FREE_ROWS=1\n",
+}
+# ... and what it prints when SafeSession does not enforce (or over-enforces), as the right user.
+_FUNCTIONAL_BAD = {
+    "test_safesession_restricted_role_blocks_writes": " IDENTITY=pep_ss_readonly/pep_ss_readonly\n alpha\n beta\n FINAL_ROWS=3\n",
+    "test_safesession_blocks_ddl": " IDENTITY=pep_ss_ddl/pep_ss_ddl\n DDL_TABLE_EXISTS=1\n",
+    "test_safesession_is_restricted_status":
+        " SUPER_RESTRICTED=false\n IDENTITY=pep_ss_status/pep_ss_status\n ROLE_RESTRICTED=false\n",
+    "test_safesession_superuser_not_restricted": " IDENTITY=pep_ss_super/pep_ss_super\n" + _rej("INSERT") + " SUPER_ROWS=0\n",
+    "test_safesession_set_role_cannot_bypass": " IDENTITY=pep_ss_byp_ro/pep_ss_byp_rw\n BYPASS_ROWS=1\n",
+    "test_safesession_unlisted_role_is_not_restricted":
+        " IDENTITY=pep_ss_free/pep_ss_free\n" + _rej("INSERT") + " FREE_ROWS=0\n",
+}
+_SSA_DENIED = "psql:<stdin>:8: ERROR:  permission denied to set session authorization\n"
+_SET_ROLE_DENIED = 'psql:<stdin>:11: ERROR:  permission denied to set role "pep_ss_byp_rw"\n'
+# Failed role switches. With ON_ERROR_STOP on psql stops at the failed switch (exit 3). The rc-0
+# cases are what the old ON_ERROR_STOP=0 script printed: the statement under test then ran as the
+# wrong user, yet every row/marker the old assertions looked at was still "right".
+_FAILED_SWITCH = {
+    "test_safesession_unlisted_role_is_not_restricted": [
+        (3, _SSA_DENIED),
+        (0, _SSA_DENIED + " IDENTITY=postgres/postgres\n FREE_ROWS=1\n"),
+    ],
+    "test_safesession_set_role_cannot_bypass": [
+        (3, " " + _SET_ROLE_DENIED),
+        (0, _SET_ROLE_DENIED + " IDENTITY=pep_ss_byp_ro/pep_ss_byp_ro\n" + _rej("INSERT") + " BYPASS_ROWS=0\n"),
+        # SET ROLE silently not in effect: same session user, but the current role never changed.
+        (0, " IDENTITY=pep_ss_byp_ro/pep_ss_byp_ro\n" + _rej("INSERT") + " BYPASS_ROWS=0\n"),
+    ],
+    "test_safesession_superuser_not_restricted": [
+        (3, _SSA_DENIED),
+        (0, _SSA_DENIED + " IDENTITY=postgres/postgres\n SUPER_ROWS=1\n"),
+    ],
+    "test_safesession_restricted_role_blocks_writes": [
+        (3, _SSA_DENIED),
+        # Right user, but a setup error the old script ignored (the GRANT failed).
+        (0, "psql:<stdin>:6: ERROR:  permission denied for table pep_ss_tbl\n"
+            + _FUNCTIONAL_OK["test_safesession_restricted_role_blocks_writes"]),
+    ],
+    "test_safesession_blocks_ddl": [
+        (3, _SSA_DENIED),
+        # The table was not created, but by core (no privilege), not by SafeSession.
+        (0, " IDENTITY=pep_ss_ddl/pep_ss_ddl\npsql:<stdin>:9: ERROR:  permission denied for schema public\n"
+            " DDL_TABLE_EXISTS=0\n"),
+    ],
+    "test_safesession_is_restricted_status": [
+        (3, " SUPER_RESTRICTED=false\n" + _SSA_DENIED),
+    ],
+}
+
+
+def _script_responder(outputs):
+    """exec_run responder: a psql heredoc script gets ``outputs['script']`` with exit code
+    ``outputs.get('rc', 0)``; cleanup scripts get ''."""
+    def respond(cmd):
+        assert cmd[:2] == ["bash", "-c"] and "psql -X -q" in cmd[2] and "<<'EOSQL'" in cmd[2], cmd
+        if "DROP OWNED BY" in cmd[2] and "SET SESSION AUTHORIZATION" not in cmd[2]:
+            return 0, ""
+        return outputs.get("rc", 0), outputs["script"]
+    return respond
+
+
+@pytest.mark.parametrize("env", [_RPM, _STANDALONE], ids=["integration", "standalone"])
+@pytest.mark.parametrize("step", _FUNCTIONAL)
+def test_functional_tests_pass_on_enforcement_and_fail_without_it(monkeypatch, env, step):
+    m = load(monkeypatch, env)
+    outputs = {"script": _FUNCTIONAL_OK[step]}
+    c = _Container(_script_responder(outputs))
+    monkeypatch.setattr(m, "client", _Client(c))
+    assert _outcome(getattr(m, step), "rocky9-amd64", "rhel") == ("passed", "")
+    # Every scenario script runs as the server's superuser in ONE session and is followed by cleanup.
+    assert len(c.cmds) == 2 and "DROP OWNED BY" in c.cmds[-1][2]
+    outputs["script"] = _FUNCTIONAL_BAD[step]
+    c.cmds.clear()
+    assert _outcome(getattr(m, step), "rocky9-amd64", "rhel")[0] == "assert"
+    assert len(c.cmds) == 2 and "DROP OWNED BY" in c.cmds[-1][2], "cleanup must run after a failure too"
+
+
+@pytest.mark.parametrize("env", [_RPM, _STANDALONE], ids=["integration", "standalone"])
+@pytest.mark.parametrize("step,rc,out", [(st, rc, out) for st, cases in _FAILED_SWITCH.items() for rc, out in cases],
+                         ids=["%s-%d" % (st.replace("test_safesession_", ""), i)
+                              for st, cases in _FAILED_SWITCH.items() for i in range(len(cases))])
+def test_a_failed_role_switch_or_setup_error_never_passes(monkeypatch, env, step, rc, out):
+    m = load(monkeypatch, env)
+    c = _Container(_script_responder({"script": out, "rc": rc}))
+    monkeypatch.setattr(m, "client", _Client(c))
+    outcome, msg = _outcome(getattr(m, step), "rocky9-amd64", "rhel")
+    assert outcome == "assert" and "Untrusted scenario" in msg, (outcome, msg)
+    assert len(c.cmds) == 2 and "DROP OWNED BY" in c.cmds[-1][2], "cleanup must still run"
+
+
+@pytest.mark.parametrize("step", _FUNCTIONAL)
+def test_each_scenario_stops_on_setup_errors_and_proves_its_identity_first(monkeypatch, step):
+    """The scenario session runs with ON_ERROR_STOP on; the IDENTITY query follows the last role
+    switch and precedes the statement under test; ON_ERROR_STOP is off only after it."""
+    m = load(monkeypatch, _RPM)
+    c = _Container(_script_responder({"script": _FUNCTIONAL_OK[step]}))
+    monkeypatch.setattr(m, "client", _Client(c))
+    _outcome(getattr(m, step), "rocky9-amd64", "rhel")
+    script = c.cmds[0][2]
+    assert "-v ON_ERROR_STOP=1 <<'EOSQL'" in script and "ON_ERROR_STOP=0" not in script
+    lines = script.splitlines()
+    ident = lines.index(m.IDENTITY_SQL)
+    switches = [i for i, l in enumerate(lines) if l.startswith(("SET SESSION AUTHORIZATION", "SET ROLE"))]
+    assert switches and max(switches) < ident
+    offs = [i for i, l in enumerate(lines) if l == "\\set ON_ERROR_STOP off"]
+    ons = [i for i, l in enumerate(lines) if l == "\\set ON_ERROR_STOP on"]
+    assert len(offs) == len(ons) <= 1 and all(ident < o < n for o, n in zip(offs, ons))
 
 
 # --------------------------------------------------------------------------- missing references

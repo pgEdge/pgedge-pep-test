@@ -145,8 +145,9 @@ def test_real_catalog_loads_with_all_aliases():
     """The shipped configuration/containers_list.json must load cleanly
     and expose an alias on every entry."""
     catalog = cr.load_catalog("configuration/containers_list.json")
-    assert len(catalog.entries) == 17, (
-        f"expected 17 catalog entries, got {len(catalog.entries)}"
+    # 19 since 6d41938 added physical ubuntu2204-amd64 and ubuntu2404-amd64 entries.
+    assert len(catalog.entries) == 19, (
+        f"expected 19 catalog entries, got {len(catalog.entries)}"
     )
     for e in catalog.entries:
         assert e.alias, f"{e.name}: alias must be non-empty"
@@ -606,9 +607,9 @@ def _run_cli(*args, env_extra=None, cwd=None):
 def test_cli_list_containers_against_real_catalog():
     cp = _run_cli("list-containers")
     assert cp.returncode == 0
-    # Real catalog has 17 entries
+    # Real catalog has 19 entries (incl. the physical ubuntu2204/2404 amd64 entries)
     body_lines = [l for l in cp.stdout.splitlines() if l and "ALIAS" not in l]
-    assert len(body_lines) == 17
+    assert len(body_lines) == 19
 
 
 def test_cli_validate_global_default_emits_no_override_chatter():

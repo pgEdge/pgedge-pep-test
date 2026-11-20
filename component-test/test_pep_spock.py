@@ -1,5 +1,6 @@
 import json
 import os
+import re
 import sys
 import time
 import importlib.util as _ilu
@@ -149,6 +150,15 @@ def get_spock_pkg_name(container_type):
     if container_type == "rhel":
         return f"pgedge-spock{spock_major}_{pg_major_version}"
     return f"pgedge-postgresql-{pg_major_version}-spock{spock_major}"
+
+
+def extension_version_for(package_version):
+    """Standalone mode: the spock extension version a configured package version ships. The
+    extension version is SPOCK_VERSION from include/spock.h, which never carries the pre-release
+    tag that only the package version does (PGEDGE_SPOCK60_<pg>_VERSION=6.0.0beta2 is package
+    6.0.0-beta2_1 / 6.0.0~beta2-1 with extension 6.0.0). A release version is returned unchanged."""
+    m = re.match(r"[0-9]+(?:\.[0-9]+)*", package_version.strip())
+    return m.group(0) if m else package_version.strip()
 
 
 def _psql_value(container, port, pguser, sql):
@@ -701,9 +711,10 @@ def test_verify_spock_extension_version(container_name, container_type):
         return
 
     spock_version_var = f"PGEDGE_SPOCK{spock_major}_{pg_major_version}_VERSION"
-    expected_version = os.getenv(spock_version_var, "")
-    if not expected_version:
+    configured_version = os.getenv(spock_version_var, "")
+    if not configured_version:
         pytest.skip(f"{spock_version_var} not set in env")
+    expected_version = extension_version_for(configured_version)
 
     print(f"\n--- Verifying Spock extension version on all nodes (expected: {expected_version}) ---")
 
@@ -723,7 +734,7 @@ def test_verify_spock_extension_version(container_name, container_type):
 
         assert exit_code == 0, f"Failed to query Spock extension version on {node_name}: {out}"
         assert out, f"Spock extension not found in pg_extension on {node_name}"
-        assert expected_version in out, (
+        assert out == expected_version, (
             f"Spock version mismatch on {node_name}: expected '{expected_version}', got '{out}'"
         )
 

@@ -490,3 +490,96 @@ def test_standalone_spock5_extension_check_is_unchanged(monkeypatch):
     _standalone_extension_check(monkeypatch, "50", "5.0.14", "5.0.14")
     with pytest.raises(AssertionError, match="expected '5.0.14', got '5.0.13'"):
         _standalone_extension_check(monkeypatch, "50", "5.0.14", "5.0.13")
+
+
+# --------------------------------------------------------------------------- Spock 6 DEB file contract
+# expected-output/deb/spock60 against Spock tag v6.0.0-beta.2 (d05e2e2b): the bitcode its Makefile
+# builds (src/*.c and src/compat/<pg>/*.c, spock_output separately) and the upgrade scripts it ships
+# (sql/spock*--*.sql), as the noble amd64 PG17 DEB build installed them (pgEdge/spock run 44045406576,
+# job 133909938946). beta.2 renamed spock_monitoring.c to spock_monitor.c and added spock_change_log.c.
+# Spock 5 (v5_STABLE) still builds spock_monitoring.c, so expected-output/deb/spock50 keeps that name.
+_REPO = os.path.join(os.path.dirname(__file__), "..", "..", "..")
+_BITCODE = "/usr/lib/postgresql/17/lib/bitcode/spock/src/"
+_EXTENSION = "/usr/share/postgresql/17/extension/"
+_SPOCK6_BETA2_BITCODE = (
+    "compat/17/spock_compat", "spock", "spock_apply", "spock_apply_heap", "spock_autoddl", "spock_change_log",
+    "spock_common", "spock_conflict", "spock_conflict_stat", "spock_dependency", "spock_exception_handler",
+    "spock_executor", "spock_failover_slots", "spock_fe", "spock_functions", "spock_group", "spock_injection",
+    "spock_jsonb_utils", "spock_manager", "spock_monitor", "spock_node", "spock_output_config",
+    "spock_output_plugin", "spock_output_proto", "spock_progress_recovery", "spock_proto_json",
+    "spock_proto_native", "spock_queue", "spock_readonly", "spock_relcache", "spock_repset", "spock_rmgr",
+    "spock_rpc", "spock_sequences", "spock_shmem", "spock_sync", "spock_worker")
+_SPOCK6_BETA2_SQL = frozenset(
+    ["spock--5.0.%d--5.0.%d.sql" % (v, v + 1) for v in range(14)]
+    + ["spock--5.0.14--6.0.0.sql", "spock--6.0.0--6.0.0-beta1-to-beta2.sql",
+       "spock--6.0.0-beta1-to-beta2--6.0.0.sql", "spock--6.0.0.sql"])
+_SPOCK6_DEB = "pgedge-postgresql-17-spock60"
+
+
+def _reference(family, name):
+    with open(os.path.join(_REPO, "expected-output", family, name)) as f:
+        return f.read().splitlines()
+
+
+def test_the_spock6_deb_reference_lists_exactly_the_beta2_bitcode():
+    ref = _reference("deb", "spock60")
+    listed = sorted(l[len(_BITCODE):-len(".bc")] for l in ref if l.startswith(_BITCODE) and l.endswith(".bc"))
+    assert listed == sorted(_SPOCK6_BETA2_BITCODE)
+    assert _BITCODE + "spock_monitoring.bc" not in ref
+
+
+def test_the_spock6_deb_reference_names_only_upgrade_scripts_beta2_ships():
+    sql = {l[len(_EXTENSION):] for l in _reference("deb", "spock60") if l.startswith(_EXTENSION) and l.endswith(".sql")}
+    assert sql <= _SPOCK6_BETA2_SQL, sorted(sql - _SPOCK6_BETA2_SQL)
+    assert {"spock--5.0.14--6.0.0.sql", "spock--6.0.0.sql"} <= sql
+
+
+def test_the_spock5_deb_reference_keeps_spock_monitoring():
+    ref = _reference("deb", "spock50")
+    assert _BITCODE + "spock_monitoring.bc" in ref
+    assert _BITCODE + "spock_monitor.bc" not in ref and _BITCODE + "spock_change_log.bc" not in ref
+
+
+def _beta2_deb_listing(rename=None, drop=None):
+    """``dpkg -L pgedge-postgresql-17-spock60`` for the beta.2 DEB: the recorded bitcode and upgrade
+    scripts, the reference's other entries (libraries, bitcode indexes, SBOM, docs, control) and the
+    directories dpkg lists. ``rename`` = (old, new) bitcode name; ``drop`` = a bitcode name to leave out."""
+    bitcode = [(rename[1] if rename and b == rename[0] else b) for b in _SPOCK6_BETA2_BITCODE if b != drop]
+    other = [l for l in _reference("deb", "spock60")
+             if not (l.startswith(_BITCODE) or (l.startswith(_EXTENSION) and l.endswith(".sql")))]
+    dirs = ["/.", "/usr", "/usr/lib", "/usr/lib/postgresql", "/usr/lib/postgresql/17", "/usr/lib/postgresql/17/lib",
+            "/usr/lib/postgresql/17/lib/bitcode/spock/src", "/usr/share/postgresql/17/extension"]
+    return dirs + other + [_BITCODE + b + ".bc" for b in bitcode] + [_EXTENSION + s for s in sorted(_SPOCK6_BETA2_SQL)]
+
+
+def _real_bundled_outcome(monkeypatch, listing):
+    """Run the real test_verify_bundled_files, with the real file_management check and reference,
+    on a Spock 6 beta.2 DEB request whose package lists ``listing``."""
+    m = load(monkeypatch, _BETA2_DEB)
+
+    def respond(cmd):
+        if cmd == "dpkg -L %s" % _SPOCK6_DEB:
+            return 0, "".join(f + "\n" for f in listing)
+        return _pkg_list(_SPOCK6_DEB)(cmd) if isinstance(cmd, list) else (1, "unexpected")
+    monkeypatch.setattr(m, "client", _Client(_Container(respond)))
+    try:
+        m.test_verify_bundled_files("ubuntu2404-arm64", "deb")
+    except pytest.skip.Exception as e:
+        return "skipped", str(e)
+    except pytest.fail.Exception as e:
+        return "failed", str(e)
+    return "passed", ""
+
+
+def test_the_real_bundled_file_check_passes_the_beta2_deb_payload(monkeypatch):
+    assert _real_bundled_outcome(monkeypatch, _beta2_deb_listing()) == ("passed", "")
+
+
+@pytest.mark.parametrize("listing,missing", [
+    (dict(rename=("spock_monitor", "spock_monitoring")), "spock_monitor.bc"),
+    (dict(drop="spock_change_log"), "spock_change_log.bc"),
+    (dict(drop="spock_monitor"), "spock_monitor.bc"),
+], ids=["spock5-monitoring-name", "no-change-log", "no-monitor"])
+def test_the_real_bundled_file_check_still_fails_a_missing_beta2_file(monkeypatch, listing, missing):
+    status, msg = _real_bundled_outcome(monkeypatch, _beta2_deb_listing(**listing))
+    assert status == "failed" and "Missing 1 expected files" in msg and missing in msg, msg

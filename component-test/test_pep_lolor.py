@@ -199,13 +199,15 @@ MIGRATE_TO_NATIVE = "lolor.migrate_to_native()"
 LOLOR_CAPABILITIES = ("migrate_to_native", "description_table")
 LOLOR_2_LIFECYCLE_FROM = (1, 3, 0)
 # The SQL scripts each lolor release installs into the extension directory: the owner's Makefile
-# DATA at that release (v1_STABLE for 1.2.3, main for 1.3.0, #86 for 2.0.0). The generic bundled-
+# DATA at that release (tag v1.2.2 for 1.2.2, this module's standalone fallback; v1_STABLE for
+# 1.2.3, main for 1.3.0, #86 for 2.0.0). The generic bundled-
 # file check normalizes version numbers in file names, so it cannot tell a base script from an
 # upgrade script; this list can. A release missing here fails the SQL-script check until its
 # Makefile DATA is recorded.
 _LOLOR_1_2_3_SQL = ("lolor--1.0.sql", "lolor--1.0--1.2.1.sql", "lolor--1.2.1--1.2.2.sql",
                     "lolor--1.2.2--1.2.3.sql")
 LOLOR_SQL_SCRIPTS = {
+    "1.2.2": _LOLOR_1_2_3_SQL[:3],
     "1.2.3": _LOLOR_1_2_3_SQL,
     "1.3.0": _LOLOR_1_2_3_SQL + ("lolor--1.2.3--1.3.0.sql",),
     "2.0.0": ("lolor--2.0.0.sql",) + _LOLOR_1_2_3_SQL + ("lolor--1.2.3--2.0.0.sql",),

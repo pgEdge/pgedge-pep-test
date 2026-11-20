@@ -1280,6 +1280,7 @@ def _ext(names, family="rpm"):
 _V2 = ["lolor--2.0.0.sql", "lolor--1.0.sql", "lolor--1.0--1.2.1.sql", "lolor--1.2.1--1.2.2.sql",
        "lolor--1.2.2--1.2.3.sql", "lolor--1.2.3--2.0.0.sql"]
 _V123 = ["lolor--1.0.sql", "lolor--1.0--1.2.1.sql", "lolor--1.2.1--1.2.2.sql", "lolor--1.2.2--1.2.3.sql"]
+_V122 = ["lolor--1.0.sql", "lolor--1.0--1.2.1.sql", "lolor--1.2.1--1.2.2.sql"]     # lolor v1.2.2 Makefile DATA
 
 
 @pytest.mark.parametrize("names,version,problem", [
@@ -1293,8 +1294,12 @@ _V123 = ["lolor--1.0.sql", "lolor--1.0--1.2.1.sql", "lolor--1.2.1--1.2.2.sql", "
     (_V2 + ["lolor--1.2.3--1.3.0.sql"], "2.0.0", "not part of lolor 2.0.0: lolor--1.2.3--1.3.0.sql"),
     (_V2, "1.2.3", "not part of lolor 1.2.3: lolor--1.2.3--2.0.0.sql, lolor--2.0.0.sql"),
     (_V123, "1.2.4", "no SQL-script contract is recorded for lolor '1.2.4'"),
+    (_V122, "1.2.2", None),
+    ([n for n in _V122 if n != "lolor--1.2.1--1.2.2.sql"], "1.2.2", "missing for lolor 1.2.2: lolor--1.2.1--1.2.2.sql"),
+    (_V123, "1.2.2", "not part of lolor 1.2.2: lolor--1.2.2--1.2.3.sql"),
 ], ids=["2.0.0", "1.2.3", "1.3.0", "2.0-missing-base", "2.0-missing-upgrade", "1.2.3-missing-upgrade",
-        "1.2.3-missing-base", "2.0-stray-1.3.0-script", "2.0-files-under-1.2.3-control", "unrecorded-release"])
+        "1.2.3-missing-base", "2.0-stray-1.3.0-script", "2.0-files-under-1.2.3-control", "unrecorded-release",
+        "1.2.2", "1.2.2-missing-upgrade", "1.2.3-files-under-1.2.2-control"])
 def test_sql_scripts_must_match_the_release_exactly(names, version, problem):
     problems = load_standalone().lolor_sql_script_problems(_ext(names), version)
     if problem is None:
@@ -1319,17 +1324,26 @@ def test_the_generic_file_check_alone_misses_a_missing_2_0_base_script():
     ("deb", "deb", [n for n in _V2 if n != "lolor--1.2.3--2.0.0.sql"], False),
 ], ids=["rpm-2.0", "deb-2.0", "rpm-missing-base", "deb-missing-upgrade"])
 def test_the_sql_script_check_reads_the_package_listing_and_its_control_file(monkeypatch, family, ctype, names, ok):
-    m = load(monkeypatch, _RPM if family == "rpm" else _DEB)
-    listing = "\n".join(_ext(names, family)) + "\n"
+    env = _RPM if family == "rpm" else _DEB
+    m = load(monkeypatch, env)
+    paths = _ext(names, family)
+    listing = "\n".join(paths) + "\n"
+    # Only the requested package's own listing and the control file it lists are answered, so the
+    # check cannot pass on another package's inventory or another control file.
+    want_listing = (["rpm", "-ql", env["PEP_PACKAGE_NAME"]] if family == "rpm"
+                    else ["dpkg", "-L", env["PEP_PACKAGE_NAME"]])
+    want_control = ["cat", next(p for p in paths if p.endswith("/extension/lolor.control"))]
 
     def respond(cmd):
-        if cmd[0] in ("rpm", "dpkg"):
+        if cmd == want_listing:
             return 0, listing
-        if cmd[0] == "cat" and cmd[1].endswith("/extension/lolor.control"):
+        if cmd == want_control:
             return 0, "comment = 'lolor'\ndefault_version = '2.0.0'\nrelocatable = false\n"
         return 1, "unexpected %r" % (cmd,)
-    monkeypatch.setattr(m, "client", _Client(_Container(respond)))
+    container = _Container(respond)
+    monkeypatch.setattr(m, "client", _Client(container))
     got = _outcome(m.test_verify_sql_scripts, "rocky9-amd64" if family == "rpm" else "debian13-amd64", ctype)
+    assert container.cmds == [want_listing, want_control], container.cmds
     assert (got[0] == "passed") is ok, got
     if not ok:
         assert "missing for lolor 2.0.0" in got[1]
@@ -1339,9 +1353,19 @@ def test_the_sql_script_check_fails_on_a_control_file_without_one_default_versio
     m = load(monkeypatch, _RPM)
 
     def respond(cmd):
-        if cmd[0] == "rpm":
+        if cmd == ["rpm", "-ql", _RPM["PEP_PACKAGE_NAME"]]:
             return 0, "\n".join(_ext(_V2)) + "\n"
-        return 0, "comment = 'lolor'\n"
+        if cmd == ["cat", "/usr/pgsql-17/share/extension/lolor.control"]:
+            return 0, "comment = 'lolor'\n"
+        return 1, "unexpected %r" % (cmd,)
     monkeypatch.setattr(m, "client", _Client(_Container(respond)))
     got = _outcome(m.test_verify_sql_scripts, "rocky9-amd64", "rhel")
     assert got[0] == "failed" and "sets no single default_version" in got[1], got[1]
+
+
+def test_the_standalone_fallback_version_has_a_recorded_sql_script_contract(monkeypatch):
+    """Without PGEDGE_LOLOR_<pg>_VERSION the module tests lolor 1.2.2; its SQL scripts (lolor
+    v1.2.2 Makefile DATA) are recorded, so a 1.2.2 package is checked rather than rejected."""
+    m = load(monkeypatch, {k: v for k, v in _STANDALONE.items() if not k.startswith("PGEDGE_LOLOR_")})
+    assert m.lolor_version == "1.2.2"
+    assert m.LOLOR_SQL_SCRIPTS[m.lolor_version] == tuple(_V122)

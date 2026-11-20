@@ -69,7 +69,8 @@ zodan_sql_script = (Path(__file__).parent.parent / "config" / "spock" / zodan_sq
 
 # Spock major version (e.g. "60" -> spock60-sbom.json, PGEDGE_SPOCK60_xx_VERSION).
 # spock60 is a separate major version from spock50; both coexist in the repo.
-spock_major = os.getenv("SPOCK_MAJOR", "60")
+# Unset means Spock 5 (50), as in the config files; Spock 6 (beta) is opt-in.
+spock_major = os.getenv("SPOCK_MAJOR", "50")
 
 # spock60 is NOT bundled in the pgedge-enterprise-all meta package, so when it is
 # selected we install a customized package set (spock + contrib + the integration

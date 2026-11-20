@@ -55,7 +55,8 @@ _output_plugin_yaml = "".join(
 
 # Spock major version (e.g. "60" -> pgedge-spock60_xx). spock60 is a separate
 # major version from spock50; both coexist in the repo, so it is selectable.
-spock_major = os.getenv("SPOCK_MAJOR", "60")
+# Unset means Spock 5 (50), as in the config files; Spock 6 (beta) is opt-in.
+spock_major = os.getenv("SPOCK_MAJOR", "50")
 
 # Zodan cross-wiring script — must match the spock major. spock60 renamed
 # internal catalog columns (e.g. remote_lsn -> remote_commit_lsn), so it needs

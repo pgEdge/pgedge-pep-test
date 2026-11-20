@@ -1140,10 +1140,21 @@ def test_a_1_2_drop_that_kept_lolor_storage_fails(monkeypatch):
 
 
 @pytest.mark.parametrize("answer,msg", [
-    ((0, ""), "lolor capability migrate_to_native on port 6433 = None, expected 't' or 'f'"),
+    ((0, ""), "lolor is not installed on port 6433 (no extversion answer)"),
+    ((0, _labelled(extversion="2.0.0")), "lolor capability migrate_to_native on port 6433 = None, expected 't' or 'f'"),
     ((0, _labelled(extversion="2.0.0", migrate_to_native="t")), "lolor capability description_table"),
+    ((0, _labelled(extversion="2.0.0", migrate_to_native="true", description_table="true")),
+     "lolor capability migrate_to_native on port 6433 = 'true', expected 't' or 'f'"),
+    ((0, _labelled(extversion="2.0.0", migrate_to_native="f", description_table="f")),
+     "lolor 2.0.0 on port 6433 lacks migrate_to_native, description_table"),
+    ((0, _labelled(extversion="2.0.0", migrate_to_native="t", description_table="f")),
+     "lolor 2.0.0 on port 6433 lacks description_table"),
+    ((0, _labelled(extversion="1.2.3", migrate_to_native="t", description_table="t")),
+     "which no lolor before 1.3.0 has"),
+    ((0, _labelled(extversion="two", migrate_to_native="f", description_table="f")), "is not a dotted version"),
     ((3, "ERROR:  boom\n"), "lolor capabilities: psql exited 3"),
-], ids=["no-answer", "partial-answer", "sql-error"])
+], ids=["no-answer", "no-capability-answer", "partial-answer", "boolean-words", "2.0-without-features",
+        "2.0-without-description-table", "1.2-with-2.0-features", "unreadable-version", "sql-error"])
 def test_an_unclear_capability_answer_fails_before_anything_is_dropped(monkeypatch, answer, msg):
     got, s, c, m = _drop_run(monkeypatch, **{"lolor capabilities": answer})
     assert got[0] == "failed" and msg in got[1], got[1]
@@ -1182,3 +1193,155 @@ def test_a_2_0_initial_sync_of_only_the_two_old_tables_is_not_enough(monkeypatch
     assert got[0] == "failed" and "did not finish the initial sync of lolor.pg_largeobject, " \
         "lolor.pg_largeobject_metadata, lolor.pg_largeobject_description" in got[1], got[1]
     assert "write a large object on the publisher" not in [label for label, _p in s.seen]
+
+
+# ----------------------------------------------------------------------------
+# Capability answers as PostgreSQL really prints them, and the release contract
+# ----------------------------------------------------------------------------
+# Output recorded from postgres:17.11 (psql -X -q -t -A) for the probes in lolor_capabilities_sql()
+# before and after the CASE fix (records: repo-state-audit-20261120/correction-pass/
+# real-pg-capabilities-check.log). Concatenating a boolean to text prints true/false; the probes now
+# print t/f.
+_REAL_OLD_ABSENT = "migrate_to_native=false\ndescription_table=false\n"
+_REAL_OLD_PRESENT = "migrate_to_native=true\ndescription_table=true\n"
+_REAL_NEW_ABSENT = "migrate_to_native=f\ndescription_table=f\n"
+_REAL_NEW_PRESENT = "migrate_to_native=t\ndescription_table=t\n"
+
+
+def test_each_capability_probe_prints_t_or_f_not_a_boolean_cast():
+    m = load_standalone()
+    sql = m.lolor_capabilities_sql()
+    probes = [line for line in sql.splitlines() if "to_reg" in line]
+    assert len(probes) == 2
+    for line in probes:
+        assert "CASE WHEN" in line and "THEN \x27t\x27 ELSE \x27f\x27 END" in line, line
+
+
+@pytest.mark.parametrize("output,extversion,want", [
+    (_REAL_NEW_ABSENT, "1.2.3", {"migrate_to_native": False, "description_table": False, "lifecycle_2": False}),
+    (_REAL_NEW_PRESENT, "2.0.0", {"migrate_to_native": True, "description_table": True, "lifecycle_2": True}),
+], ids=["1.2.3", "2.0.0"])
+def test_real_postgres_answers_parse(output, extversion, want):
+    m = load_standalone()
+    values = m.labelled_values("extversion=%s\n%s" % (extversion, output))
+    caps = m.parse_lolor_capabilities(values, 6433)
+    assert {k: caps[k] for k in want} == want and caps["extversion"] == extversion
+
+
+@pytest.mark.parametrize("output,extversion", [(_REAL_OLD_ABSENT, "1.2.3"), (_REAL_OLD_PRESENT, "2.0.0")],
+                         ids=["old-1.2.3", "old-2.0.0"])
+def test_the_old_boolean_cast_output_is_rejected_not_misread(output, extversion):
+    m = load_standalone()
+    values = m.labelled_values("extversion=%s\n%s" % (extversion, output))
+    with pytest.raises(AssertionError, match="expected \x27t\x27 or \x27f\x27"):
+        m.parse_lolor_capabilities(values, 6433)
+
+
+@pytest.mark.parametrize("version,lifecycle_2", [
+    ("1.2.3", False), ("1.2.2", False), ("1.3.0", True), ("2.0.0", True), ("2.0", True), ("2.1.4", True)])
+def test_the_release_contract_decides_the_lifecycle(version, lifecycle_2):
+    assert load_standalone().lolor_lifecycle_2(version) is lifecycle_2
+
+
+
+
+def load_standalone():
+    """A standalone copy of the module, for its pure functions."""
+    with pytest.MonkeyPatch.context() as mp:
+        return load(mp, _STANDALONE)
+
+
+def test_a_2_0_release_missing_its_features_fails_instead_of_taking_the_1_2_path(monkeypatch):
+    """The reproduced gap: extversion 2.0.0 with neither 2.0 feature used to run the 1.2.x drop path
+    and pass. It must now stop at the capability check, before anything is dropped."""
+    got, s, c, m = _drop_run(monkeypatch, env=_RPM, **{"lolor capabilities": (
+        0, "extversion=2.0.0\n" + _REAL_NEW_ABSENT)})
+    assert got[0] == "failed" and "lacks migrate_to_native, description_table" in got[1], got[1]
+    assert [label for label, _p in s.seen] == ["lolor capabilities"]
+    assert "allow_unsafe_drop" not in "".join(_script(cmd)[2] for cmd in c.cmds if _script(cmd))
+
+
+def test_replication_also_refuses_a_2_0_release_missing_its_features(monkeypatch):
+    got, m, s, c, *_rest = _run_replication(
+        monkeypatch, _STANDALONE, lifecycle="2.0",
+        scripts=lambda m: _replication(m, **{"lolor capabilities": (0, "extversion=2.0.0\n" + _REAL_NEW_ABSENT)}))
+    assert got[0] == "failed" and "lacks migrate_to_native, description_table" in got[1], got[1]
+    assert "create the publication" not in [label for label, _p in s.seen]
+
+
+# ----------------------------------------------------------------------------
+# Exact SQL scripts per release (owner Makefile DATA)
+# ----------------------------------------------------------------------------
+def _ext(names, family="rpm"):
+    d = "/usr/pgsql-17/share/extension/" if family == "rpm" else "/usr/share/postgresql/17/extension/"
+    return [d + n for n in names] + [d + "lolor.control", "/usr/pgsql-17/lib/lolor.so"]
+
+
+_V2 = ["lolor--2.0.0.sql", "lolor--1.0.sql", "lolor--1.0--1.2.1.sql", "lolor--1.2.1--1.2.2.sql",
+       "lolor--1.2.2--1.2.3.sql", "lolor--1.2.3--2.0.0.sql"]
+_V123 = ["lolor--1.0.sql", "lolor--1.0--1.2.1.sql", "lolor--1.2.1--1.2.2.sql", "lolor--1.2.2--1.2.3.sql"]
+
+
+@pytest.mark.parametrize("names,version,problem", [
+    (_V2, "2.0.0", None),
+    (_V123, "1.2.3", None),
+    (_V123 + ["lolor--1.2.3--1.3.0.sql"], "1.3.0", None),
+    ([n for n in _V2 if n != "lolor--2.0.0.sql"], "2.0.0", "missing for lolor 2.0.0: lolor--2.0.0.sql"),
+    ([n for n in _V2 if n != "lolor--1.2.3--2.0.0.sql"], "2.0.0", "missing for lolor 2.0.0: lolor--1.2.3--2.0.0.sql"),
+    ([n for n in _V123 if n != "lolor--1.2.2--1.2.3.sql"], "1.2.3", "missing for lolor 1.2.3: lolor--1.2.2--1.2.3.sql"),
+    ([n for n in _V123 if n != "lolor--1.0.sql"], "1.2.3", "missing for lolor 1.2.3: lolor--1.0.sql"),
+    (_V2 + ["lolor--1.2.3--1.3.0.sql"], "2.0.0", "not part of lolor 2.0.0: lolor--1.2.3--1.3.0.sql"),
+    (_V2, "1.2.3", "not part of lolor 1.2.3: lolor--1.2.3--2.0.0.sql, lolor--2.0.0.sql"),
+    (_V123, "1.2.4", "no SQL-script contract is recorded for lolor '1.2.4'"),
+], ids=["2.0.0", "1.2.3", "1.3.0", "2.0-missing-base", "2.0-missing-upgrade", "1.2.3-missing-upgrade",
+        "1.2.3-missing-base", "2.0-stray-1.3.0-script", "2.0-files-under-1.2.3-control", "unrecorded-release"])
+def test_sql_scripts_must_match_the_release_exactly(names, version, problem):
+    problems = load_standalone().lolor_sql_script_problems(_ext(names), version)
+    if problem is None:
+        assert problems == []
+    else:
+        assert any(problem in p for p in problems), problems
+
+
+def test_the_generic_file_check_alone_misses_a_missing_2_0_base_script():
+    """Why the SQL-script check exists: the generic bundled-file normalizer maps the versions in
+    base and upgrade script names alike, so a 2.0 package without lolor--2.0.0.sql still matched
+    the generic list (aspects/file_management.py:432 turns both lolor--2.0.0.sql and
+    lolor--1.2.3--2.0.0.sql into lolor--ver.sql). The release contract catches it."""
+    without_base = [n for n in _V2 if n != "lolor--2.0.0.sql"]
+    assert load_standalone().lolor_sql_script_problems(_ext(without_base), "2.0.0") == [
+        "missing for lolor 2.0.0: lolor--2.0.0.sql"]
+
+
+@pytest.mark.parametrize("family,ctype,names,ok", [
+    ("rpm", "rhel", _V2, True), ("deb", "deb", _V2, True),
+    ("rpm", "rhel", [n for n in _V2 if n != "lolor--2.0.0.sql"], False),
+    ("deb", "deb", [n for n in _V2 if n != "lolor--1.2.3--2.0.0.sql"], False),
+], ids=["rpm-2.0", "deb-2.0", "rpm-missing-base", "deb-missing-upgrade"])
+def test_the_sql_script_check_reads_the_package_listing_and_its_control_file(monkeypatch, family, ctype, names, ok):
+    m = load(monkeypatch, _RPM if family == "rpm" else _DEB)
+    listing = "\n".join(_ext(names, family)) + "\n"
+
+    def respond(cmd):
+        if cmd[0] in ("rpm", "dpkg"):
+            return 0, listing
+        if cmd[0] == "cat" and cmd[1].endswith("/extension/lolor.control"):
+            return 0, "comment = 'lolor'\ndefault_version = '2.0.0'\nrelocatable = false\n"
+        return 1, "unexpected %r" % (cmd,)
+    monkeypatch.setattr(m, "client", _Client(_Container(respond)))
+    got = _outcome(m.test_verify_sql_scripts, "rocky9-amd64" if family == "rpm" else "debian13-amd64", ctype)
+    assert (got[0] == "passed") is ok, got
+    if not ok:
+        assert "missing for lolor 2.0.0" in got[1]
+
+
+def test_the_sql_script_check_fails_on_a_control_file_without_one_default_version(monkeypatch):
+    m = load(monkeypatch, _RPM)
+
+    def respond(cmd):
+        if cmd[0] == "rpm":
+            return 0, "\n".join(_ext(_V2)) + "\n"
+        return 0, "comment = 'lolor'\n"
+    monkeypatch.setattr(m, "client", _Client(_Container(respond)))
+    got = _outcome(m.test_verify_sql_scripts, "rocky9-amd64", "rhel")
+    assert got[0] == "failed" and "sets no single default_version" in got[1], got[1]

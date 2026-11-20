@@ -191,6 +191,27 @@ LOLOR_TABLES = ("lolor.pg_largeobject", "lolor.pg_largeobject_metadata")
 #   1.2.x has no migration function, and its drop discards the lolor tables with their contents.
 LOLOR_DESCRIPTION_TABLE = "lolor.pg_largeobject_description"
 MIGRATE_TO_NATIVE = "lolor.migrate_to_native()"
+# The release contract decides which lifecycle an installed lolor must follow; the probed
+# capabilities are then checked against it, so a release that should be 2.0 but lacks either
+# feature fails instead of quietly taking the 1.2.x path. Both features arrive in
+# lolor--1.2.3--1.3.0.sql (main; #86 renames it lolor--1.2.3--2.0.0.sql), so every lolor whose SQL
+# extension version is 1.3.0 or later must provide both, and no earlier one has either.
+LOLOR_CAPABILITIES = ("migrate_to_native", "description_table")
+LOLOR_2_LIFECYCLE_FROM = (1, 3, 0)
+# The SQL scripts each lolor release installs into the extension directory: the owner's Makefile
+# DATA at that release (v1_STABLE for 1.2.3, main for 1.3.0, #86 for 2.0.0). The generic bundled-
+# file check normalizes version numbers in file names, so it cannot tell a base script from an
+# upgrade script; this list can. A release missing here fails the SQL-script check until its
+# Makefile DATA is recorded.
+_LOLOR_1_2_3_SQL = ("lolor--1.0.sql", "lolor--1.0--1.2.1.sql", "lolor--1.2.1--1.2.2.sql",
+                    "lolor--1.2.2--1.2.3.sql")
+LOLOR_SQL_SCRIPTS = {
+    "1.2.3": _LOLOR_1_2_3_SQL,
+    "1.3.0": _LOLOR_1_2_3_SQL + ("lolor--1.2.3--1.3.0.sql",),
+    "2.0.0": ("lolor--2.0.0.sql",) + _LOLOR_1_2_3_SQL + ("lolor--1.2.3--2.0.0.sql",),
+}
+_LOLOR_SQL_RE = re.compile(r"lolor--[0-9][^/]*\.sql")
+_DEFAULT_VERSION_RE = re.compile(r"""\s*default_version\s*=\s*'([^']*)'\s*""")
 STORAGE_DROP_REFUSAL = "cannot drop lolor storage while it holds"
 # The object the drop check stores before removing the extension, so the drop always meets a
 # non-empty lolor storage whatever the earlier checks left behind.
@@ -341,26 +362,92 @@ def _expect(values, key, want, problems):
 
 
 def lolor_capabilities_sql():
-    """What the installed lolor provides, probed by name, not by version number."""
+    """What the installed lolor provides, probed by name. Each probe prints exactly 't' or 'f':
+    concatenating a boolean to text prints 'true'/'false', so the CASE fixes the answer form."""
     return "\n".join([
         "SELECT 'extversion=' || extversion FROM pg_catalog.pg_extension WHERE extname = 'lolor';",
-        f"SELECT 'migrate_to_native=' || (pg_catalog.to_regprocedure('{MIGRATE_TO_NATIVE}') IS NOT NULL);",
-        f"SELECT 'description_table=' || (pg_catalog.to_regclass('{LOLOR_DESCRIPTION_TABLE}') IS NOT NULL);",
+        f"SELECT 'migrate_to_native=' || CASE WHEN pg_catalog.to_regprocedure('{MIGRATE_TO_NATIVE}') "
+        "IS NOT NULL THEN 't' ELSE 'f' END;",
+        f"SELECT 'description_table=' || CASE WHEN pg_catalog.to_regclass('{LOLOR_DESCRIPTION_TABLE}') "
+        "IS NOT NULL THEN 't' ELSE 'f' END;",
     ])
 
 
-def lolor_capabilities(container, pgbin, port, pguser):
-    """``{"extversion", "migrate_to_native", "description_table"}`` of the lolor installed on
-    ``port`` (see the 2.0.0 notes at LOLOR_DESCRIPTION_TABLE). An answer that is not a plain yes or
-    no fails the check rather than choosing a lifecycle."""
-    values = sql_values(container, pgbin, port, pguser, lolor_capabilities_sql(), "lolor capabilities")
-    caps = {"extversion": _one(values, "extversion")}
-    for key in ("migrate_to_native", "description_table"):
+def version_tuple(text):
+    """``(major, minor, patch)`` of a dotted numeric version such as 2.0.0 or 1.2.3; None for
+    anything else."""
+    match = re.fullmatch(r"(\d+)\.(\d+)(?:\.(\d+))?", (text or "").strip())
+    return None if match is None else tuple(int(part or 0) for part in match.groups())
+
+
+def lolor_lifecycle_2(extversion):
+    """True when the release contract requires the 2.0 lifecycle (migration function and the
+    description table) for SQL extension version ``extversion``; fails on an unreadable version."""
+    parsed = version_tuple(extversion)
+    assert parsed is not None, f"lolor extension version {_show(extversion)} is not a dotted version"
+    return parsed >= LOLOR_2_LIFECYCLE_FROM
+
+
+def parse_lolor_capabilities(values, port):
+    """``{"extversion", "migrate_to_native", "description_table", "lifecycle_2"}`` from the labelled
+    output of lolor_capabilities_sql(), checked against the release contract: a version that requires
+    the 2.0 lifecycle must provide both features and an earlier one must provide neither. An answer
+    that is not exactly 't' or 'f', or a capability set that does not match the version, fails the
+    check rather than choosing a lifecycle."""
+    extversion = _one(values, "extversion")
+    assert extversion is not None, f"lolor is not installed on port {port} (no extversion answer)"
+    caps = {"extversion": extversion}
+    for key in LOLOR_CAPABILITIES:
         got = _one(values, key)
         assert got in ("t", "f"), (f"lolor capability {key} on port {port} = {_show(got)}, expected 't' or 'f' "
-                                   f"(extension version {_show(caps['extversion'])})")
+                                   f"(extension version {_show(extversion)})")
         caps[key] = got == "t"
+    caps["lifecycle_2"] = lolor_lifecycle_2(extversion)
+    if caps["lifecycle_2"]:
+        missing = [key for key in LOLOR_CAPABILITIES if not caps[key]]
+        assert not missing, (f"lolor {extversion} on port {port} lacks {', '.join(missing)}, which every "
+                             f"lolor from 1.3.0/2.0.0 provides (lolor--1.2.3--1.3.0.sql); refusing to test it "
+                             f"as 1.2.x")
+    else:
+        present = [key for key in LOLOR_CAPABILITIES if caps[key]]
+        assert not present, (f"lolor {extversion} on port {port} reports {', '.join(present)}, which no "
+                             f"lolor before 1.3.0 has: the installed version and features disagree")
     return caps
+
+
+def lolor_capabilities(container, pgbin, port, pguser):
+    """The lolor installed on ``port``, probed and checked by parse_lolor_capabilities (see the
+    2.0.0 notes at LOLOR_DESCRIPTION_TABLE)."""
+    values = sql_values(container, pgbin, port, pguser, lolor_capabilities_sql(), "lolor capabilities")
+    return parse_lolor_capabilities(values, port)
+
+
+def lolor_sql_script_problems(paths, default_version):
+    """Why the lolor SQL scripts in ``paths`` (a package file listing) are not exactly the set the
+    release with control-file ``default_version`` installs (LOLOR_SQL_SCRIPTS); empty if they are."""
+    expected = LOLOR_SQL_SCRIPTS.get((default_version or "").strip())
+    if expected is None:
+        return [f"no SQL-script contract is recorded for lolor {_show(default_version)}; add its "
+                f"Makefile DATA to LOLOR_SQL_SCRIPTS"]
+    installed = sorted(os.path.basename(p.strip()) for p in paths
+                       if "/extension/" in p and _LOLOR_SQL_RE.fullmatch(os.path.basename(p.strip())))
+    problems = []
+    duplicates = sorted({name for name in installed if installed.count(name) > 1})
+    if duplicates:
+        problems.append(f"installed more than once: {', '.join(duplicates)}")
+    missing = sorted(set(expected) - set(installed))
+    if missing:
+        problems.append(f"missing for lolor {default_version}: {', '.join(missing)}")
+    extra = sorted(set(installed) - set(expected))
+    if extra:
+        problems.append(f"not part of lolor {default_version}: {', '.join(extra)}")
+    return problems
+
+
+def control_default_version(text):
+    """The default_version a lolor.control file sets, or None."""
+    found = [m.group(1) for line in (text or "").splitlines() if (m := _DEFAULT_VERSION_RE.fullmatch(line))]
+    return found[0] if len(found) == 1 else None
 
 
 def replicated_tables(caps):
@@ -1006,6 +1093,31 @@ def test_verify_bundled_files(container_name, container_type):
         if "No expected file found" in str(e):
             pep_extension_checks.skip_or_fail(INTEGRATION_REQUEST, str(e))
         pytest.fail(f"Failed to verify bundled files: {str(e)}")
+
+
+@pytest.mark.parametrize("container_name,container_type", all_containers)
+def test_verify_sql_scripts(container_name, container_type):
+    """The package installs exactly the SQL scripts its release defines (LOLOR_SQL_SCRIPTS), keyed
+    by the default_version of the lolor.control it ships. Unlike the generic bundled-file check this
+    tells a base script from an upgrade script, so a missing base or upgrade script fails."""
+    container = _running_container(container_name)
+    package = get_container_config(container_type)["lolor_package"]
+    cmd = ["rpm", "-ql", package] if container_type == "rhel" else ["dpkg", "-L", package]
+    exit_code, output = container.exec_run(cmd, user="root")
+    listing = output.decode(errors="replace").strip()
+    assert exit_code == 0, f"listing the files of {package} failed: {listing}"
+    paths = [line.strip() for line in listing.splitlines() if line.strip()]
+    controls = [p for p in paths if p.endswith("/extension/lolor.control")]
+    assert len(controls) == 1, f"{package} ships {len(controls)} lolor.control files: {controls}"
+    exit_code, output = container.exec_run(["cat", controls[0]], user="root")
+    text = output.decode(errors="replace")
+    assert exit_code == 0, f"reading {controls[0]} failed: {text.strip()}"
+    default_version = control_default_version(text)
+    assert default_version is not None, f"{controls[0]} sets no single default_version"
+    problems = lolor_sql_script_problems(paths, default_version)
+    assert not problems, f"{package} SQL scripts:\n  " + "\n  ".join(problems)
+    print(f"✅ {package} installs exactly the {len(LOLOR_SQL_SCRIPTS[default_version])} SQL scripts of "
+          f"lolor {default_version}")
 
 
 @pytest.mark.parametrize("container_name,container_type", all_containers)

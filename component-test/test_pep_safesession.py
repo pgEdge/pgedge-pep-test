@@ -40,6 +40,7 @@ extension check or a missing container fails them instead of skipping.
 """
 import importlib.util as _ilu
 import os
+import re
 import sys
 import subprocess
 import time
@@ -427,6 +428,49 @@ def _psql_script(container, pgbin, pguser, sql, dbname="postgres"):
     )
     _, output = container.exec_run(["bash", "-c", cmd], user=pguser)
     return output.decode()
+
+
+def _psql_session(container, pgbin, pguser, sql, dbname="postgres"):
+    """``(exit_code, output)`` of a functional scenario's ONE psql session (stdout+stderr).
+
+    The session runs with ON_ERROR_STOP on, so a failed setup or identity statement (CREATE
+    ROLE, GRANT, SET SESSION AUTHORIZATION, SET ROLE, ...) ends it with exit code 3 instead of
+    letting the statement under test run as the wrong user. A scenario turns ON_ERROR_STOP off
+    (\\set ON_ERROR_STOP off) only around the statements whose rejection it expects, and back on
+    after them; scenario_problems() then accepts exactly the expected rejections.
+    """
+    cmd = (
+        f"{pgbin}/psql -X -q -p {pgport} -U {pguser} -d {dbname} "
+        f"-v ON_ERROR_STOP=1 <<'EOSQL'\n{sql}\nEOSQL\n"
+    )
+    exit_code, output = container.exec_run(["bash", "-c", cmd], user=pguser)
+    return exit_code, output.decode()
+
+
+# Printed just before the statement under test, so the scenario proves who ran it: SafeSession
+# anchors on session_user, while privileges (and SET ROLE) follow current_user.
+IDENTITY_SQL = "SELECT 'IDENTITY=' || session_user || '/' || current_user;"
+SS_REJECTION = "cannot execute {} in a read-only session"
+
+
+def scenario_problems(exit_code, output, identities, rejections=()):
+    """Why a functional scenario's single session cannot be trusted, or [] if it can: psql must
+    have finished (no setup or identity statement failed under ON_ERROR_STOP), the IDENTITY lines
+    must be exactly ``identities`` ("session_user/current_user", in order), and the only errors
+    must be SafeSession's rejections of ``rejections`` (commands, in order), each with its hint."""
+    problems = []
+    if exit_code != 0:
+        problems.append(f"psql exited {exit_code}: a setup or identity statement failed")
+    seen = re.findall(r"IDENTITY=(\S+)", output)
+    if seen != list(identities):
+        problems.append(f"session_user/current_user {seen!r}, expected {list(identities)!r}")
+    errors = [m.strip() for m in re.findall(r"ERROR:\s+(.*)", output)]
+    want = [SS_REJECTION.format(c) for c in rejections]
+    if errors != want:
+        problems.append(f"errors {errors!r}, expected exactly {want!r}")
+    if output.count(SS_HINT) != len(want):
+        problems.append(f"{output.count(SS_HINT)} SafeSession hints for {len(want)} expected rejections")
+    return problems
 
 
 def _safesession_cleanup(container, pgbin, pguser, tables=(), roles=()):
@@ -1075,7 +1119,7 @@ def test_safesession_restricted_role_blocks_writes(container_name, container_typ
     print(f"\n--- SafeSession: restricted role is read-only on {container_name} ---")
 
     try:
-        output = _psql_script(container, pgbin, pguser, f"""
+        exit_code, output = _psql_session(container, pgbin, pguser, f"""
 DROP TABLE IF EXISTS {table} CASCADE;
 DROP ROLE IF EXISTS {role};
 CREATE ROLE {role};
@@ -1084,14 +1128,19 @@ INSERT INTO {table} VALUES (1, 'alpha'), (2, 'beta');
 GRANT SELECT, INSERT, UPDATE, DELETE ON {table} TO {role};
 SET pgedge_safesession.roles = '{role}';
 SET SESSION AUTHORIZATION {role};
+{IDENTITY_SQL}
 SELECT val FROM {table} ORDER BY id;
+\\set ON_ERROR_STOP off
 INSERT INTO {table} VALUES (3, 'gamma');
 UPDATE {table} SET val = 'changed' WHERE id = 1;
 DELETE FROM {table} WHERE id = 2;
+\\set ON_ERROR_STOP on
 RESET SESSION AUTHORIZATION;
 SELECT 'FINAL_ROWS=' || count(*) FROM {table};
 """)
         print(output)
+        problems = scenario_problems(exit_code, output, [f"{role}/{role}"], ["INSERT", "UPDATE", "DELETE"])
+        assert not problems, f"Untrusted scenario ({'; '.join(problems)}):\n{output}"
 
         # Reads work.
         assert "alpha" in output and "beta" in output, \
@@ -1127,18 +1176,23 @@ def test_safesession_blocks_ddl(container_name, container_type):
     print(f"\n--- SafeSession: DDL is blocked for a restricted role on {container_name} ---")
 
     try:
-        output = _psql_script(container, pgbin, pguser, f"""
+        exit_code, output = _psql_session(container, pgbin, pguser, f"""
 DROP TABLE IF EXISTS {table} CASCADE;
 DROP ROLE IF EXISTS {role};
 CREATE ROLE {role};
 GRANT CREATE ON SCHEMA public TO {role};
 SET pgedge_safesession.roles = '{role}';
 SET SESSION AUTHORIZATION {role};
+{IDENTITY_SQL}
+\\set ON_ERROR_STOP off
 CREATE TABLE {table} (id int);
+\\set ON_ERROR_STOP on
 RESET SESSION AUTHORIZATION;
 SELECT 'DDL_TABLE_EXISTS=' || count(*) FROM pg_class WHERE relname = '{table}';
 """)
         print(output)
+        problems = scenario_problems(exit_code, output, [f"{role}/{role}"], ["CREATE TABLE"])
+        assert not problems, f"Untrusted scenario ({'; '.join(problems)}):\n{output}"
 
         assert "cannot execute CREATE TABLE in a read-only session" in output, \
             f"Expected CREATE TABLE to be blocked by SafeSession:\n{output}"
@@ -1169,16 +1223,19 @@ def test_safesession_is_restricted_status(container_name, container_type):
     print(f"\n--- SafeSession: is_restricted() status function on {container_name} ---")
 
     try:
-        output = _psql_script(container, pgbin, pguser, f"""
+        exit_code, output = _psql_session(container, pgbin, pguser, f"""
 DROP ROLE IF EXISTS {role};
 CREATE ROLE {role};
 SET pgedge_safesession.roles = '{role}';
 SELECT 'SUPER_RESTRICTED=' || pgedge_safesession_is_restricted()::text;
 SET SESSION AUTHORIZATION {role};
+{IDENTITY_SQL}
 SELECT 'ROLE_RESTRICTED=' || pgedge_safesession_is_restricted()::text;
 RESET SESSION AUTHORIZATION;
 """)
         print(output)
+        problems = scenario_problems(exit_code, output, [f"{role}/{role}"])
+        assert not problems, f"Untrusted scenario ({'; '.join(problems)}):\n{output}"
 
         assert "SUPER_RESTRICTED=false" in output, \
             f"Superuser session must not be reported as restricted:\n{output}"
@@ -1208,18 +1265,21 @@ def test_safesession_superuser_not_restricted(container_name, container_type):
     print(f"\n--- SafeSession: superuser bypasses restriction on {container_name} ---")
 
     try:
-        output = _psql_script(container, pgbin, pguser, f"""
+        exit_code, output = _psql_session(container, pgbin, pguser, f"""
 DROP TABLE IF EXISTS {table} CASCADE;
 DROP ROLE IF EXISTS {role};
 CREATE ROLE {role} SUPERUSER;
 CREATE TABLE {table} (id int);
 SET pgedge_safesession.roles = '{role}';
 SET SESSION AUTHORIZATION {role};
+{IDENTITY_SQL}
 INSERT INTO {table} VALUES (1);
 RESET SESSION AUTHORIZATION;
 SELECT 'SUPER_ROWS=' || count(*) FROM {table};
 """)
         print(output)
+        problems = scenario_problems(exit_code, output, [f"{role}/{role}"])
+        assert not problems, f"Untrusted scenario ({'; '.join(problems)}):\n{output}"
 
         assert "cannot execute INSERT in a read-only session" not in output, \
             f"A superuser must not be blocked by SafeSession:\n{output}"
@@ -1250,7 +1310,7 @@ def test_safesession_set_role_cannot_bypass(container_name, container_type):
     print(f"\n--- SafeSession: SET ROLE cannot bypass restriction on {container_name} ---")
 
     try:
-        output = _psql_script(container, pgbin, pguser, f"""
+        exit_code, output = _psql_session(container, pgbin, pguser, f"""
 DROP TABLE IF EXISTS {table} CASCADE;
 DROP ROLE IF EXISTS {restricted};
 DROP ROLE IF EXISTS {unrestricted};
@@ -1261,12 +1321,19 @@ GRANT INSERT ON {table} TO {unrestricted};
 SET pgedge_safesession.roles = '{restricted}';
 SET SESSION AUTHORIZATION {restricted};
 SET ROLE {unrestricted};
+{IDENTITY_SQL}
+\\set ON_ERROR_STOP off
 INSERT INTO {table} VALUES (1);
+\\set ON_ERROR_STOP on
 RESET ROLE;
 RESET SESSION AUTHORIZATION;
 SELECT 'BYPASS_ROWS=' || count(*) FROM {table};
 """)
         print(output)
+        # The session user stays the restricted role while the current role is the unrestricted
+        # one: the INSERT has the privilege, so only SafeSession can reject it.
+        problems = scenario_problems(exit_code, output, [f"{restricted}/{unrestricted}"], ["INSERT"])
+        assert not problems, f"Untrusted scenario ({'; '.join(problems)}):\n{output}"
 
         assert "cannot execute INSERT in a read-only session" in output, \
             f"SET ROLE to an unrestricted role must not bypass SafeSession:\n{output}"
@@ -1299,7 +1366,7 @@ def test_safesession_unlisted_role_is_not_restricted(container_name, container_t
     print(f"\n--- SafeSession: unlisted role keeps write access on {container_name} ---")
 
     try:
-        output = _psql_script(container, pgbin, pguser, f"""
+        exit_code, output = _psql_session(container, pgbin, pguser, f"""
 DROP TABLE IF EXISTS {table} CASCADE;
 DROP ROLE IF EXISTS {role};
 CREATE ROLE {role};
@@ -1307,11 +1374,14 @@ CREATE TABLE {table} (id int);
 GRANT INSERT ON {table} TO {role};
 SET pgedge_safesession.roles = 'pep_ss_some_other_role';
 SET SESSION AUTHORIZATION {role};
+{IDENTITY_SQL}
 INSERT INTO {table} VALUES (1);
 RESET SESSION AUTHORIZATION;
 SELECT 'FREE_ROWS=' || count(*) FROM {table};
 """)
         print(output)
+        problems = scenario_problems(exit_code, output, [f"{role}/{role}"])
+        assert not problems, f"Untrusted scenario ({'; '.join(problems)}):\n{output}"
 
         assert "cannot execute INSERT in a read-only session" not in output, \
             f"An unlisted role must not be restricted:\n{output}"

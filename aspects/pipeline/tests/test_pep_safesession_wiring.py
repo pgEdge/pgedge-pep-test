@@ -720,40 +720,84 @@ def test_functional_tests_fail_integration_and_skip_standalone_without_a_contain
         assert (outcome, step) == (want, step) and "not found or not running" in msg
 
 
-# What each functional test's single psql session prints when SafeSession behaves as documented.
+# What each functional test's single psql session prints when SafeSession behaves as documented:
+# the IDENTITY line (session_user/current_user) printed just before the statement under test, and
+# SafeSession's error plus its hint for each expected rejection.
+_H = "HINT:  This session is restricted to read-only access by the pgedge_safesession extension.\n"
+
+
+def _rej(cmd):
+    return "psql:<stdin>:12: ERROR:  cannot execute %s in a read-only session\n" % cmd + _H
+
+
 _FUNCTIONAL_OK = {
     "test_safesession_restricted_role_blocks_writes":
-        " alpha\n beta\nERROR:  cannot execute INSERT in a read-only session\n"
-        "ERROR:  cannot execute UPDATE in a read-only session\n"
-        "ERROR:  cannot execute DELETE in a read-only session\n FINAL_ROWS=2\n",
-    "test_safesession_blocks_ddl":
-        "ERROR:  cannot execute CREATE TABLE in a read-only session\n DDL_TABLE_EXISTS=0\n",
-    "test_safesession_is_restricted_status": " SUPER_RESTRICTED=false\n ROLE_RESTRICTED=true\n",
-    "test_safesession_superuser_not_restricted": " SUPER_ROWS=1\n",
-    "test_safesession_set_role_cannot_bypass":
-        "ERROR:  cannot execute INSERT in a read-only session\n BYPASS_ROWS=0\n",
-    "test_safesession_unlisted_role_is_not_restricted": " FREE_ROWS=1\n",
+        " IDENTITY=pep_ss_readonly/pep_ss_readonly\n alpha\n beta\n" + _rej("INSERT") + _rej("UPDATE")
+        + _rej("DELETE") + " FINAL_ROWS=2\n",
+    "test_safesession_blocks_ddl": " IDENTITY=pep_ss_ddl/pep_ss_ddl\n" + _rej("CREATE TABLE") + " DDL_TABLE_EXISTS=0\n",
+    "test_safesession_is_restricted_status":
+        " SUPER_RESTRICTED=false\n IDENTITY=pep_ss_status/pep_ss_status\n ROLE_RESTRICTED=true\n",
+    "test_safesession_superuser_not_restricted": " IDENTITY=pep_ss_super/pep_ss_super\n SUPER_ROWS=1\n",
+    "test_safesession_set_role_cannot_bypass": " IDENTITY=pep_ss_byp_ro/pep_ss_byp_rw\n" + _rej("INSERT") + " BYPASS_ROWS=0\n",
+    "test_safesession_unlisted_role_is_not_restricted": " IDENTITY=pep_ss_free/pep_ss_free\n FREE_ROWS=1\n",
 }
-# ... and what it prints when SafeSession does not enforce (or over-enforces).
+# ... and what it prints when SafeSession does not enforce (or over-enforces), as the right user.
 _FUNCTIONAL_BAD = {
-    "test_safesession_restricted_role_blocks_writes": " alpha\n beta\n FINAL_ROWS=3\n",
-    "test_safesession_blocks_ddl": " DDL_TABLE_EXISTS=1\n",
-    "test_safesession_is_restricted_status": " SUPER_RESTRICTED=false\n ROLE_RESTRICTED=false\n",
-    "test_safesession_superuser_not_restricted":
-        "ERROR:  cannot execute INSERT in a read-only session\n SUPER_ROWS=0\n",
-    "test_safesession_set_role_cannot_bypass": " BYPASS_ROWS=1\n",
+    "test_safesession_restricted_role_blocks_writes": " IDENTITY=pep_ss_readonly/pep_ss_readonly\n alpha\n beta\n FINAL_ROWS=3\n",
+    "test_safesession_blocks_ddl": " IDENTITY=pep_ss_ddl/pep_ss_ddl\n DDL_TABLE_EXISTS=1\n",
+    "test_safesession_is_restricted_status":
+        " SUPER_RESTRICTED=false\n IDENTITY=pep_ss_status/pep_ss_status\n ROLE_RESTRICTED=false\n",
+    "test_safesession_superuser_not_restricted": " IDENTITY=pep_ss_super/pep_ss_super\n" + _rej("INSERT") + " SUPER_ROWS=0\n",
+    "test_safesession_set_role_cannot_bypass": " IDENTITY=pep_ss_byp_ro/pep_ss_byp_rw\n BYPASS_ROWS=1\n",
     "test_safesession_unlisted_role_is_not_restricted":
-        "ERROR:  cannot execute INSERT in a read-only session\n FREE_ROWS=0\n",
+        " IDENTITY=pep_ss_free/pep_ss_free\n" + _rej("INSERT") + " FREE_ROWS=0\n",
+}
+_SSA_DENIED = "psql:<stdin>:8: ERROR:  permission denied to set session authorization\n"
+_SET_ROLE_DENIED = 'psql:<stdin>:11: ERROR:  permission denied to set role "pep_ss_byp_rw"\n'
+# Failed role switches. With ON_ERROR_STOP on psql stops at the failed switch (exit 3). The rc-0
+# cases are what the old ON_ERROR_STOP=0 script printed: the statement under test then ran as the
+# wrong user, yet every row/marker the old assertions looked at was still "right".
+_FAILED_SWITCH = {
+    "test_safesession_unlisted_role_is_not_restricted": [
+        (3, _SSA_DENIED),
+        (0, _SSA_DENIED + " IDENTITY=postgres/postgres\n FREE_ROWS=1\n"),
+    ],
+    "test_safesession_set_role_cannot_bypass": [
+        (3, " " + _SET_ROLE_DENIED),
+        (0, _SET_ROLE_DENIED + " IDENTITY=pep_ss_byp_ro/pep_ss_byp_ro\n" + _rej("INSERT") + " BYPASS_ROWS=0\n"),
+        # SET ROLE silently not in effect: same session user, but the current role never changed.
+        (0, " IDENTITY=pep_ss_byp_ro/pep_ss_byp_ro\n" + _rej("INSERT") + " BYPASS_ROWS=0\n"),
+    ],
+    "test_safesession_superuser_not_restricted": [
+        (3, _SSA_DENIED),
+        (0, _SSA_DENIED + " IDENTITY=postgres/postgres\n SUPER_ROWS=1\n"),
+    ],
+    "test_safesession_restricted_role_blocks_writes": [
+        (3, _SSA_DENIED),
+        # Right user, but a setup error the old script ignored (the GRANT failed).
+        (0, "psql:<stdin>:6: ERROR:  permission denied for table pep_ss_tbl\n"
+            + _FUNCTIONAL_OK["test_safesession_restricted_role_blocks_writes"]),
+    ],
+    "test_safesession_blocks_ddl": [
+        (3, _SSA_DENIED),
+        # The table was not created, but by core (no privilege), not by SafeSession.
+        (0, " IDENTITY=pep_ss_ddl/pep_ss_ddl\npsql:<stdin>:9: ERROR:  permission denied for schema public\n"
+            " DDL_TABLE_EXISTS=0\n"),
+    ],
+    "test_safesession_is_restricted_status": [
+        (3, " SUPER_RESTRICTED=false\n" + _SSA_DENIED),
+    ],
 }
 
 
 def _script_responder(outputs):
-    """exec_run responder: a psql heredoc script gets ``outputs['script']``; cleanup scripts get ''."""
+    """exec_run responder: a psql heredoc script gets ``outputs['script']`` with exit code
+    ``outputs.get('rc', 0)``; cleanup scripts get ''."""
     def respond(cmd):
         assert cmd[:2] == ["bash", "-c"] and "psql -X -q" in cmd[2] and "<<'EOSQL'" in cmd[2], cmd
         if "DROP OWNED BY" in cmd[2] and "SET SESSION AUTHORIZATION" not in cmd[2]:
             return 0, ""
-        return 0, outputs["script"]
+        return outputs.get("rc", 0), outputs["script"]
     return respond
 
 
@@ -771,6 +815,38 @@ def test_functional_tests_pass_on_enforcement_and_fail_without_it(monkeypatch, e
     c.cmds.clear()
     assert _outcome(getattr(m, step), "rocky9-amd64", "rhel")[0] == "assert"
     assert len(c.cmds) == 2 and "DROP OWNED BY" in c.cmds[-1][2], "cleanup must run after a failure too"
+
+
+@pytest.mark.parametrize("env", [_RPM, _STANDALONE], ids=["integration", "standalone"])
+@pytest.mark.parametrize("step,rc,out", [(st, rc, out) for st, cases in _FAILED_SWITCH.items() for rc, out in cases],
+                         ids=["%s-%d" % (st.replace("test_safesession_", ""), i)
+                              for st, cases in _FAILED_SWITCH.items() for i in range(len(cases))])
+def test_a_failed_role_switch_or_setup_error_never_passes(monkeypatch, env, step, rc, out):
+    m = load(monkeypatch, env)
+    c = _Container(_script_responder({"script": out, "rc": rc}))
+    monkeypatch.setattr(m, "client", _Client(c))
+    outcome, msg = _outcome(getattr(m, step), "rocky9-amd64", "rhel")
+    assert outcome == "assert" and "Untrusted scenario" in msg, (outcome, msg)
+    assert len(c.cmds) == 2 and "DROP OWNED BY" in c.cmds[-1][2], "cleanup must still run"
+
+
+@pytest.mark.parametrize("step", _FUNCTIONAL)
+def test_each_scenario_stops_on_setup_errors_and_proves_its_identity_first(monkeypatch, step):
+    """The scenario session runs with ON_ERROR_STOP on; the IDENTITY query follows the last role
+    switch and precedes the statement under test; ON_ERROR_STOP is off only after it."""
+    m = load(monkeypatch, _RPM)
+    c = _Container(_script_responder({"script": _FUNCTIONAL_OK[step]}))
+    monkeypatch.setattr(m, "client", _Client(c))
+    _outcome(getattr(m, step), "rocky9-amd64", "rhel")
+    script = c.cmds[0][2]
+    assert "-v ON_ERROR_STOP=1 <<'EOSQL'" in script and "ON_ERROR_STOP=0" not in script
+    lines = script.splitlines()
+    ident = lines.index(m.IDENTITY_SQL)
+    switches = [i for i, l in enumerate(lines) if l.startswith(("SET SESSION AUTHORIZATION", "SET ROLE"))]
+    assert switches and max(switches) < ident
+    offs = [i for i, l in enumerate(lines) if l == "\\set ON_ERROR_STOP off"]
+    ons = [i for i, l in enumerate(lines) if l == "\\set ON_ERROR_STOP on"]
+    assert len(offs) == len(ons) <= 1 and all(ident < o < n for o, n in zip(offs, ons))
 
 
 # --------------------------------------------------------------------------- missing references

@@ -152,7 +152,7 @@ class _Server:
     a value is ``(exit_code, text)`` or a callable returning one."""
 
     def __init__(self, m, package="pgedge-lolor_17", installed=None, owner=None, versions=None,
-                 ext=None, scripts=None, files=None, file_out=None, sbom_present=True):
+                 ext=None, scripts=None, files=None, file_out=None, sbom_present=True, lifecycle="1.2"):
         self.m = m
         self.package = package
         self.installed = list(installed if installed is not None else [package])
@@ -170,9 +170,8 @@ class _Server:
             "lo_creat with lolor.node 0": (3, "psql:<stdin>:3: ERROR:  value for lolor.node is not set\n"),
             "lolor.node out of range": (3, 'psql:<stdin>:2: ERROR:  17 is outside the valid range for '
                                            'parameter "lolor.node" (0 .. 16)\n'),
-            "DROP EXTENSION lolor": (0, "\n".join(_fn_lines(m, enabled=False)) + "\n"
-                                     + _labelled(lolor_tables=0, event_trigger=0, core_meta=1, core_unlink=1)),
         }
+        self.scripts.update(_lifecycle(m, lifecycle))
         self.scripts.update(scripts or {})
         self.seen = []
 
@@ -206,6 +205,38 @@ class _Server:
         if cmd[:2] == ["test", "-f"]:
             return (0, "") if self.sbom_present else (1, "")
         return 0, ""
+
+
+_DROP_LOID = (6789 << 4) | 1      # the object the drop check stores, on PRIMARY_NODE
+
+
+def _drop_answer(m, **over):
+    """The DROP EXTENSION script's answer for a healthy 1.2.x drop (lolor storage discarded)."""
+    state = dict(lolor_tables=0, event_trigger=0, kept_meta=0, kept="", core_meta=1, core_unlink=1)
+    state.update(over)
+    return 0, "\n".join(_fn_lines(m, enabled=False)) + "\n" + _labelled(**state)
+
+
+def _lifecycle(m, lifecycle):
+    """Scripts of a healthy install of lolor 1.2.x ("1.2": no migration function, two tables, the
+    drop discards lolor storage) or 2.0.0 ("2.0": refuses the drop while storage holds objects,
+    migrate_to_native() empties it, the drop keeps the object natively, three tables)."""
+    v2 = lifecycle == "2.0"
+    held = 2 if v2 else 1                       # 2.0: the replication check's object is still stored
+    scripts = {
+        "lolor capabilities": (0, _labelled(extversion="2.0.0" if v2 else "1.2.3",
+                                            migrate_to_native="t" if v2 else "f",
+                                            description_table="t" if v2 else "f")),
+        "store a large object before the drop": (0, _labelled(drop_loid=_DROP_LOID, lolor_objects=held)),
+        "DROP EXTENSION lolor": (_drop_answer(m, kept_meta=1, kept=m.DROP_PAYLOAD.hex()) if v2
+                                 else _drop_answer(m)),
+    }
+    if v2:
+        scripts["DROP EXTENSION lolor while lolor storage holds objects"] = (
+            3, "psql:<stdin>:2: ERROR:  cannot drop lolor storage while it holds 2 large objects\n"
+               "HINT:  Run lolor.migrate_to_native() first, or set lolor.allow_unsafe_drop to discard them.\n")
+        scripts["migrate lolor storage to native"] = (0, _labelled(migrated=held, lolor_objects_after=0))
+    return scripts
 
 
 def _wire(monkeypatch, tmp_path, m, container):
@@ -417,6 +448,29 @@ def test_identity_proves_the_exact_requested_version(monkeypatch, tmp_path, obse
         with pytest.raises(AssertionError, match="not proven"):
             m.test_lolor_identity("rocky9-amd64", "rhel")
     assert json.loads((tmp_path / "identity-evidence.json").read_text())["l2a"] == ("proven" if ok else "not_proven")
+
+
+# A three-part (major.minor.patch) release through the real identity step: each build form of 9.8.7
+# proves L1, and a package whose version merely contains 9.8.7 does not (pinned to itself, so only
+# L1 can reject it).
+@pytest.mark.parametrize("env,buildnum,pin,l1", [
+    (_RPM, "test1_1", "9.8.7-test1_1.el9", "proven"), (_DEB, "test1_1", "9.8.7~test1-1.trixie", "proven"),
+    (_RPM, "test1_1", "9.8.70-test1_1.el9", "not_proven"), (_DEB, "1", "19.8.7-1.trixie", "not_proven"),
+], ids=["rpm-test", "deb-test", "rpm-9.8.70", "deb-19.8.7"])
+def test_identity_reads_a_three_part_version_from_the_pin(monkeypatch, tmp_path, env, buildnum, pin, l1):
+    key = "PEP_EXPECTED_RPM" if env["PEP_FAMILY"] == "rpm" else "PEP_EXPECTED_DEB"
+    m = load(monkeypatch, dict(env, **{key: pin, "PEP_EXPECTED_BUILDNUM": buildnum}))
+    _wire(monkeypatch, tmp_path, m, _Container(_Server(m)))
+    m.pep_integration_mode.pep_evidence.write_install_evidence(
+        m.INTEGRATION_REQUEST, "run-A", "pinned", pin, str(tmp_path / "install-evidence.json"),
+        installed_sha256="f" * 64)
+    monkeypatch.setattr(m.package_management, "query_installed_version", lambda c, n: pin)
+    ctype = "rhel" if env["PEP_FAMILY"] == "rpm" else "deb"
+    outcome, msg = _outcome(m.test_lolor_identity, env["PEP_CONTAINER_ALIAS"], ctype)
+    assert outcome == ("passed" if l1 == "proven" else "failed")
+    assert l1 == "proven" or "component-version match failed" in msg
+    ev = json.loads((tmp_path / "identity-evidence.json").read_text())
+    assert ev == {"l2a": "proven", "l2b": "not_attempted", "l1": l1}
 
 
 def test_identity_without_install_evidence_fails_with_persisted_evidence(monkeypatch, tmp_path):
@@ -753,7 +807,7 @@ def test_a_wrong_function_swap_after_create_fails(monkeypatch, mutate, msg):
 ], ids=["orig-left", "lolor-left", "tables-left", "trigger-left", "builtin-not-used"])
 def test_a_drop_that_leaves_lolor_behind_fails(monkeypatch, extra, keys, msg):
     m = load(monkeypatch, _STANDALONE)
-    state = dict(lolor_tables=0, event_trigger=0, core_meta=1, core_unlink=1)
+    state = dict(lolor_tables=0, event_trigger=0, kept_meta=0, kept="", core_meta=1, core_unlink=1)
     state.update(keys)
     text = "\n".join(_fn_lines(m, enabled=False) + extra) + "\n" + _labelled(**state)
     (got, out), _s, _c, _m = _sql_outcome(monkeypatch, _STANDALONE, "test_lolor_drop_restores_lo_functions",
@@ -767,7 +821,7 @@ def test_the_drop_still_lists_the_builtin_in_place_of_a_missing_lolor_function(m
     (got, out), _s, _c, _m = _sql_outcome(
         monkeypatch, _STANDALONE, "test_lolor_drop_restores_lo_functions",
         scripts={"DROP EXTENSION lolor": (0, "\n".join(lines) + "\n" + _labelled(
-            lolor_tables=0, event_trigger=0, core_meta=1, core_unlink=1))})
+            lolor_tables=0, event_trigger=0, kept_meta=0, kept="", core_meta=1, core_unlink=1))})
     assert got == "failed" and "missing lo_put(oid,bigint,bytea) as built-in" in out
 
 
@@ -833,7 +887,8 @@ def test_replication_reads_identical_bytes_on_the_subscriber_and_cleans_up(monke
     assert start.calls[0][0][2:4] == ("/tmp/n1_lolor_subscriber", "6434")
     assert stop.calls[0][0][2:4] == ("/tmp/n1_lolor_subscriber", "6434")
     labels = [label for label, _port in s.seen]
-    assert labels == ["create lolor on the subscriber", "create the publication", "create the subscription",
+    assert labels == ["lolor capabilities",
+                      "create lolor on the subscriber", "create the publication", "create the subscription",
                       "wait for the initial table sync",
                       "write a large object on the publisher", "poll the subscriber", "poll the subscriber",
                       "read on the subscriber", "drop the subscription", "drop the publication"]
@@ -1001,4 +1056,129 @@ def test_a_subscriber_that_never_started_is_not_stopped(monkeypatch):
     got, msg = _outcome(m.test_lolor_native_logical_replication, "rocky9-amd64", "rhel")
     assert got == "failed" and "Initdb failed" in msg
     assert stop.calls == [] and ["rm", "-rf", "/tmp/n1_lolor_subscriber"] in c.cmds
-    assert [label for label, _p in s.seen] == ["drop the publication"]
+    assert [label for label, _p in s.seen] == ["lolor capabilities", "drop the publication"]
+
+
+# --------------------------------------------------------------------------- 2.0.0 lifecycle
+def _drop_run(monkeypatch, env=_STANDALONE, lifecycle="2.0", **scripts):
+    m = load(monkeypatch, env)
+    s = _Server(m, lifecycle=lifecycle, scripts=scripts)
+    c = _Container(s)
+    monkeypatch.setattr(m, "client", _Client(c))
+    got = _outcome(m.test_lolor_drop_restores_lo_functions, "rocky9-amd64", "rhel")
+    return got, s, c, m
+
+
+@pytest.mark.parametrize("env", [_RPM, _STANDALONE], ids=["integration", "standalone"])
+def test_a_2_0_drop_is_refused_until_storage_is_migrated_and_keeps_the_object(monkeypatch, env):
+    got, s, c, m = _drop_run(monkeypatch, env)
+    assert got == ("passed", "")
+    assert [label for label, _p in s.seen] == [
+        "lolor capabilities", "store a large object before the drop",
+        "DROP EXTENSION lolor while lolor storage holds objects", "migrate lolor storage to native",
+        "DROP EXTENSION lolor"]
+    sqls = {_script(cmd)[0]: _script(cmd)[2] for cmd in c.cmds if _script(cmd)}
+    assert "DROP EXTENSION lolor;" in sqls["DROP EXTENSION lolor while lolor storage holds objects"]
+    assert "SELECT 'migrated=' || lolor.migrate_to_native();" in sqls["migrate lolor storage to native"]
+    assert "lo_from_bytea(0, decode('%s', 'hex'))" % m.DROP_PAYLOAD.hex() in sqls["store a large object before the drop"]
+    drop = sqls["DROP EXTENSION lolor"]
+    assert "WHERE oid = '%d'::oid" % _DROP_LOID in drop and "'pg_largeobject_description'" in drop
+    assert all("allow_unsafe_drop" not in x for x in sqls.values())
+
+
+def test_a_1_2_drop_runs_directly_and_discards_lolor_storage(monkeypatch):
+    got, s, c, m = _drop_run(monkeypatch, lifecycle="1.2")
+    assert got == ("passed", "")
+    assert [label for label, _p in s.seen] == [
+        "lolor capabilities", "store a large object before the drop", "DROP EXTENSION lolor"]
+
+
+def test_no_lolor_script_ever_bypasses_the_drop_guard():
+    with open(_PATH) as f:
+        assert "allow_unsafe_drop" not in f.read().replace("lolor.allow_unsafe_drop is never used", "")
+
+
+@pytest.mark.parametrize("answer,msg", [
+    ((0, _labelled(drop_loid=_DROP_LOID)),
+     "lolor 2.0.0 must refuse DROP EXTENSION while its storage holds 2 object(s)"),
+    ((3, "ERROR:  cannot drop lolor while its tables are replicated\n"),
+     "cannot drop lolor while its tables are replicated"),
+], ids=["not-refused", "refused-for-another-reason"])
+def test_a_2_0_drop_that_is_not_refused_for_the_stored_object_fails(monkeypatch, answer, msg):
+    got, s, c, m = _drop_run(monkeypatch, **{"DROP EXTENSION lolor while lolor storage holds objects": answer})
+    assert got[0] == "failed" and msg in got[1], got[1]
+    assert "migrate lolor storage to native" not in [label for label, _p in s.seen]
+
+
+@pytest.mark.parametrize("answer,msg", [
+    ((0, _labelled(migrated=1, lolor_objects_after=0)), "migrated = '1', expected '2'"),
+    ((0, _labelled(migrated=2, lolor_objects_after=1)), "lolor_objects_after = '1', expected '0'"),
+    ((3, "ERROR:  logical replication slots exist\n"), "psql exited 3"),
+], ids=["partial", "left-behind", "sql-error"])
+def test_a_2_0_migration_that_does_not_empty_lolor_storage_fails(monkeypatch, answer, msg):
+    got, s, c, m = _drop_run(monkeypatch, **{"migrate lolor storage to native": answer})
+    assert got[0] == "failed" and msg in got[1], got[1]
+    assert "DROP EXTENSION lolor" not in [label for label, _p in s.seen]
+
+
+@pytest.mark.parametrize("over,msg", [
+    ({"kept_meta": 0, "kept": ""}, "kept_meta = '0', expected '1'"),
+    ({"kept": "00"}, "kept = '00', expected"),
+], ids=["object-lost", "bytes-differ"])
+def test_a_2_0_drop_that_loses_the_migrated_object_fails(monkeypatch, over, msg):
+    m = load(monkeypatch, _STANDALONE)
+    answer = _drop_answer(m, **dict(dict(kept_meta=1, kept=m.DROP_PAYLOAD.hex()), **over))
+    got, s, c, m = _drop_run(monkeypatch, **{"DROP EXTENSION lolor": answer})
+    assert got[0] == "failed" and msg in got[1], got[1]
+
+
+def test_a_1_2_drop_that_kept_lolor_storage_fails(monkeypatch):
+    m = load(monkeypatch, _STANDALONE)
+    got, s, c, m = _drop_run(monkeypatch, lifecycle="1.2",
+                             **{"DROP EXTENSION lolor": _drop_answer(m, kept_meta=1, kept="ab")})
+    assert got[0] == "failed" and "kept_meta = '1', expected '0'" in got[1], got[1]
+
+
+@pytest.mark.parametrize("answer,msg", [
+    ((0, ""), "lolor capability migrate_to_native on port 6433 = None, expected 't' or 'f'"),
+    ((0, _labelled(extversion="2.0.0", migrate_to_native="t")), "lolor capability description_table"),
+    ((3, "ERROR:  boom\n"), "lolor capabilities: psql exited 3"),
+], ids=["no-answer", "partial-answer", "sql-error"])
+def test_an_unclear_capability_answer_fails_before_anything_is_dropped(monkeypatch, answer, msg):
+    got, s, c, m = _drop_run(monkeypatch, **{"lolor capabilities": answer})
+    assert got[0] == "failed" and msg in got[1], got[1]
+    assert [label for label, _p in s.seen] == ["lolor capabilities"]
+
+
+@pytest.mark.parametrize("answer,msg", [
+    ((0, _labelled(drop_loid=(6789 << 4) | 2, lolor_objects=1)), "not lolor.node 1"),
+    ((0, _labelled(drop_loid=_DROP_LOID, lolor_objects=0)), "lolor storage holds '0' objects"),
+], ids=["wrong-node", "not-stored"])
+def test_the_drop_check_needs_a_stored_object_first(monkeypatch, answer, msg):
+    got, s, c, m = _drop_run(monkeypatch, **{"store a large object before the drop": answer})
+    assert got[0] == "failed" and msg in got[1], got[1]
+    assert "DROP EXTENSION lolor" not in [label for label, _p in s.seen]
+
+
+@pytest.mark.parametrize("lifecycle,tables", [
+    ("1.2", "lolor.pg_largeobject, lolor.pg_largeobject_metadata"),
+    ("2.0", "lolor.pg_largeobject, lolor.pg_largeobject_metadata, lolor.pg_largeobject_description"),
+], ids=["1.2", "2.0"])
+def test_replication_publishes_the_tables_the_installed_version_documents(monkeypatch, lifecycle, tables):
+    n = tables.count(",") + 1
+    got, m, s, c, *_rest = _run_replication(
+        monkeypatch, _STANDALONE, lifecycle=lifecycle,
+        scripts=lambda m: _replication(m, **{"wait for the initial table sync": (0, _labelled(ready="%d/%d" % (n, n)))}))
+    assert got == ("passed", "")
+    sqls = {_script(cmd)[0]: _script(cmd)[2] for cmd in c.cmds if _script(cmd)}
+    assert "CREATE PUBLICATION lolor_pep_pub FOR TABLE %s;" % tables in sqls["create the publication"]
+    assert dict(s.seen)["lolor capabilities"] == "6433"
+
+
+def test_a_2_0_initial_sync_of_only_the_two_old_tables_is_not_enough(monkeypatch):
+    got, m, s, c, *_rest = _run_replication(
+        monkeypatch, _STANDALONE, lifecycle="2.0",
+        scripts=lambda m: _replication(m, **{"wait for the initial table sync": (0, _labelled(ready="2/3"))}))
+    assert got[0] == "failed" and "did not finish the initial sync of lolor.pg_largeobject, " \
+        "lolor.pg_largeobject_metadata, lolor.pg_largeobject_description" in got[1], got[1]
+    assert "write a large object on the publisher" not in [label for label, _p in s.seen]

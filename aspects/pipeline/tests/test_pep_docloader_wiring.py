@@ -14,6 +14,8 @@ test_pep_radar_wiring.py. Versions are synthetic (9.8.7), never a real docloader
   * required checks fail instead of skipping in integration mode (missing container, reference or SBOM
     configuration);
   * the expected-output references and the SBOM directory derived from docloader's packaging.
+  * the served enterprise-built RPMs (1.0.0-1, 1.0.0-beta1_1, old SBOM layout): a standalone run checks
+    them against their own exact inventory; integration mode always demands the in-repo layout.
 The existing test has no strip check and none is added, so there is nothing to cover for it here.
 """
 import importlib.util
@@ -602,7 +604,8 @@ def test_the_sbom_is_verified_in_the_packaged_directory_on_both_families(monkeyp
 @pytest.mark.parametrize("missing", ["pgedge-docloader-sbom.json", "pgedge-docloader-sbom.json.asc"])
 def test_a_missing_sbom_file_fails_in_both_modes(monkeypatch, env, missing):
     # Both docloader packages ship the SBOM, so its absence is a package defect, never a skip. A package
-    # with the pre-2026-04-17 RPM layout (/usr/share/pgedge-docloader-sbom.json) fails here.
+    # outside the legacy set with the pre-2026-04-17 RPM layout (/usr/share/pgedge-docloader-sbom.json)
+    # fails here.
     m = load(monkeypatch, env)
     c = _Container(_sbom(missing=(missing,)))
     monkeypatch.setattr(m, "client", _Client(c))
@@ -665,7 +668,8 @@ def test_the_real_bundled_file_check_finds_the_docloader_reference(monkeypatch, 
 
 
 def test_an_rpm_with_the_old_top_level_sbom_layout_fails_the_bundled_file_check(monkeypatch):
-    # The layout the in-repo spec replaced (pgedge-enterprise-packages before d80f6b7, 2026-04-17).
+    # The layout the in-repo spec replaced (pgedge-enterprise-packages before d80f6b7, 2026-04-17), on a
+    # package whose version-release is not one of the served legacy builds (unreadable here).
     m = load(monkeypatch, _STANDALONE)
     old = [f for f in _RPM_PAYLOAD if not f.startswith("/usr/share/pgedge-docloader/")] + [
         "/usr/share/pgedge-docloader-sbom.json", "/usr/share/pgedge-docloader-sbom.json.asc"]
@@ -673,3 +677,124 @@ def test_an_rpm_with_the_old_top_level_sbom_layout_fails_the_bundled_file_check(
         lambda cmd: (0, "".join(f + "\n" for f in old)) if cmd == "rpm -ql pgedge-docloader" else (1, ""))))
     status, msg = outcome(m.test_verify_bundled_files, "x", "rhel")
     assert status == "failed" and "/usr/share/pgedge-docloader/pgedge-docloader-sbom.json" in msg
+
+
+# --------------------------------------------------------------------------- served enterprise-built RPMs
+# The docloader RPMs the channels serve today were built by pgedge-enterprise-packages before its d80f6b7
+# (2026-04-17) moved the SBOM into /usr/share/pgedge-docloader/. The saved dnf filelists (release, staging
+# and daily, 2026-11-09) show exactly two docloader version-releases, 1.0.0-1 and 1.0.0-beta1_1, both with
+# the SBOM directly under /usr/share; docloader's own spec has always used the subdirectory. A standalone
+# run compares those two version-releases with their own (legacy) inventory and everything else with the
+# in-repo one. Integration mode certifies docloader's own builds and never consults the legacy set.
+_LEGACY_RPM_PAYLOAD = ["/etc/pgedge/docloader/config.yml", "/usr/bin/pgedge-docloader",
+                       "/usr/share/doc/pgedge-docloader/README.md", "/usr/share/licenses/pgedge-docloader",
+                       "/usr/share/licenses/pgedge-docloader/LICENCE.md",
+                       "/usr/share/pgedge-docloader-sbom.json", "/usr/share/pgedge-docloader-sbom.json.asc"]
+_VR_QUERY = ["rpm", "-q", "--qf", "%{VERSION}-%{RELEASE}", "pgedge-docloader"]
+# A v1.0.0 request (the only GA whose number matches a legacy build): docloader's own pipeline would build it.
+_V100_RPM = dict(_GA_RPM, PEP_EXPECTED_VERSION="1.0.0", PEP_EFFECTIVE_TAG="v1.0.0", PEP_EXPECTED_RPM="1.0.0-1.el9")
+
+
+def _rpm(version_release, files=(), missing=()):
+    """An RPM container: the installed version-release (None = query fails), its file list and the SBOM
+    answers (``missing`` names SBOM files absent from where the check looks)."""
+    sbom = _sbom(missing=missing)
+
+    def respond(cmd):
+        if cmd == _VR_QUERY:
+            return (0, version_release) if version_release else (1, "package pgedge-docloader is not installed")
+        if cmd == "rpm -ql pgedge-docloader":
+            return 0, "".join(f + "\n" for f in files)
+        return sbom(cmd)
+    return respond
+
+
+def test_the_legacy_reference_lists_the_served_enterprise_built_payload():
+    # Exactly the saved filelist of pgedge-docloader 1.0.0-1.el9 without the build-id links, and what
+    # expected-output/rpm/docloader listed before the in-repo layout replaced it.
+    assert (_REPO / "expected-output" / "rpm" / "docloader-enterprise-legacy").read_text().splitlines() \
+        == _LEGACY_RPM_PAYLOAD
+
+
+@pytest.mark.parametrize("integration,vr,layout", [
+    (False, "1.0.0-1.el9", "enterprise-legacy"), (False, "1.0.0-1.el10", "enterprise-legacy"),
+    (False, "1.0.0-beta1_1.el9", "enterprise-legacy"),
+    (False, "1.0.0-2.el9", "in-repo"), (False, "1.0.0-test1_1.el9", "in-repo"), (False, "1.0.0-1", "in-repo"),
+    (False, "11.0.0-1.el9", "in-repo"), (False, "9.8.7-1.el9", "in-repo"), (False, None, "in-repo"),
+    (False, "", "in-repo"),
+    (True, "1.0.0-1.el9", "in-repo"), (True, "1.0.0-beta1_1.el9", "in-repo"), (True, None, "in-repo")])
+def test_the_rpm_reference_layout_rule(monkeypatch, integration, vr, layout):
+    m = load(monkeypatch, _STANDALONE)
+    assert m.rpm_reference_layout(integration, vr) == layout
+
+
+@pytest.mark.parametrize("vr", ["1.0.0-1.el9", "1.0.0-1.el10", "1.0.0-beta1_1.el9"])
+def test_a_standalone_run_checks_a_served_enterprise_built_rpm_against_its_own_inventory(monkeypatch, vr):
+    m = load(monkeypatch, _STANDALONE)
+    c = _Container(_rpm(vr, _LEGACY_RPM_PAYLOAD + ["/usr/share/doc/pgedge-docloader"]))
+    monkeypatch.setattr(m, "client", _Client(c))
+    assert outcome(m.test_verify_bundled_files, "x", "rhel") == ("passed", "")
+    assert outcome(m.test_verify_sbom, "x", "rhel") == ("passed", "")
+    verify = [cmd for cmd in c.cmds if isinstance(cmd, str) and "sq verify" in cmd]
+    assert len(verify) == 1 and "cd /usr/share && sq verify" in verify[0]
+    # Its own inventory is still exact: a missing legacy file fails.
+    for missing in ("/usr/share/pgedge-docloader-sbom.json", "/usr/bin/pgedge-docloader"):
+        monkeypatch.setattr(m, "client", _Client(_Container(
+            _rpm(vr, [f for f in _LEGACY_RPM_PAYLOAD if f != missing]))))
+        status, msg = outcome(m.test_verify_bundled_files, "x", "rhel")
+        assert status == "failed" and missing in msg, missing
+    monkeypatch.setattr(m, "client", _Client(_Container(
+        _rpm(vr, _LEGACY_RPM_PAYLOAD, missing=("pgedge-docloader-sbom.json.asc",)))))
+    status, msg = outcome(m.test_verify_sbom, "x", "rhel")
+    assert status == "failed" and "/usr/share/pgedge-docloader-sbom.json.asc is missing" in msg
+
+
+@pytest.mark.parametrize("vr", ["1.0.0-1.el9", "1.0.0-beta1_1.el9"])
+def test_a_legacy_version_release_with_the_in_repo_layout_fails_standalone(monkeypatch, vr):
+    # Fail closed: the legacy set names packages, not layouts. A rebuild reusing a legacy version-release
+    # with the in-repo layout is reported, never accepted under either inventory.
+    m = load(monkeypatch, _STANDALONE)
+    monkeypatch.setattr(m, "client", _Client(_Container(
+        _rpm(vr, _RPM_PAYLOAD, missing=("pgedge-docloader-sbom.json", "pgedge-docloader-sbom.json.asc")))))
+    status, msg = outcome(m.test_verify_bundled_files, "x", "rhel")
+    assert status == "failed" and "/usr/share/pgedge-docloader-sbom.json" in msg
+    assert outcome(m.test_verify_sbom, "x", "rhel")[0] == "failed"
+
+
+@pytest.mark.parametrize("vr", ["1.0.0-2.el9", "1.0.0-test1_1.el9", "9.8.7-1.el9", None])
+def test_any_other_standalone_rpm_must_have_the_in_repo_layout(monkeypatch, vr):
+    m = load(monkeypatch, _STANDALONE)
+    monkeypatch.setattr(m, "client", _Client(_Container(_rpm(vr, _RPM_PAYLOAD))))
+    assert outcome(m.test_verify_bundled_files, "x", "rhel") == ("passed", "")
+    monkeypatch.setattr(m, "client", _Client(_Container(
+        _rpm(vr, _LEGACY_RPM_PAYLOAD, missing=("pgedge-docloader-sbom.json", "pgedge-docloader-sbom.json.asc")))))
+    status, msg = outcome(m.test_verify_bundled_files, "x", "rhel")
+    assert status == "failed" and "/usr/share/pgedge-docloader/pgedge-docloader-sbom.json" in msg
+    status, msg = outcome(m.test_verify_sbom, "x", "rhel")
+    assert status == "failed" and "/usr/share/pgedge-docloader/pgedge-docloader-sbom.json is missing" in msg
+
+
+def test_integration_mode_always_demands_the_in_repo_layout_and_never_asks_the_version(monkeypatch):
+    # Even a v1.0.0 request whose installed version-release equals a legacy build's: integration mode
+    # certifies docloader's own build, whose spec has always used /usr/share/pgedge-docloader/.
+    m = load(monkeypatch, _V100_RPM)
+    c = _Container(_rpm("1.0.0-1.el9", _LEGACY_RPM_PAYLOAD,
+                        missing=("pgedge-docloader-sbom.json", "pgedge-docloader-sbom.json.asc")))
+    monkeypatch.setattr(m, "client", _Client(c))
+    status, msg = outcome(m.test_verify_bundled_files, "x", "rhel")
+    assert status == "failed" and "/usr/share/pgedge-docloader/pgedge-docloader-sbom.json" in msg
+    status, msg = outcome(m.test_verify_sbom, "x", "rhel")
+    assert status == "failed" and "/usr/share/pgedge-docloader/pgedge-docloader-sbom.json is missing" in msg
+    assert _VR_QUERY not in c.cmds
+    monkeypatch.setattr(m, "client", _Client(_Container(_rpm("1.0.0-1.el9", _RPM_PAYLOAD))))
+    assert outcome(m.test_verify_bundled_files, "x", "rhel") == ("passed", "")
+    assert outcome(m.test_verify_sbom, "x", "rhel") == ("passed", "")
+
+
+@pytest.mark.parametrize("env", [_GA_DEB, _STANDALONE], ids=["integration", "standalone"])
+def test_deb_runs_never_ask_the_rpm_version(monkeypatch, env):
+    m = load(monkeypatch, env)
+    c = _Container(_sbom())
+    monkeypatch.setattr(m, "client", _Client(c))
+    assert outcome(m.test_verify_sbom, "x", "deb") == ("passed", "")
+    assert _VR_QUERY not in c.cmds

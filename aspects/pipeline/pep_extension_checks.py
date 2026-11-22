@@ -1,6 +1,6 @@
 """Integration-mode checks shared by the PG-coupled extension component tests.
 
-Used by component-test/test_pep_{snowflake,lolor,safesession}.py, which install and verify an
+Used by component-test/test_pep_{snowflake,lolor,safesession,vectorizer}.py, which install and verify an
 extension package the same way. Spock (test_pep_spock.py) keeps its own copies unchanged. Only the
 steps that are identical for these extensions live here:
   * install_requested_extension: the PostgreSQL server for the requested major first, unpinned,

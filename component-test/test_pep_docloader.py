@@ -126,12 +126,13 @@ def integration_problem(request):
 INTEGRATION_PROBLEM = integration_problem(INTEGRATION_REQUEST)
 
 
-# Served docloader RPMs built by pgedge-enterprise-packages before its d80f6b7 (2026-04-17) put the SBOM
+# docloader RPMs built by pgedge-enterprise-packages before its d80f6b7 (2026-04-17) put the SBOM
 # directly under /usr/share; that commit, and docloader's own pkg/rpm/docloader.spec from its first
-# version, install it under /usr/share/pgedge-docloader/. Saved channel metadata (2026-11-09) lists
-# exactly these two docloader version-releases on el9 and el10 in the daily, staging and release
-# channels, and the saved release and staging el9 filelists show both in the old layout, so the legacy
-# inventory (expected-output/rpm/docloader-enterprise-legacy) is genuinely version-specific. A
+# version, install it under /usr/share/pgedge-docloader/. Channel metadata snapshots dated 2026-11-09
+# (daily, staging and release; el9 and el10) listed exactly these two docloader version-releases, and
+# the release and staging el9 file lists in those snapshots showed both in the old layout. That is an
+# observation from dated snapshots, not a statement of what any channel serves now; it makes the legacy
+# inventory (expected-output/rpm/docloader-enterprise-legacy) genuinely version-specific. A
 # version-release does not say which packaging built the bytes (docloader's own pipeline also produces
 # 1.0.0-1), so the package's own file list decides; see rpm_layout_decision. Integration mode certifies
 # docloader's own build and always demands the in-repo layout (expected-output/rpm/docloader).
@@ -554,7 +555,7 @@ def test_verify_bundled_files(container_name, container_type):
     expected-output/rpm/docloader or expected-output/deb/docloader, which list the
     payload pgEdge/pgedge-docloader's packaging defines (pkg/rpm/docloader.spec
     %files; pkg/deb/debian/rules, debian/docs and the changelog build-deb.sh writes).
-    A standalone run of a served enterprise-built RPM (ENTERPRISE_LEGACY_RPM_RELEASES) that owns the
+    A standalone run of an enterprise-built legacy RPM (ENTERPRISE_LEGACY_RPM_RELEASES) that owns the
     complete legacy inventory is compared with expected-output/rpm/docloader-enterprise-legacy instead;
     an RPM owning SBOM paths of both layouts fails (rpm_layout_decision).
     """
@@ -616,8 +617,8 @@ def test_verify_sbom(container_name, container_type):
     Both docloader packages ship the SBOM and its detached signature as
     {DECOUPLED_COMPONENTS_SBOM}/pgedge-docloader/pgedge-docloader-sbom.json{,.asc}
     (pkg/rpm/docloader.spec %install/%files; pkg/deb/debian/rules), so a missing
-    file is a package defect and fails the check. The served RPMs built by
-    pgedge-enterprise-packages before its d80f6b7 (2026-04-17) put them directly under
+    file is a package defect and fails the check. RPMs built by pgedge-enterprise-packages
+    before its d80f6b7 (2026-04-17), seen in dated channel snapshots, put them directly under
     {DECOUPLED_COMPONENTS_SBOM} instead; a standalone run looks there only for those
     version-releases (ENTERPRISE_LEGACY_RPM_RELEASES) when the package owns the complete legacy
     inventory, and every other run, integration mode always, requires the subdirectory. An RPM
@@ -636,7 +637,7 @@ def test_verify_sbom(container_name, container_type):
     docloader_package = config["docloader_package"]
     # The SBOM file keeps the full package name (pgedge-docloader-sbom.json) and sits in the same
     # directory on both families: {decoupled_sbom_path}/pgedge-docloader/pgedge-docloader-sbom.json,
-    # except in a served enterprise-built RPM that owns the complete legacy inventory (standalone only),
+    # except in an enterprise-built legacy RPM that owns the complete legacy inventory (standalone only),
     # where it is directly under it. An RPM owning SBOM paths of both layouts fails before any check.
     sbom_name = docloader_package
     layout, problem, _note = _rpm_layout(container, container_type, docloader_package)

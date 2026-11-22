@@ -14,7 +14,8 @@ test_pep_radar_wiring.py. Versions are synthetic (9.8.7), never a real docloader
   * required checks fail instead of skipping in integration mode (missing container, reference or SBOM
     configuration);
   * the expected-output references and the SBOM directory derived from docloader's packaging.
-  * the served enterprise-built RPMs (1.0.0-1, 1.0.0-beta1_1, old SBOM layout): a standalone run accepts
+  * the enterprise-built legacy RPMs seen in dated channel snapshots (1.0.0-1, 1.0.0-beta1_1, old SBOM
+    layout): a standalone run accepts
     their inventory only when the package owns all of it, and verifies its signed SBOM there; an in-repo
     build with the same version-release is checked as one; SBOM paths of both layouts fail in every mode;
     integration mode always demands the in-repo layout.
@@ -671,7 +672,7 @@ def test_the_real_bundled_file_check_finds_the_docloader_reference(monkeypatch, 
 
 def test_an_rpm_with_the_old_top_level_sbom_layout_fails_the_bundled_file_check(monkeypatch):
     # The layout the in-repo spec replaced (pgedge-enterprise-packages before d80f6b7, 2026-04-17), on a
-    # package whose version-release is not one of the served legacy builds (unreadable here).
+    # package whose version-release is not one of the legacy builds (unreadable here).
     m = load(monkeypatch, _STANDALONE)
     old = [f for f in _RPM_PAYLOAD if not f.startswith("/usr/share/pgedge-docloader/")] + [
         "/usr/share/pgedge-docloader-sbom.json", "/usr/share/pgedge-docloader-sbom.json.asc"]
@@ -681,12 +682,12 @@ def test_an_rpm_with_the_old_top_level_sbom_layout_fails_the_bundled_file_check(
     assert status == "failed" and "/usr/share/pgedge-docloader/pgedge-docloader-sbom.json" in msg
 
 
-# --------------------------------------------------------------------------- served enterprise-built RPMs
-# The docloader RPMs the channels serve today were built by pgedge-enterprise-packages before its d80f6b7
-# (2026-04-17) moved the SBOM into /usr/share/pgedge-docloader/. Saved channel metadata (2026-11-09: daily,
-# staging, release; el9, el10) lists exactly two docloader version-releases, 1.0.0-1 and 1.0.0-beta1_1, and
-# the saved release/staging el9 filelists show both with the SBOM directly under /usr/share; docloader's
-# own spec has always used the subdirectory. A version-release does not say which packaging built the bytes
+# --------------------------------------------------------------------------- enterprise-built legacy RPMs
+# docloader RPMs built by pgedge-enterprise-packages before its d80f6b7 (2026-04-17) have the SBOM directly
+# under /usr/share; that commit and docloader's own spec use /usr/share/pgedge-docloader/. Channel metadata
+# snapshots dated 2026-11-09 (daily, staging, release; el9, el10) listed exactly two docloader
+# version-releases, 1.0.0-1 and 1.0.0-beta1_1, and the release/staging el9 file lists in those snapshots
+# showed both in the old layout. That is a dated observation, not a statement of what a channel serves now. A version-release does not say which packaging built the bytes
 # (docloader's own pipeline also produces 1.0.0-1), so the package's own file list decides: a standalone run
 # accepts the legacy inventory only for those two version-releases AND only when the package owns that
 # complete inventory, whose signed SBOM is then verified where it names it. A package owning SBOM paths of
@@ -726,17 +727,17 @@ def _sq_verify(container):
     return [cmd for cmd in container.cmds if isinstance(cmd, str) and "sq verify" in cmd and "--help" not in cmd]
 
 
-def test_the_legacy_reference_lists_the_served_enterprise_built_payload():
-    # Exactly the saved filelist of pgedge-docloader 1.0.0-1.el9 without the build-id links, and what
-    # expected-output/rpm/docloader listed before the in-repo layout replaced it. It differs from the in-repo
-    # reference only in where the SBOM and its signature live.
+def test_the_legacy_reference_lists_the_enterprise_built_legacy_payload():
+    # Exactly the file list of pgedge-docloader 1.0.0-1.el9 in the 2026-11-09 snapshots, without the build-id
+    # links, and what expected-output/rpm/docloader listed before the in-repo layout replaced it. It differs
+    # from the in-repo reference only in where the SBOM and its signature live.
     legacy = (_REPO / "expected-output" / "rpm" / "docloader-enterprise-legacy").read_text().splitlines()
     assert legacy == _LEGACY_RPM_PAYLOAD
     assert set(legacy) ^ set(_RPM_PAYLOAD) == set(_LEGACY_SBOMS) | set(_IN_REPO_SBOMS)
 
 
 @pytest.mark.parametrize("integration,vr,files,layout", [
-    # standalone, a served legacy version-release: the package's own files decide
+    # standalone, a legacy version-release: the package's own files decide
     (False, "1.0.0-1.el9", _LEGACY_RPM_PAYLOAD, "enterprise-legacy"),
     (False, "1.0.0-1.el10", _LEGACY_RPM_PAYLOAD + ["/usr/share/doc/pgedge-docloader"], "enterprise-legacy"),
     (False, "1.0.0-beta1_1.el9", _LEGACY_RPM_PAYLOAD, "enterprise-legacy"),
@@ -777,7 +778,7 @@ def test_an_incomplete_legacy_inventory_is_named_in_the_note(monkeypatch):
 
 
 @pytest.mark.parametrize("vr", _LEGACY_VRS)
-def test_a_standalone_run_checks_a_served_enterprise_built_rpm_against_its_own_inventory(monkeypatch, vr):
+def test_a_standalone_run_checks_an_enterprise_built_legacy_rpm_against_its_own_inventory(monkeypatch, vr):
     m = load(monkeypatch, _STANDALONE)
     c = _Container(_rpm(vr, _LEGACY_RPM_PAYLOAD + ["/usr/share/doc/pgedge-docloader"]))
     monkeypatch.setattr(m, "client", _Client(c))

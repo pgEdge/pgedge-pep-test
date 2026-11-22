@@ -128,9 +128,10 @@ INTEGRATION_PROBLEM = integration_problem(INTEGRATION_REQUEST)
 
 # Served docloader RPMs built by pgedge-enterprise-packages before its d80f6b7 (2026-04-17) put the SBOM
 # directly under /usr/share; that commit, and docloader's own pkg/rpm/docloader.spec from its first
-# version, install it under /usr/share/pgedge-docloader/. The saved dnf filelists of the release, staging
-# and daily channels (2026-11-09) show exactly these two docloader version-releases, both in the old
-# layout, so this inventory is genuinely version-specific: it names packages, not layouts. Only a
+# version, install it under /usr/share/pgedge-docloader/. Saved channel metadata (2026-11-09) lists
+# exactly these two docloader version-releases on el9 and el10 in the daily, staging and release
+# channels, and the saved release and staging el9 filelists show both in the old layout, so this
+# inventory is genuinely version-specific: it names packages, not layouts. Only a
 # standalone run uses it (expected-output/rpm/docloader-enterprise-legacy); integration mode certifies
 # docloader's own build and always demands the in-repo layout (expected-output/rpm/docloader).
 ENTERPRISE_LEGACY_RPM_RELEASES = frozenset({"1.0.0-1", "1.0.0-beta1_1"})

@@ -681,9 +681,10 @@ def test_an_rpm_with_the_old_top_level_sbom_layout_fails_the_bundled_file_check(
 
 # --------------------------------------------------------------------------- served enterprise-built RPMs
 # The docloader RPMs the channels serve today were built by pgedge-enterprise-packages before its d80f6b7
-# (2026-04-17) moved the SBOM into /usr/share/pgedge-docloader/. The saved dnf filelists (release, staging
-# and daily, 2026-11-09) show exactly two docloader version-releases, 1.0.0-1 and 1.0.0-beta1_1, both with
-# the SBOM directly under /usr/share; docloader's own spec has always used the subdirectory. A standalone
+# (2026-04-17) moved the SBOM into /usr/share/pgedge-docloader/. Saved channel metadata (2026-11-09: daily,
+# staging, release; el9, el10) lists exactly two docloader version-releases, 1.0.0-1 and 1.0.0-beta1_1, and
+# the saved release/staging el9 filelists show both with the SBOM directly under /usr/share; docloader's
+# own spec has always used the subdirectory. A standalone
 # run compares those two version-releases with their own (legacy) inventory and everything else with the
 # in-repo one. Integration mode certifies docloader's own builds and never consults the legacy set.
 _LEGACY_RPM_PAYLOAD = ["/etc/pgedge/docloader/config.yml", "/usr/bin/pgedge-docloader",

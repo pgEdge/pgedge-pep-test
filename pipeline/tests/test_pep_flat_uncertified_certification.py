@@ -213,6 +213,11 @@ def test_a_cell_with_no_certified_package_names_the_unclassified_one_in_its_gap(
     cp, plan, decided = certify(only)
     assert [(g["scope"], g["reason"], g["detail"]) for g in plan["coverage_gaps"]] == \
         [("cell", "no_runtime_target", "package_unclassified, runtime_not_certified")]
+    # the one cell gap names the unclassified file; the listed companion stays in its own section
+    [gap] = plan["coverage_gaps"]
+    assert [(r["physical_package"], r["reasons"]) for r in gap["rejected_packages"]] == \
+        [(UNNAMED, ["package_unclassified"])]
+    assert gap["rejected_packages"][0]["path"] and gap["rejected_packages"][0]["sha256"]
     assert CG.outcomes(decided) == CG.PARTIAL
 
 
@@ -330,3 +335,96 @@ def test_a_registered_product_reports_an_unexpected_runtime_package_as_a_gap(com
     cp, plan, decided = certify(planned, copy.deepcopy(entry), component=comp)
     _assert_unnamed_is_a_gap_everywhere(tmp_path, cp, plan, decided, unexpected, server, companions)
 
+
+
+
+def _registered_cells(comp, unexpected, with_server):
+    """One rpm and one deb cell of a registered product: its companions and ``unexpected`` in each,
+    and the certified server only in the families named by ``with_server``."""
+    entry = PR.COMPONENT_POLICY[comp]
+    [server] = entry["allowed_runtime_package_names"]
+
+    def built(family, os_token, arch):
+        names = ([server] if family in with_server else []) + entry["uncertified_runtime_package_names"] \
+            + [unexpected]
+        return [CG.pkg(family, os_token, arch, name=n,
+                       sha=("%d%s%s%s" % (i, n, os_token, arch)).encode().hex()[:64].ljust(64, "0"))
+                for i, n in enumerate(names)]
+    return [CG.planned("rpm", "el-9", "amd64", members=built("rpm", "el-9", "amd64")),
+            CG.planned("deb", "trixie", "amd64", members=built("deb", "trixie", "amd64"))]
+
+
+def _certify_registered(comp, planned):
+    """The real chain for a registered product; unlike ``certify`` it accepts a plan with no target."""
+    entry = PR.COMPONENT_POLICY[comp]
+    jobs = [{"cell_id": c["cell"]["cell_id"], "job_id": i + 1, "run_attempt": 1, "status": "completed",
+             "conclusion": "success"} for i, c in enumerate(planned)]
+    cp = CP.reduce({
+        "provenance": dict(CG.PROVENANCE),
+        "release_intent": {"logical_component": comp, "intended_version": "2.0.0", "intended_buildnum": "1",
+                           "effective_tag": "v2.0.0", "channel": "staging", "simulated": False},
+        "component_policy": copy.deepcopy(entry), "planned_cells": [c["cell"] for c in planned],
+        "job_records": jobs, "artifacts": [{"name": c["cell"]["cell_id"], "id": 100 + i, "members": c["members"]}
+                                           for i, c in enumerate(planned)],
+        "publication_results": {"rpm": "success", "deb": "success"}, "execution_mode": "full"})
+    assert cp["plan_resolved"] is True, cp["errors"]
+    plan = P.build_invocation_plan(cp, CG.EXEC_CATALOG, CG.ENABLED, execution_mode="full")
+    assert plan["plan_resolved"] is True, plan["errors"]
+    decided = {}
+    for mode in ("observe", "gate"):
+        summaries = [CG._summary(inv, "pass", mode, preview=False) for inv in plan["matrix"]["include"]]
+        result = CR.build_cert_result(plan, summaries, "1")
+        decided[mode] = (result, G.decide(result, mode))
+    return cp, plan, decided
+
+
+def _assert_names_in_both_reports(tmp_path, decided, unexpected, n_rows):
+    for mode in ("observe", "gate"):
+        html, md = _render(tmp_path, decided, mode)
+        gaps = _html_section(html, "gaps")
+        rows = [r for r in gaps.split('<tr id="gap-')[1:] if "<code>%s</code>" % unexpected in r]
+        assert len(rows) == n_rows, gaps
+        md_rows = [r for r in _md_gap_rows(md) if unexpected in r]
+        assert len(md_rows) == n_rows, md
+        assert unexpected not in _html_section(html, "uncertified")
+
+
+@pytest.mark.parametrize("comp", REGISTERED)
+def test_a_missing_server_cell_beside_a_valid_one_names_the_unexpected_package(comp, tmp_path):
+    unexpected = PR.COMPONENT_POLICY[comp]["allowed_runtime_package_names"][0] + "-unlisted"
+    cp, plan, decided = _certify_registered(comp, _registered_cells(comp, unexpected, with_server=("rpm",)))
+    by_family = {g["family"]: g for g in plan["coverage_gaps"]}
+    assert sorted(by_family) == ["deb", "rpm"] and len(plan["coverage_gaps"]) == 2
+    # the valid cell: the server is tested and the unexpected file is its own member gap
+    assert (by_family["rpm"]["scope"], by_family["rpm"]["reason"], by_family["rpm"]["physical_package"]) == \
+        ("member", GAP, unexpected)
+    # the cell without a server: ONE cell gap, now carrying the unexpected file's identity
+    deb = by_family["deb"]
+    assert (deb["scope"], deb["reason"], deb["physical_package"]) == ("cell", "no_runtime_target", None)
+    assert [(r["physical_package"], r["reasons"]) for r in deb["rejected_packages"]] == \
+        [(unexpected, ["package_unclassified"])]
+    # accounting is unchanged: one gap per no-target cell, nothing counted twice
+    assert plan["counts"]["gaps_by_scope"] == {"cell": 1, "target": 0, "member": 1}
+    CG.assert_reconciles(cp, plan)
+    assert CG.outcomes(decided) == CG.PARTIAL
+    _assert_names_in_both_reports(tmp_path, decided, unexpected, n_rows=2)
+
+
+@pytest.mark.parametrize("comp", REGISTERED)
+def test_a_result_with_no_server_anywhere_names_the_unexpected_package_and_blocks(comp, tmp_path):
+    unexpected = PR.COMPONENT_POLICY[comp]["allowed_runtime_package_names"][0] + "-unlisted"
+    cp, plan, decided = _certify_registered(comp, _registered_cells(comp, unexpected, with_server=()))
+    assert plan["matrix"]["include"] == []
+    assert sorted((g["family"], g["scope"], g["reason"]) for g in plan["coverage_gaps"]) == \
+        [("deb", "cell", "no_runtime_target"), ("rpm", "cell", "no_runtime_target")]
+    assert all([r["physical_package"] for r in g["rejected_packages"]] == [unexpected]
+               for g in plan["coverage_gaps"])
+    assert plan["counts"]["gaps_by_scope"] == {"cell": 2, "target": 0, "member": 0}
+    CG.assert_reconciles(cp, plan)
+    # the existing fail-closed decision for a release with nothing to run, in both modes
+    for mode in ("observe", "gate"):
+        result, decision = decided[mode]
+        assert (decision["certification_state"], decision["policy_decision"], decision["workflow_conclusion"]) \
+            == ("incomplete", "block", "failure"), decision
+    assert decided["observe"][1]["reason_code"] == decided["gate"][1]["reason_code"]
+    _assert_names_in_both_reports(tmp_path, decided, unexpected, n_rows=2)

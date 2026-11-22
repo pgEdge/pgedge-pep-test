@@ -1058,7 +1058,39 @@ def _gap_words(g: dict) -> str:
 
 def _gap_tip(g: dict) -> str:
     keys = ("scope", "cell_id", "target_id", "physical_package", "family", "os", "arch", "reason", "detail")
-    return " · ".join("%s=%s" % (k, _txt(g.get(k))) for k in keys if _txt(g.get(k)))
+    tip = " · ".join("%s=%s" % (k, _txt(g.get(k))) for k in keys if _txt(g.get(k)))
+    names = _gap_packages(g) if not _txt(g.get("physical_package")) else []
+    return tip + (" · rejected=%s" % ", ".join(names) if names else "")
+
+
+def _rejected_records(g: dict) -> list:
+    """A no-target cell gap's ``rejected_packages`` records (dicts only; anything else is ignored)."""
+    value = g.get("rejected_packages") if isinstance(g, dict) else None
+    return [r for r in value if isinstance(r, dict)] if isinstance(value, list) else []
+
+
+def _gap_packages(g: dict) -> list:
+    """The package names a gap is about: its own package, else the files a no-target cell rejected
+    (so a cell without a certified package still names what it did build)."""
+    own = _txt(g.get("physical_package"))
+    if own:
+        return [own]
+    return sorted({_txt(r.get("physical_package")) for r in _rejected_records(g)} - {""})
+
+
+def _rejected_detail_html(g: dict) -> str:
+    rows = []
+    for r in _rejected_records(g):
+        reasons = r.get("reasons")
+        parts = [", ".join(_txt(x) for x in reasons if _txt(x)) if isinstance(reasons, list) else ""]
+        for label, key, cut in (("path", "path", None), ("native_arch", "native_arch", None),
+                                ("sha256", "sha256", 12)):
+            value = _txt(r.get(key))
+            if value:
+                parts.append("%s=%s" % (label, value[:cut] if cut else value))
+        rows.append('<div class="rc">rejected <code>%s</code>: %s</div>' % (
+            _esc(_dash(_txt(r.get("physical_package")))), _esc("; ".join(p for p in parts if p))))
+    return "".join(rows)
 
 
 def _matrix(layout: dict) -> str:
@@ -1091,7 +1123,7 @@ def _matrix(layout: dict) -> str:
                 parts.append(_matrix_cell(row["cells"].get(pg, []), where))
             parts.append(_row_total(row))
         for i, g in f["gaps"]:
-            pkg = _txt(g.get("physical_package"))
+            pkg = ", ".join(_gap_packages(g))
             parts.append('<div class="h rowlbl sticky-left gaplbl" title="%s">%s<span>not tested%s</span></div>'
                          % (_esc(_gap_tip(g)), _esc(_gap_label(g)),
                             _esc(" · " + pkg) if layout["multi"] and pkg else ""))
@@ -1183,7 +1215,7 @@ def _gap_row(i: int, g: dict, multi: bool) -> str:
         '<td class="muted" colspan="4">no test run on any PG</td>'
         '<td><a class="report-link" href="#gap-%d">Gap detail &darr;</a></td></tr>'
     ) % (i, _esc(_gap_label(g)), _esc(_dash(_txt(g.get("cell_id")))), _esc(_dash(_txt(g.get("arch")))),
-         ('<td class="mono">%s</td>' % _esc(_dash(_txt(g.get("physical_package"))))) if multi else "",
+         ('<td class="mono">%s</td>' % _esc(_dash(", ".join(_gap_packages(g))))) if multi else "",
          _pill("NOT TESTED", "gap"), _esc(_gap_words(g)), i)
 
 
@@ -1253,15 +1285,16 @@ def _gaps_table(gaps: list) -> str:
     header = ("<tr><th>Scope</th><th>Cell</th><th>Package</th><th>Family</th><th>OS</th>"
               "<th>Arch</th><th>Reason</th><th>Detail</th></tr>")
     rows = "".join(
-        '<tr id="gap-%d"><td>%s</td><td><code>%s</code></td><td><code>%s</code></td><td>%s</td><td>%s</td>'
-        "<td>%s</td><td>%s</td><td>%s</td></tr>" % (
+        '<tr id="gap-%d"><td>%s</td><td><code>%s</code></td><td>%s</td><td>%s</td><td>%s</td>'
+        "<td>%s</td><td>%s</td><td>%s%s</td></tr>" % (
             i, _esc(_dash(g.get("scope"))), _esc(_dash(g.get("cell_id"))),
-            _esc(_dash(g.get("physical_package"))), _esc(_dash(g.get("family"))),
+            ", ".join("<code>%s</code>" % _esc(n) for n in _gap_packages(g)) or "<code>%s</code>" % _esc(_dash(None)),
+            _esc(_dash(g.get("family"))),
             _esc(_dash(g.get("os"))), _esc(_dash(g.get("arch"))),
             _pill(_dash(g.get("reason")).upper().replace("_", " "), "gap")
             + ('<div class="rc">%s</div>' % _esc(_GAP_REASON_TEXT[_txt(g.get("reason"))])
                if _txt(g.get("reason")) in _GAP_REASON_TEXT else ""),
-            _esc(_dash(g.get("detail"))))
+            _esc(_dash(g.get("detail"))), _rejected_detail_html(g))
         for i, g in enumerate(gaps) if isinstance(g, dict))
     return ('<h2 id="gaps">Not tested (planned but not certified)</h2>'
             '<p class="sub">Each row is a planned build cell, package target or rejected package '
@@ -1515,7 +1548,7 @@ def _md_gaps(gaps: list) -> list:
         out.append("| %s | %s | %s | %s%s |" % (
             presentation.md_text(_txt(g.get("family")).upper() or "-"),
             presentation.md_text(_gap_label(g)),
-            presentation.md_code(_txt(g.get("physical_package"))),
+            ", ".join(presentation.md_code(n) for n in _gap_packages(g)) or presentation.md_code(""),
             presentation.md_text(_gap_words(g), 160),
             (" (%s)" % presentation.md_text(detail, 160)) if detail else ""))
     if len(gaps) > _MD_MAX_GAP_ROWS:

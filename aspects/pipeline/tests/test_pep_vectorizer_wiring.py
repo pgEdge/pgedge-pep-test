@@ -371,6 +371,33 @@ def test_identity_proves_the_exact_requested_version(monkeypatch, tmp_path, obse
     assert json.loads((tmp_path / "identity-evidence.json").read_text())["l2a"] == ("proven" if ok else "not_proven")
 
 
+# The vectorizer's own versions are two-part (major.minor: 1.1, 1.2). Through the real identity step
+# each build form of 9.8 proves L1, and a package whose version merely starts with or contains 9.8
+# does not (pinned to itself, so only L1 can reject it).
+@pytest.mark.parametrize("env,tag,buildnum,pin,l1", [
+    (_RPM, "v9.8", "1", "9.8-1.el9", "proven"), (_DEB, "v9.8", "1", "9.8-1.trixie", "proven"),
+    (_RPM, "v9.8-dev1", "dev1_1", "9.8-dev1_1.el9", "proven"),
+    (_DEB, "v9.8-dev1", "dev1_1", "9.8~dev1-1.trixie", "proven"),
+    (_RPM, "v9.8", "1", "9.8.1-1.el9", "not_proven"), (_DEB, "v9.8", "1", "19.8-1.trixie", "not_proven"),
+    (_RPM, "v9.8-dev1", "dev1_1", "9.80-dev1_1.el9", "not_proven"),
+], ids=["rpm-ga", "deb-ga", "rpm-dev", "deb-dev", "rpm-9.8.1", "deb-19.8", "rpm-9.80-dev"])
+def test_identity_reads_a_two_part_version_from_the_pin(monkeypatch, tmp_path, env, tag, buildnum, pin, l1):
+    key = "PEP_EXPECTED_RPM" if env["PEP_FAMILY"] == "rpm" else "PEP_EXPECTED_DEB"
+    m = load(monkeypatch, dict(env, PEP_EXPECTED_VERSION="9.8", PEP_EFFECTIVE_TAG=tag,
+                               PEP_EXPECTED_BUILDNUM=buildnum, **{key: pin}))
+    _wire(monkeypatch, tmp_path, m, _Container(_pkg_list()))
+    m.pep_integration_mode.pep_evidence.write_install_evidence(
+        m.INTEGRATION_REQUEST, "run-A", "pinned", pin, str(tmp_path / "install-evidence.json"),
+        installed_sha256="f" * 64)
+    monkeypatch.setattr(m.package_management, "query_installed_version", lambda c, n: pin)
+    ctype = "rhel" if env["PEP_FAMILY"] == "rpm" else "deb"
+    outcome, msg = _outcome(m.test_vectorizer_identity, env["PEP_CONTAINER_ALIAS"], ctype)
+    assert outcome == ("passed" if l1 == "proven" else "failed"), msg
+    assert l1 == "proven" or "component-version match failed" in msg
+    ev = json.loads((tmp_path / "identity-evidence.json").read_text())
+    assert ev == {"l2a": "proven", "l2b": "not_attempted", "l1": l1}
+
+
 def test_identity_without_install_evidence_fails_with_persisted_evidence(monkeypatch, tmp_path):
     m = load(monkeypatch, _RPM)
     _wire(monkeypatch, tmp_path, m, _Container(_pkg_list()))

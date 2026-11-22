@@ -165,6 +165,8 @@ GAP_TARGET_INELIGIBLE = "target_ineligible"
 GAP_MEMBER_REJECTED = "member_rejected"
 # A PG-coupled package that does not belong to its target's family, PG major or series.
 GAP_PACKAGE_POLICY_MISMATCH = "package_policy_mismatch"
+# A runtime package that a flat entry naming its companions lists neither as certified nor as a companion.
+GAP_UNCLASSIFIED_PACKAGE = "unclassified_runtime_package"
 
 # cert-plan/1 member exclusions that are deliberate policy, not evidence defects: never gaps.
 _POLICY_EXCLUSIONS = frozenset({"non_runtime", "package_not_allowed"})
@@ -632,7 +634,9 @@ def _rejected_member_gaps(cell):
     package name is still a gap. The detail names the file's artifact path, native arch and checksum.
     A PG-coupled package for the wrong family, PG major or series is an ordinary rejected member, so
     it stays visible beside a valid target. A runtime companion whose ONLY exclusion is the policy's
-    ``runtime_not_certified`` is not a gap: it is listed by ``_uncertified_runtime_packages``."""
+    ``runtime_not_certified`` is not a gap: it is listed by ``_uncertified_runtime_packages``. A runtime
+    file that a flat entry naming its companions does not account for (``package_unclassified``) is an
+    ``unclassified_runtime_package`` gap: never certified and never silently dropped."""
     gaps = []
     for m in _members(cell):
         rs = _exclusions(m)
@@ -643,7 +647,8 @@ def _rejected_member_gaps(cell):
         for label, value in (("path", path), ("native_arch", native), ("sha256", sha and sha[:12])):
             if value:
                 detail += "; %s=%s" % (label, value)
-        gaps.append(_cell_gap(cell, GAP_SCOPE_MEMBER, GAP_MEMBER_REJECTED, detail, physical_package=name))
+        reason = GAP_UNCLASSIFIED_PACKAGE if _pp.R_UNCLASSIFIED in rs else GAP_MEMBER_REJECTED
+        gaps.append(_cell_gap(cell, GAP_SCOPE_MEMBER, reason, detail, physical_package=name))
     return gaps          # ordered by the plan-wide gap sort; each detail carries its unique path
 
 

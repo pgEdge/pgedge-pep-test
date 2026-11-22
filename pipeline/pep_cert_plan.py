@@ -444,14 +444,20 @@ def _package_reason(policy, allowed, name, family, pg_norm, release_intent):
     reason. A flat policy keeps today's check (``package_not_allowed`` off the allowlist). A
     PG-coupled policy uses the shared rules for this cell's family, BUILD PG major and the
     release's intended version, so a package for another family, PG major or series gets its own
-    reason (kept visible by the planner) instead of the silent ``package_not_allowed``."""
+    reason (kept visible by the planner) instead of the silent ``package_not_allowed``. A flat entry
+    that names its companions marks them ``runtime_not_certified`` and any other name
+    ``package_unclassified``."""
     if PP.is_coupled(policy):
         return PP.classify(policy, name, family, pg_norm.get("build_pg_major"),
                            release_intent.get("intended_version"))
     if name in allowed:
         return None
-    # a flat entry's named, built-but-not-certified runtime package stays visible (never a gap)
-    return PP.R_UNCERTIFIED if name in PP.flat_uncertified_names(policy) else "package_not_allowed"
+    companions = PP.flat_uncertified_names(policy)
+    if not companions:
+        return "package_not_allowed"          # a plain flat entry: unchanged, silent exclusion
+    # a named, built-but-not-certified companion is listed (never a gap); any other name is
+    # unclassified, so the planner keeps it visible as a coverage gap
+    return PP.R_UNCERTIFIED if name in companions else PP.R_UNCLASSIFIED
 
 
 def _select_targets(cell, art, policy, release_intent, provenance, family, allowed, pg_norm):

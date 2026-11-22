@@ -12,7 +12,9 @@ A policy entry has one of two forms:
     ``uncertified_runtime_package_names`` (with a required ``uncertified_reason``) names the OTHER
     runtime packages the release builds in each cell but the component does not certify (e.g. a CLI
     or an arch-independent web UI beside the server it tests); they are reported, never silently
-    dropped. A flat entry without it is unchanged;
+    dropped. Such an entry accounts for every runtime package it expects, so any OTHER name is
+    ``package_unclassified`` (a coverage gap downstream), never the silent exclusion. A flat entry
+    without the list is unchanged;
   * PG-coupled templates: ``"pg_coupled": true`` with ``runtime_package_templates``, a per-family
     list of name templates. ``{pg}`` is the PostgreSQL major the package was built for and
     ``{series}`` is the product series, derived from the release version's leading major through
@@ -25,8 +27,9 @@ A policy entry has one of two forms:
 
 ``classify`` returns None for the package to certify, or ONE reason code. ``package_not_allowed``
 is the existing, intentional policy exclusion (an unrelated package). Every other reason means
-"this is the component's package, but for the wrong family / PG major / series", or a known runtime
-companion that is not certified; consumers keep those visible. Stdlib only, pure.
+"this is the component's package, but for the wrong family / PG major / series", a known runtime
+companion that is not certified, or (a flat entry that names its companions) a package the entry
+does not account for; consumers keep those visible. Stdlib only, pure.
 """
 from __future__ import annotations
 
@@ -41,6 +44,7 @@ R_SERIES = "series_mismatch"                     # ... of another product series
 R_NO_PG = "pg_major_unknown"                     # PG-coupled policy, but no canonical PG major known
 R_NO_SERIES = "series_unknown"                   # the release version maps to no known series
 R_UNCERTIFIED = "runtime_not_certified"          # a declared runtime companion, not certified
+R_UNCLASSIFIED = "package_unclassified"          # flat entry naming its companions: a name it does not list
 
 COUPLED_KEYS = ("pg_coupled", "runtime_package_templates", "series_by_version_major",
                 "uncertified_runtime_package_templates", "uncertified_reason")
@@ -242,7 +246,10 @@ def classify(entry, name, family, pg_major, version):
     if not is_coupled(entry):
         if name in expected_names(entry, family, pg_major, version):
             return None
-        return R_UNCERTIFIED if name in flat_uncertified_names(entry) else R_NOT_ALLOWED
+        companions = flat_uncertified_names(entry)
+        if name in companions:
+            return R_UNCERTIFIED
+        return R_UNCLASSIFIED if companions else R_NOT_ALLOWED
     if name in expected_names(entry, family, pg_major, version):
         return None
     matches = _parse(entry, name)

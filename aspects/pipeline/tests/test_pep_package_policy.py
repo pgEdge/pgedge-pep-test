@@ -113,8 +113,11 @@ def test_flat_entry_may_name_uncertified_runtime_packages():
         assert pp.classify(FLAT_UNC, "p-server", family, None, "1.0") is None
         assert pp.classify(FLAT_UNC, "p-cli", family, None, "1.0") == pp.R_UNCERTIFIED
         assert pp.classify(FLAT_UNC, "p-web", family, "17", "9.9") == pp.R_UNCERTIFIED
-        assert pp.classify(FLAT_UNC, "p-other", family, None, "1.0") == pp.R_NOT_ALLOWED
+        # an entry that names its companions accounts for every runtime package it expects, so any
+        # other name is unclassified (reported as a coverage gap), never the silent exclusion
+        assert pp.classify(FLAT_UNC, "p-other", family, None, "1.0") == pp.R_UNCLASSIFIED
     assert pp.is_component_runtime_package(FLAT_UNC, "p-server") is True
+    assert pp.is_component_runtime_package(FLAT_UNC, "p-other") is False
     assert pp.is_component_runtime_package(FLAT_UNC, "p-cli") is False     # named, never certified
 
 
@@ -123,6 +126,15 @@ def test_describe_records_flat_uncertified_names_and_keeps_plain_flat_entries_un
                                      "uncertified_reason": FLAT_UNC["uncertified_reason"]}
     assert pp.describe(RAG) is None
     assert pp.classify(RAG, "p-cli", "rpm", None, "1.0") == pp.R_NOT_ALLOWED
+
+
+def test_only_a_flat_entry_naming_its_companions_has_unclassified_packages():
+    # plain flat and PG-coupled entries keep package_not_allowed for an unrelated name
+    assert pp.R_UNCLASSIFIED == "package_unclassified"
+    for family in ("rpm", "deb"):
+        assert pp.classify(RAG, "p-other", family, None, "1.0") == pp.R_NOT_ALLOWED
+        assert pp.classify(SPOCK, "p-other", family, "17", "5.0.13") == pp.R_NOT_ALLOWED
+    assert pp.classify(FLAT_UNC, None, "rpm", None, "1.0") == pp.R_NOT_ALLOWED      # not a name at all
 
 
 @pytest.mark.parametrize("over,fragment", [

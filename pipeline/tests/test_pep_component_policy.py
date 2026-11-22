@@ -144,6 +144,9 @@ def test_request_accepts_only_the_server_and_names_why_a_companion_is_refused(co
     for companion in companions:
         with pytest.raises(pr.RequestError, match="runtime_not_certified"):
             pr.normalize_request(_req(component=component, package_name=companion))
+    # a package the policy does not name is refused too, never certified
+    with pytest.raises(pr.RequestError, match="package_unclassified"):
+        pr.normalize_request(_req(component=component, package_name=server + "-unlisted"))
     for owner in ("radar", "rag"):
         with pytest.raises(pr.RequestError, match="does not match component '%s'" % owner):
             pr.normalize_request(_req(component=owner, package_name=server))

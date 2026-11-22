@@ -476,6 +476,9 @@ _GAP_REASON_TEXT = {
     "no_enabled_platform": "No enabled PEP test container for this OS/arch",
     "package_evidence_rejected": ("Capture rejected the receipt or package for this build as invalid "
                                   "(code in Detail); this blocks certification in both modes"),
+    "unclassified_runtime_package": ("A runtime package built in this cell that the component's policy "
+                                     "names neither as certified nor as built but not certified; "
+                                     "nothing tested it"),
 }
 # Package proof, in words that hold whether the captured package came from a build
 # receipt or from a published-package replay.

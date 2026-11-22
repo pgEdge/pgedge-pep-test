@@ -260,7 +260,8 @@ def test_integration_request_selects_only_the_requested_server_package(monkeypat
 
 @pytest.mark.parametrize("package,why", [
     (COLLECTOR, "runtime_not_certified"), (CLIENT, "runtime_not_certified"), (CHECK, "runtime_not_certified"),
-    ("pgedge-radar", "package_not_allowed"),
+    # the workbench entry names its companions, so any other name is unclassified (still refused)
+    ("pgedge-radar", "package_unclassified"),
 ], ids=["collector", "client", "upgrade-check", "foreign"])
 def test_a_request_for_any_other_package_is_rejected_at_load(monkeypatch, package, why):
     with pytest.raises(Exception, match="does not match component 'ai_db_workbench'.*%s" % why):

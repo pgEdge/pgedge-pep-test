@@ -10,8 +10,12 @@ invocation planner -> cert-result reducer -> gate -> report) this proves:
     under "Runtime packages not certified by policy" with the policy's reason, are never coverage
     gaps, and do not block or degrade the decision -- including an arch-independent (noarch/all)
     companion that each arch cell builds;
-  * source packages stay silent, and a runtime package the policy does not name stays the silent
-    ``package_not_allowed`` exclusion it always was (plain flat entries are unchanged);
+  * a runtime package such an entry does NOT name is never certified and never silently dropped: the
+    cert-plan records it as ``package_unclassified``, the invocation planner makes it a member-scope
+    ``unclassified_runtime_package`` coverage gap, so coverage is partial and the existing policy
+    applies (observe reports, gate blocks), and the HTML and Markdown reports show it as a gap;
+  * source and debug packages stay silent policy exclusions, and a plain flat entry (no companion
+    list) keeps an unnamed runtime package as the silent ``package_not_allowed`` exclusion it always was;
   * a malformed flat-uncertified policy fails the cert-plan closed.
 Versions and companion names are synthetic. The invocation planner's backstop validates every target
 against the REGISTERED policy of the release's component, so the certified package here is rag's
@@ -48,7 +52,7 @@ def members(family, os_token, arch):
                    path="p-server-2.0.0.src.rpm")][: 4 if family == "rpm" else 3]
 
 
-def certify(cells, policy=None, *, mode="full", simulated=False):
+def certify(cells, policy=None, *, mode="full", simulated=False, component="rag"):
     jobs, arts = [], []
     for i, c in enumerate(cells):
         cid = c["cell"]["cell_id"]
@@ -58,8 +62,9 @@ def certify(cells, policy=None, *, mode="full", simulated=False):
     publication = {"rpm": "skipped", "deb": "skipped"} if simulated else {"rpm": "success", "deb": "success"}
     cert_plan = CP.reduce({
         "provenance": dict(CG.PROVENANCE),
-        "release_intent": {"logical_component": "rag", "intended_version": "2.0.0", "intended_buildnum": "1",
-                           "effective_tag": "v2.0.0", "channel": "staging", "simulated": simulated},
+        "release_intent": {"logical_component": component, "intended_version": "2.0.0",
+                           "intended_buildnum": "1", "effective_tag": "v2.0.0", "channel": "staging",
+                           "simulated": simulated},
         "component_policy": copy.deepcopy(POLICY if policy is None else policy),
         "planned_cells": [c["cell"] for c in cells], "job_records": jobs, "artifacts": arts,
         "publication_results": publication, "execution_mode": mode})
@@ -113,6 +118,110 @@ def test_only_the_certified_package_is_tested_and_companions_are_listed_with_the
     md = (Path(tmp_path) / "s.md").read_text()
     for text in (section, md):
         assert "does not certify" in text and "not install" not in text and "not installed" not in text, text
+
+
+UNNAMED = "p-agent"
+GAP = "unclassified_runtime_package"
+
+
+def _with(extra):
+    """cells() with ``extra(family, os_token, arch)`` members added to every cell."""
+    return [CG.planned(f, o, "amd64", members=members(f, o, "amd64") + extra(f, o, "amd64"))
+            for f, o in (("rpm", "el-9"), ("deb", "trixie"))]
+
+
+def _render(tmp_path, decided, mode):
+    result, decision = decided[mode]
+    out = Path(tmp_path) / mode
+    R.render_report(result, decision, {}, out / "html", markdown_path=out / "summary.md")
+    html = (out / "html" / "consolidated-report.html").read_text()
+    md = (out / "summary.md").read_text()
+    return html, md
+
+
+def _html_section(html, anchor):
+    start = html.find('<h2 id="%s">' % anchor)
+    if start < 0:
+        return ""
+    return html[start:html.index("</table></div>", start)]
+
+
+def _md_gap_rows(md):
+    return [line for line in md.splitlines() if line.startswith("| ") and "gap:" in line]
+
+
+def _assert_unnamed_is_a_gap_everywhere(tmp_path, cp, plan, decided, unnamed, server, companions):
+    # capture/planning: the cert-plan keeps the member, unselected, with its own reason
+    recs = [m for c in cp["cells"] for m in c["members"] if m["package_name"] == unnamed]
+    assert len(recs) == 2 and all(m["selected"] is False and m["exclusion_reasons"] == ["package_unclassified"]
+                                  for m in recs), recs
+    # invocation planning: the certified package is still the only target; one member gap per cell
+    assert sorted((i["package_name"], i["family"]) for i in plan["matrix"]["include"]) == \
+        [(server, "deb"), (server, "rpm")]
+    assert sorted((g["family"], g["scope"], g["physical_package"], g["reason"]) for g in plan["coverage_gaps"]) == \
+        [("deb", "member", unnamed, GAP), ("rpm", "member", unnamed, GAP)]
+    assert all(g["detail"].startswith("package_unclassified; path=") for g in plan["coverage_gaps"])
+    assert {u["physical_package"] for u in plan["uncertified_runtime_packages"]} == set(companions)
+    assert plan["counts"]["gaps_by_scope"]["member"] == 2
+    CG.assert_reconciles(cp, plan)
+    # result: partial coverage carrying the gaps; the decision is the existing partial-coverage policy
+    for mode in ("observe", "gate"):
+        result, _ = decided[mode]
+        assert result["coverage_status"] == "partial" and result["test_verdict"] == "pass"
+        assert sorted(g["physical_package"] for g in result["coverage_gaps"]) == [unnamed, unnamed]
+        assert unnamed not in {u["physical_package"] for u in result["uncertified_runtime_packages"]}
+    assert CG.outcomes(decided) == CG.PARTIAL
+    # HTML and Markdown: listed as a gap, never as a not-certified companion
+    for mode in ("observe", "gate"):
+        html, md = _render(tmp_path, decided, mode)
+        gaps = _html_section(html, "gaps")
+        rows = [r for r in gaps.split('<tr id="gap-')[1:] if "<code>%s</code>" % unnamed in r]
+        assert len(rows) == 2 and all("UNCLASSIFIED RUNTIME PACKAGE" in r and "names neither as certified" in r
+                                      for r in rows), gaps
+        assert unnamed not in _html_section(html, "uncertified")
+        rows = _md_gap_rows(md)
+        assert "**Coverage gaps (2)**" in md and len([r for r in rows if unnamed in r]) == 2, md
+        unc = [line for line in md.splitlines() if line.startswith("**Not certified by policy:**")]
+        assert len(unc) == 1 and unnamed not in unc[0] and all(c in unc[0] for c in companions)
+
+
+def test_an_unnamed_runtime_package_beside_declared_companions_is_a_visible_gap(tmp_path):
+    cp, plan, decided = certify(_with(lambda f, o, a: [CG.pkg(f, o, a, name=UNNAMED)]))
+    _assert_unnamed_is_a_gap_everywhere(tmp_path, cp, plan, decided, UNNAMED, SERVER, ["p-cli", "p-web"])
+
+
+def test_an_unnamed_arch_independent_package_is_a_gap_in_every_cell_that_builds_it():
+    cp, plan, _ = certify(_with(lambda f, o, a: [CG.pkg(f, o, a, name="p-docs",
+                                                        native="noarch" if f == "rpm" else "all")]))
+    assert sorted((g["family"], g["physical_package"], g["reason"]) for g in plan["coverage_gaps"]) == \
+        [("deb", "p-docs", GAP), ("rpm", "p-docs", GAP)]
+
+
+@pytest.mark.parametrize("cls,native", [("debug", None), ("source", "src")])
+def test_unnamed_debug_and_source_packages_stay_silent_policy_exclusions(cls, native):
+    cp, plan, decided = certify(_with(lambda f, o, a: [CG.pkg(f, o, a, name=UNNAMED + "-dbg", cls=cls,
+                                                              native=native, sha="d" * 64)]))
+    recs = [m for c in cp["cells"] for m in c["members"] if m["package_name"] == UNNAMED + "-dbg"]
+    assert recs and all("non_runtime" in m["exclusion_reasons"] for m in recs)
+    assert plan["coverage_gaps"] == [] and CG.outcomes(decided) == CLEAN
+
+
+def test_a_cell_with_no_certified_package_names_the_unclassified_one_in_its_gap():
+    only = [CG.planned("rpm", "el-9", "amd64", members=[CG.pkg("rpm", "el-9", "amd64", name="p-cli"),
+                                                        CG.pkg("rpm", "el-9", "amd64", name=UNNAMED)]),
+            CG.planned("deb", "trixie", "amd64", members=members("deb", "trixie", "amd64"))]
+    cp, plan, decided = certify(only)
+    assert [(g["scope"], g["reason"], g["detail"]) for g in plan["coverage_gaps"]] == \
+        [("cell", "no_runtime_target", "package_unclassified, runtime_not_certified")]
+    assert CG.outcomes(decided) == CG.PARTIAL
+
+
+def test_an_unnamed_runtime_package_is_a_gap_in_a_preview_too():
+    _, plan, decided = certify(_with(lambda f, o, a: [CG.pkg(f, o, a, name=UNNAMED)]),
+                               mode="preview", simulated=True)
+    assert sorted((g["family"], g["physical_package"], g["reason"]) for g in plan["coverage_gaps"]) == \
+        [("deb", UNNAMED, GAP), ("rpm", UNNAMED, GAP)]
+    assert {m: d["reason_code"] for m, (_, d) in decided.items()} == {"observe": "preview", "gate": "preview"}
 
 
 def test_a_preview_lists_the_same_companions_without_claiming_publication():
@@ -198,3 +307,26 @@ def test_a_registered_product_certifies_its_server_and_lists_every_companion(com
     assert sorted((u["family"], u["physical_package"]) for u in plan["uncertified_runtime_packages"]) == \
         sorted((f, n) for f in ("rpm", "deb") for n in companions)
     assert {u["reason"] for u in plan["uncertified_runtime_packages"]} == {entry["uncertified_reason"]}
+
+
+@pytest.mark.parametrize("comp", REGISTERED)
+def test_a_registered_product_reports_an_unexpected_runtime_package_as_a_gap(comp, tmp_path):
+    # Reproduces the reported defect: before, an extra runtime package left coverage complete, the
+    # decision a clean pass and the report silent. The certified server is still the only target.
+    entry = PR.COMPONENT_POLICY[comp]
+    [server] = entry["allowed_runtime_package_names"]
+    companions = entry["uncertified_runtime_package_names"]
+    unexpected = server + "-unlisted"
+
+    def built(family, os_token, arch):
+        out = [CG.pkg(family, os_token, arch, name=server)]
+        for i, n in enumerate(companions + [unexpected]):
+            out.append(CG.pkg(family, os_token, arch, name=n,
+                              sha=("%d%s%s%s" % (i, n, os_token, arch)).encode().hex()[:64].ljust(64, "0")))
+        return out
+
+    planned = [CG.planned("rpm", "el-9", "amd64", members=built("rpm", "el-9", "amd64")),
+               CG.planned("deb", "trixie", "amd64", members=built("deb", "trixie", "amd64"))]
+    cp, plan, decided = certify(planned, copy.deepcopy(entry), component=comp)
+    _assert_unnamed_is_a_gap_everywhere(tmp_path, cp, plan, decided, unexpected, server, companions)
+

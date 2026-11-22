@@ -389,10 +389,11 @@ def test_mcp_identity(container_name, container_type):
     """Integration mode: one consolidated identity verdict for the requested MCP package
     (install-before-identity, then the exact package-manager version, with the checksum of the
     pinned install recorded by test_mcp_component_install). No binary version is probed: the server
-    has no --version flag, and the version it reports elsewhere (-openapi, /health) is a source
-    constant maintained by hand, not derived from the release tag (v1.1.0-rc1 reported 1.1.0), so the
-    release request implies no binary version. The evidence is persisted before any failure. Skipped
-    in standalone mode."""
+    has no --version flag (none through v1.2.0-beta1), and the version it reports elsewhere (-openapi,
+    /health) is the source constant ServerVersion (internal/mcp/server.go), set by hand in a release
+    commit and not derived from the release tag: GoReleaser's -X main.version names no variable of the
+    server's main package, and v1.1.0-rc1 reported 1.1.0. So the release request implies no binary
+    version. The evidence is persisted before any failure. Skipped in standalone mode."""
     req = INTEGRATION_REQUEST
     if req is None:
         pytest.skip("integration mode only")

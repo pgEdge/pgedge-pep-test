@@ -16,7 +16,8 @@ test_pep_radar_wiring.py. Versions are synthetic (9.8.7), never a real MCP relea
     expected-output reference, no SBOM directory), and the located SBOM must belong to the requested
     package;
   * the expected-output references derived from the MCP packaging (pkg/rpm/pgedge-nla.spec and
-    pkg/deb/debian/rules at pgEdge/pgedge-postgres-mcp 6448336), checked through the real
+    pkg/deb/debian/rules at pgEdge/pgedge-postgres-mcp 6448336, unchanged through v1.2.0-beta1 and
+    main a08aa30), checked through the real
     file_management.verify_bundled_files.
 """
 import importlib.util
@@ -341,7 +342,7 @@ def test_identity_proves_the_exact_requested_package_version(monkeypatch, tmp_pa
     status, msg = outcome(m.test_mcp_identity, "oel9-amd64", "rhel")
     assert status == ("passed" if ok else "failed")
     assert json.loads((tmp_path / "identity-evidence.json").read_text())["l2a"] == ("proven" if ok else "not_proven")
-    # The server has no --version flag and its version constant does not follow the tag: no binary probe.
+    # The server has no --version flag and its version constant is set by hand, not from the tag: no binary probe.
     assert probe.calls == []
 
 
@@ -460,7 +461,8 @@ def test_a_bad_sbom_signature_fails(monkeypatch):
 
 
 # --------------------------------------------------------------------------- expected-output references
-# The payload the MCP server package defines at pgEdge/pgedge-postgres-mcp 6448336:
+# The payload the MCP server package defines at pgEdge/pgedge-postgres-mcp 6448336 (pkg/ unchanged through
+# v1.2.0-beta1 d3030c3 and main a08aa30 apart from the version defaults in pkg/common.sh):
 #   RPM pkg/rpm/pgedge-nla.spec %files -n pgedge-postgres-mcp (:146-159; %{_unitdir} on EL9/EL10 is
 #   /usr/lib/systemd/system). The kb-builder binary, its yaml and SBOM are no longer shipped (:142-144,
 #   changelog :208-211).

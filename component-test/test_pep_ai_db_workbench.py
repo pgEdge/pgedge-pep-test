@@ -72,8 +72,8 @@ ai_db_workbench_server_binary = os.getenv("AI_DBA_SERVER_BINARY", AI_DBA_SERVER_
 # RPM declares `Requires(pre): pgedge-ai-dba-upgrade-check = %{version}-%{release}` (spec), its DEB
 # `Pre-Depends: pgedge-ai-dba-upgrade-check (>= ${binary:Version})` (debian/control). Installing the
 # pinned server therefore pulls it in from the same channel; integration mode records its version
-# and never certifies it. The packages the channels serve today predate it, so the standalone
-# dependency expectations below do not name it.
+# and never certifies it. The standalone dependency expectations below do not name it: the release
+# channel's 1.0.0-1 predates it (2026-11-09 metadata), while staging's 2.0.0~beta1 has it (2026-11-20).
 AI_DBA_UPGRADE_CHECK_PACKAGE = "pgedge-ai-dba-upgrade-check"
 
 # In integration mode the package under test is exactly the requested (validated) server package and
@@ -726,7 +726,8 @@ def test_binary_version(container_name, container_type, package, binary_path):
     Integration mode skips this check: the binaries print hand-maintained version constants
     (alerter/collector `Version`, server `ServerVersion`) that the release does not stamp from
     the tag (release.yml builds with `-ldflags="-s -w"` only), so no binary version follows from
-    the release request; an rc tag's binaries have printed the GA version. Identity there is the
+    the release request. A release commit sets them by hand: v1.0.0-alpha2 still carried 1.0.0-alpha1,
+    v1.0.0-rc1 and v1.0.0-test1 carried 1.0.0, and v2.0.0-beta1 builds the same way. Identity there is the
     exact package version plus the installed file's checksum (test_ai_db_workbench_identity).
     """
     if INTEGRATION_REQUEST is not None:

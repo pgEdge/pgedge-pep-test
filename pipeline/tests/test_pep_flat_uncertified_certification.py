@@ -112,12 +112,25 @@ def test_only_the_certified_package_is_tested_and_companions_are_listed_with_the
     html = (Path(tmp_path) / "out" / "consolidated-report.html").read_text()
     assert "Runtime packages not certified by policy (4)" in html and "p-web" in html and "p-cli" in html
     # A companion may still be installed as a dependency of the package under test (a server that
-    # requires a helper package), so the wording claims only that PEP does not certify it.
+    # requires a helper package), and its build receipt does record its identity and checksum, so the
+    # wording claims only that PEP does not certify it or verify it as an installed target.
     section = html[html.index('<h2 id="uncertified">'):]
     section = section[:section.index("</table></div>")]
     md = (Path(tmp_path) / "s.md").read_text()
-    for text in (section, md):
+    md_line = next(line for line in md.splitlines() if line.startswith("**Not certified by policy:**"))
+    for text in (section, md_line):
         assert "does not certify" in text and "not install" not in text and "not installed" not in text, text
+        assert "build receipts record their identities and checksums" in text, text
+        assert "does not verify them as installed certification targets" in text, text
+        assert "no identity or checksum" not in text and "no checksum" not in text, text
+    assert "may still be installed as a dependency of the package under test" in section
+    # one listed package reads in the singular
+    one = dict(result, uncertified_runtime_packages=result["uncertified_runtime_packages"][:1])
+    R.render_report(one, decision, {}, Path(tmp_path) / "one", markdown_path=Path(tmp_path) / "one.md")
+    one_line = next(line for line in (Path(tmp_path) / "one.md").read_text().splitlines()
+                    if line.startswith("**Not certified by policy:**"))
+    assert ("build receipt records its identity and checksum" in one_line
+            and "does not verify it as an installed certification target" in one_line), one_line
 
 
 UNNAMED = "p-agent"

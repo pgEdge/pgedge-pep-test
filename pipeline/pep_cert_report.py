@@ -1304,10 +1304,17 @@ def _gaps_table(gaps: list) -> str:
             'not listed.</p><div class="scroll"><table>%s%s</table></div>' % (header, rows))
 
 
-# Claims only what is true of every listed package: it was built, and PEP does not certify it. A
-# listed package may still be installed as a dependency of the package under test.
-_UNCERTIFIED_TEXT = ("in this release's build artifacts, but the certification deliberately does not "
-                     "certify them: no test targets them and no identity or checksum check covers them")
+def _uncertified_text(plural: bool = True) -> str:
+    """Claims only what is true of every listed package: it was built, its build receipt records its
+    identity and checksum, and PEP does not certify it or verify it as an installed certification
+    target. It may still be installed as a dependency of the package under test."""
+    if plural:
+        return ("in this release's build artifacts, and the build receipts record their identities and "
+                "checksums, but PEP does not certify them: no test targets them, and PEP does not verify "
+                "them as installed certification targets")
+    return ("in this release's build artifacts, and the build receipt records its identity and checksum, "
+            "but PEP does not certify it: no test targets it, and PEP does not verify it as an installed "
+            "certification target")
 
 
 def _uncertified_entries(result: dict):
@@ -1345,11 +1352,12 @@ def _uncertified_table(result: dict) -> str:
             _pill("MALFORMED RECORD", "issue"),
             _esc("malformed record list: uncertified_runtime_packages is not a list")))
     return ('<h2 id="uncertified">Runtime packages not certified by policy (%d)</h2>'
-            '<p class="sub">These runtime packages are %s. They are listed so the result never '
+            '<p class="sub">These runtime packages are %s. One may still be installed as a dependency '
+            'of the package under test. They are listed so the result never '
             'implies every runtime package was certified, and they are not counted as coverage '
             'gaps.</p><div class="scroll"><table><tr><th>Package</th><th>Cell</th>'
             '<th>Family</th><th>OS</th><th>Arch</th><th>Reason</th></tr>%s</table></div>'
-            % (len(entries), _UNCERTIFIED_TEXT, "".join(rows)))
+            % (len(entries), _uncertified_text(), "".join(rows)))
 
 
 def _md_uncertified(result: dict) -> list:
@@ -1362,7 +1370,7 @@ def _md_uncertified(result: dict) -> list:
         out += ["", "**Not certified by policy:** %s %s %s (%s); not counted as coverage gaps." % (
             ", ".join(presentation.md_code(n) for n in names),
             "is" if len(names) == 1 else "are",
-            _UNCERTIFIED_TEXT.replace("them", "it" if len(names) == 1 else "them"),
+            _uncertified_text(plural=len(names) != 1),
             presentation.md_text(_txt(good[0].get("reason")), 160))]
     if bad:
         out += ["", "⚠ Not certified by policy: %s could not be read; see the report." % (

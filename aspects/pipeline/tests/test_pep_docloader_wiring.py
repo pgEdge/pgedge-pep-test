@@ -14,8 +14,10 @@ test_pep_radar_wiring.py. Versions are synthetic (9.8.7), never a real docloader
   * required checks fail instead of skipping in integration mode (missing container, reference or SBOM
     configuration);
   * the expected-output references and the SBOM directory derived from docloader's packaging.
-  * the served enterprise-built RPMs (1.0.0-1, 1.0.0-beta1_1, old SBOM layout): a standalone run checks
-    them against their own exact inventory; integration mode always demands the in-repo layout.
+  * the served enterprise-built RPMs (1.0.0-1, 1.0.0-beta1_1, old SBOM layout): a standalone run accepts
+    their inventory only when the package owns all of it, and verifies its signed SBOM there; an in-repo
+    build with the same version-release is checked as one; SBOM paths of both layouts fail in every mode;
+    integration mode always demands the in-repo layout.
 The existing test has no strip check and none is added, so there is nothing to cover for it here.
 """
 import importlib.util
@@ -684,22 +686,32 @@ def test_an_rpm_with_the_old_top_level_sbom_layout_fails_the_bundled_file_check(
 # (2026-04-17) moved the SBOM into /usr/share/pgedge-docloader/. Saved channel metadata (2026-11-09: daily,
 # staging, release; el9, el10) lists exactly two docloader version-releases, 1.0.0-1 and 1.0.0-beta1_1, and
 # the saved release/staging el9 filelists show both with the SBOM directly under /usr/share; docloader's
-# own spec has always used the subdirectory. A standalone
-# run compares those two version-releases with their own (legacy) inventory and everything else with the
-# in-repo one. Integration mode certifies docloader's own builds and never consults the legacy set.
+# own spec has always used the subdirectory. A version-release does not say which packaging built the bytes
+# (docloader's own pipeline also produces 1.0.0-1), so the package's own file list decides: a standalone run
+# accepts the legacy inventory only for those two version-releases AND only when the package owns that
+# complete inventory, whose signed SBOM is then verified where it names it. A package owning SBOM paths of
+# both layouts fails in every mode. Integration mode certifies docloader's own builds and never consults
+# the legacy set.
 _LEGACY_RPM_PAYLOAD = ["/etc/pgedge/docloader/config.yml", "/usr/bin/pgedge-docloader",
                        "/usr/share/doc/pgedge-docloader/README.md", "/usr/share/licenses/pgedge-docloader",
                        "/usr/share/licenses/pgedge-docloader/LICENCE.md",
                        "/usr/share/pgedge-docloader-sbom.json", "/usr/share/pgedge-docloader-sbom.json.asc"]
+_LEGACY_SBOMS = ["/usr/share/pgedge-docloader-sbom.json", "/usr/share/pgedge-docloader-sbom.json.asc"]
+_IN_REPO_SBOMS = ["/usr/share/pgedge-docloader/pgedge-docloader-sbom.json",
+                  "/usr/share/pgedge-docloader/pgedge-docloader-sbom.json.asc"]
+# Both SBOM layouts in one package: no packaging produces this.
+_MIXED_RPM_PAYLOAD = _RPM_PAYLOAD + _LEGACY_SBOMS
 _VR_QUERY = ["rpm", "-q", "--qf", "%{VERSION}-%{RELEASE}", "pgedge-docloader"]
 # A v1.0.0 request (the only GA whose number matches a legacy build): docloader's own pipeline would build it.
 _V100_RPM = dict(_GA_RPM, PEP_EXPECTED_VERSION="1.0.0", PEP_EFFECTIVE_TAG="v1.0.0", PEP_EXPECTED_RPM="1.0.0-1.el9")
+_LEGACY_VRS = ["1.0.0-1.el9", "1.0.0-1.el10", "1.0.0-beta1_1.el9"]
 
 
-def _rpm(version_release, files=(), missing=()):
+def _rpm(version_release, files=(), missing=(), **sbom_answers):
     """An RPM container: the installed version-release (None = query fails), its file list and the SBOM
-    answers (``missing`` names SBOM files absent from where the check looks)."""
-    sbom = _sbom(missing=missing)
+    answers (``missing`` names SBOM files absent from where the check looks; ``sq_rc``/``sq_out`` the
+    signature check's result)."""
+    sbom = _sbom(missing=missing, **sbom_answers)
 
     def respond(cmd):
         if cmd == _VR_QUERY:
@@ -710,56 +722,133 @@ def _rpm(version_release, files=(), missing=()):
     return respond
 
 
+def _sq_verify(container):
+    return [cmd for cmd in container.cmds if isinstance(cmd, str) and "sq verify" in cmd and "--help" not in cmd]
+
+
 def test_the_legacy_reference_lists_the_served_enterprise_built_payload():
     # Exactly the saved filelist of pgedge-docloader 1.0.0-1.el9 without the build-id links, and what
-    # expected-output/rpm/docloader listed before the in-repo layout replaced it.
-    assert (_REPO / "expected-output" / "rpm" / "docloader-enterprise-legacy").read_text().splitlines() \
-        == _LEGACY_RPM_PAYLOAD
+    # expected-output/rpm/docloader listed before the in-repo layout replaced it. It differs from the in-repo
+    # reference only in where the SBOM and its signature live.
+    legacy = (_REPO / "expected-output" / "rpm" / "docloader-enterprise-legacy").read_text().splitlines()
+    assert legacy == _LEGACY_RPM_PAYLOAD
+    assert set(legacy) ^ set(_RPM_PAYLOAD) == set(_LEGACY_SBOMS) | set(_IN_REPO_SBOMS)
 
 
-@pytest.mark.parametrize("integration,vr,layout", [
-    (False, "1.0.0-1.el9", "enterprise-legacy"), (False, "1.0.0-1.el10", "enterprise-legacy"),
-    (False, "1.0.0-beta1_1.el9", "enterprise-legacy"),
-    (False, "1.0.0-2.el9", "in-repo"), (False, "1.0.0-test1_1.el9", "in-repo"), (False, "1.0.0-1", "in-repo"),
-    (False, "11.0.0-1.el9", "in-repo"), (False, "9.8.7-1.el9", "in-repo"), (False, None, "in-repo"),
-    (False, "", "in-repo"),
-    (True, "1.0.0-1.el9", "in-repo"), (True, "1.0.0-beta1_1.el9", "in-repo"), (True, None, "in-repo")])
-def test_the_rpm_reference_layout_rule(monkeypatch, integration, vr, layout):
+@pytest.mark.parametrize("integration,vr,files,layout", [
+    # standalone, a served legacy version-release: the package's own files decide
+    (False, "1.0.0-1.el9", _LEGACY_RPM_PAYLOAD, "enterprise-legacy"),
+    (False, "1.0.0-1.el10", _LEGACY_RPM_PAYLOAD + ["/usr/share/doc/pgedge-docloader"], "enterprise-legacy"),
+    (False, "1.0.0-beta1_1.el9", _LEGACY_RPM_PAYLOAD, "enterprise-legacy"),
+    (False, "1.0.0-1.el9", _RPM_PAYLOAD, "in-repo"),                    # same version-release, in-repo build
+    (False, "1.0.0-beta1_1.el9", _RPM_PAYLOAD, "in-repo"),
+    (False, "1.0.0-1.el9", _LEGACY_RPM_PAYLOAD[1:], "in-repo"),         # incomplete legacy inventory
+    (False, "1.0.0-1.el9", _LEGACY_SBOMS, "in-repo"),                   # the SBOM alone is not the inventory
+    (False, "1.0.0-1.el9", [], "in-repo"),
+    # any other version-release never gets the legacy inventory, whatever it ships
+    (False, "1.0.0-2.el9", _LEGACY_RPM_PAYLOAD, "in-repo"), (False, "1.0.0-test1_1.el9", _LEGACY_RPM_PAYLOAD, "in-repo"),
+    (False, "1.0.0-1", _LEGACY_RPM_PAYLOAD, "in-repo"), (False, "11.0.0-1.el9", _LEGACY_RPM_PAYLOAD, "in-repo"),
+    (False, "9.8.7-1.el9", _LEGACY_RPM_PAYLOAD, "in-repo"), (False, None, _LEGACY_RPM_PAYLOAD, "in-repo"),
+    (False, "", _LEGACY_RPM_PAYLOAD, "in-repo"),
+    # integration mode never does
+    (True, "1.0.0-1.el9", _LEGACY_RPM_PAYLOAD, "in-repo"), (True, "1.0.0-beta1_1.el9", _LEGACY_RPM_PAYLOAD, "in-repo"),
+    (True, None, _LEGACY_RPM_PAYLOAD, "in-repo"), (True, None, _RPM_PAYLOAD, "in-repo")])
+def test_the_rpm_layout_decision(monkeypatch, integration, vr, files, layout):
     m = load(monkeypatch, _STANDALONE)
-    assert m.rpm_reference_layout(integration, vr) == layout
+    decided, problem, _note = m.rpm_layout_decision(integration, vr, files)
+    assert (decided, problem) == (layout, None)
 
 
-@pytest.mark.parametrize("vr", ["1.0.0-1.el9", "1.0.0-1.el10", "1.0.0-beta1_1.el9"])
+@pytest.mark.parametrize("integration", [False, True], ids=["standalone", "integration"])
+@pytest.mark.parametrize("vr", ["1.0.0-1.el9", "1.0.0-beta1_1.el9", "9.8.7-1.el9", None])
+@pytest.mark.parametrize("files", [_MIXED_RPM_PAYLOAD, _LEGACY_RPM_PAYLOAD + _IN_REPO_SBOMS[:1],
+                                   _RPM_PAYLOAD + _LEGACY_SBOMS[1:]], ids=["both", "legacy+json", "in-repo+asc"])
+def test_sbom_paths_of_both_layouts_are_a_problem_in_every_mode(monkeypatch, integration, vr, files):
+    m = load(monkeypatch, _STANDALONE)
+    _layout, problem, _note = m.rpm_layout_decision(integration, vr, files)
+    assert problem and "mixes two SBOM layouts" in problem
+
+
+def test_an_incomplete_legacy_inventory_is_named_in_the_note(monkeypatch):
+    m = load(monkeypatch, _STANDALONE)
+    _layout, _problem, note = m.rpm_layout_decision(False, "1.0.0-1.el9", _LEGACY_RPM_PAYLOAD[1:])
+    assert note and "/etc/pgedge/docloader/config.yml" in note and "enterprise-legacy" in note
+    assert m.rpm_layout_decision(False, "9.8.7-1.el9", _LEGACY_RPM_PAYLOAD[1:])[2] is None
+
+
+@pytest.mark.parametrize("vr", _LEGACY_VRS)
 def test_a_standalone_run_checks_a_served_enterprise_built_rpm_against_its_own_inventory(monkeypatch, vr):
     m = load(monkeypatch, _STANDALONE)
     c = _Container(_rpm(vr, _LEGACY_RPM_PAYLOAD + ["/usr/share/doc/pgedge-docloader"]))
     monkeypatch.setattr(m, "client", _Client(c))
     assert outcome(m.test_verify_bundled_files, "x", "rhel") == ("passed", "")
     assert outcome(m.test_verify_sbom, "x", "rhel") == ("passed", "")
-    verify = [cmd for cmd in c.cmds if isinstance(cmd, str) and "sq verify" in cmd]
+    verify = _sq_verify(c)
     assert len(verify) == 1 and "cd /usr/share && sq verify" in verify[0]
-    # Its own inventory is still exact: a missing legacy file fails.
+    # Its own inventory is still exact: a missing legacy file fails, and the failure names it.
     for missing in ("/usr/share/pgedge-docloader-sbom.json", "/usr/bin/pgedge-docloader"):
         monkeypatch.setattr(m, "client", _Client(_Container(
             _rpm(vr, [f for f in _LEGACY_RPM_PAYLOAD if f != missing]))))
         status, msg = outcome(m.test_verify_bundled_files, "x", "rhel")
-        assert status == "failed" and missing in msg, missing
-    monkeypatch.setattr(m, "client", _Client(_Container(
-        _rpm(vr, _LEGACY_RPM_PAYLOAD, missing=("pgedge-docloader-sbom.json.asc",)))))
+        assert status == "failed" and missing in msg and "enterprise-legacy" in msg, missing
+
+
+@pytest.mark.parametrize("vr", _LEGACY_VRS)
+def test_a_legacy_inventory_whose_signature_file_is_absent_fails(monkeypatch, vr):
+    # The package database lists the signature, but it is not on disk where the inventory puts it.
+    m = load(monkeypatch, _STANDALONE)
+    c = _Container(_rpm(vr, _LEGACY_RPM_PAYLOAD, missing=("pgedge-docloader-sbom.json.asc",)))
+    monkeypatch.setattr(m, "client", _Client(c))
     status, msg = outcome(m.test_verify_sbom, "x", "rhel")
     assert status == "failed" and "/usr/share/pgedge-docloader-sbom.json.asc is missing" in msg
+    assert not _sq_verify(c)
+
+
+@pytest.mark.parametrize("vr", _LEGACY_VRS)
+def test_a_legacy_inventory_with_a_bad_signature_fails(monkeypatch, vr):
+    m = load(monkeypatch, _STANDALONE)
+    c = _Container(_rpm(vr, _LEGACY_RPM_PAYLOAD, sq_rc=1, sq_out="Error: no good signature"))
+    monkeypatch.setattr(m, "client", _Client(c))
+    assert outcome(m.test_verify_bundled_files, "x", "rhel") == ("passed", "")
+    status, msg = outcome(m.test_verify_sbom, "x", "rhel")
+    assert status == "failed" and "SBOM verification failed" in msg
+    verify = _sq_verify(c)
+    assert len(verify) == 1 and "cd /usr/share && sq verify" in verify[0]
 
 
 @pytest.mark.parametrize("vr", ["1.0.0-1.el9", "1.0.0-beta1_1.el9"])
-def test_a_legacy_version_release_with_the_in_repo_layout_fails_standalone(monkeypatch, vr):
-    # Fail closed: the legacy set names packages, not layouts. A rebuild reusing a legacy version-release
-    # with the in-repo layout is reported, never accepted under either inventory.
+def test_an_in_repo_build_sharing_a_legacy_version_release_passes_standalone(monkeypatch, vr):
+    # docloader's own pipeline also builds 1.0.0-1: with the in-repo files it is checked, and passes, as one.
     m = load(monkeypatch, _STANDALONE)
-    monkeypatch.setattr(m, "client", _Client(_Container(
-        _rpm(vr, _RPM_PAYLOAD, missing=("pgedge-docloader-sbom.json", "pgedge-docloader-sbom.json.asc")))))
-    status, msg = outcome(m.test_verify_bundled_files, "x", "rhel")
-    assert status == "failed" and "/usr/share/pgedge-docloader-sbom.json" in msg
+    c = _Container(_rpm(vr, _RPM_PAYLOAD + ["/usr/share/doc/pgedge-docloader"]))
+    monkeypatch.setattr(m, "client", _Client(c))
+    assert outcome(m.test_verify_bundled_files, "x", "rhel") == ("passed", "")
+    assert outcome(m.test_verify_sbom, "x", "rhel") == ("passed", "")
+    verify = _sq_verify(c)
+    assert len(verify) == 1 and "cd /usr/share/pgedge-docloader && sq verify" in verify[0]
+    # ... and its own signature and files are still required.
+    c = _Container(_rpm(vr, _RPM_PAYLOAD, sq_rc=1, sq_out="Error: no good signature"))
+    monkeypatch.setattr(m, "client", _Client(c))
     assert outcome(m.test_verify_sbom, "x", "rhel")[0] == "failed"
+    monkeypatch.setattr(m, "client", _Client(_Container(_rpm(vr, _RPM_PAYLOAD[:-1]))))
+    status, msg = outcome(m.test_verify_bundled_files, "x", "rhel")
+    assert status == "failed" and "pgedge-docloader-sbom.json.asc" in msg
+
+
+@pytest.mark.parametrize("env,vr", [(_STANDALONE, "1.0.0-1.el9"), (_STANDALONE, "9.8.7-1.el9"),
+                                    (_STANDALONE, None), (_V100_RPM, "1.0.0-1.el9"), (_GA_RPM, "9.8.7-1.el9")],
+                         ids=["standalone-legacy-vr", "standalone-other-vr", "standalone-unreadable",
+                              "integration-v1.0.0", "integration"])
+@pytest.mark.parametrize("files", [_MIXED_RPM_PAYLOAD, _RPM_PAYLOAD + _LEGACY_SBOMS[1:]], ids=["both", "in-repo+asc"])
+def test_a_package_mixing_both_sbom_layouts_fails_in_every_mode(monkeypatch, env, vr, files):
+    # The shared check tolerates extra files, so without this a mixture would pass under either inventory.
+    m = load(monkeypatch, env)
+    c = _Container(_rpm(vr, files))
+    monkeypatch.setattr(m, "client", _Client(c))
+    for test in (m.test_verify_bundled_files, m.test_verify_sbom):
+        status, msg = outcome(test, "x", "rhel")
+        assert status == "failed" and "mixes two SBOM layouts" in msg, test.__name__
+    assert not _sq_verify(c)
 
 
 @pytest.mark.parametrize("vr", ["1.0.0-2.el9", "1.0.0-test1_1.el9", "9.8.7-1.el9", None])

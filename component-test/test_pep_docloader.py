@@ -130,34 +130,69 @@ INTEGRATION_PROBLEM = integration_problem(INTEGRATION_REQUEST)
 # directly under /usr/share; that commit, and docloader's own pkg/rpm/docloader.spec from its first
 # version, install it under /usr/share/pgedge-docloader/. Saved channel metadata (2026-11-09) lists
 # exactly these two docloader version-releases on el9 and el10 in the daily, staging and release
-# channels, and the saved release and staging el9 filelists show both in the old layout, so this
-# inventory is genuinely version-specific: it names packages, not layouts. Only a
-# standalone run uses it (expected-output/rpm/docloader-enterprise-legacy); integration mode certifies
+# channels, and the saved release and staging el9 filelists show both in the old layout, so the legacy
+# inventory (expected-output/rpm/docloader-enterprise-legacy) is genuinely version-specific. A
+# version-release does not say which packaging built the bytes (docloader's own pipeline also produces
+# 1.0.0-1), so the package's own file list decides; see rpm_layout_decision. Integration mode certifies
 # docloader's own build and always demands the in-repo layout (expected-output/rpm/docloader).
 ENTERPRISE_LEGACY_RPM_RELEASES = frozenset({"1.0.0-1", "1.0.0-beta1_1"})
 ENTERPRISE_LEGACY_RPM_REFERENCE = "docloader-enterprise-legacy"
+IN_REPO_RPM_REFERENCE = "docloader"
 
 
-def rpm_reference_layout(integration, version_release):
-    """Return "enterprise-legacy" or "in-repo", the RPM inventory to compare an installed docloader with.
-    ``version_release`` is ``rpm -q --qf %{VERSION}-%{RELEASE}`` (None when the query failed). Only a
-    standalone run of one of ENTERPRISE_LEGACY_RPM_RELEASES (with its .el<N> dist tag) gets the legacy
-    inventory; anything else, including an unreadable version, gets the in-repo one."""
+def _rpm_reference(name):
+    path = Path(__file__).parent.parent / "expected-output" / "rpm" / name
+    return frozenset(line.strip() for line in path.read_text().splitlines() if line.strip())
+
+
+def rpm_layout_decision(integration, version_release, owned_files):
+    """Choose the RPM inventory an installed docloader is checked against: (layout, problem, note).
+
+    ``owned_files`` is the package's own ``rpm -ql`` list; ``version_release`` is ``rpm -q --qf
+    %{VERSION}-%{RELEASE}`` (None when not asked or unreadable).
+    * problem: the package owns SBOM paths of both layouts. No packaging produces that mixture, and the
+      shared bundled-file check tolerates extra files, so it fails here in every mode.
+    * "enterprise-legacy": only a standalone run, only for one of ENTERPRISE_LEGACY_RPM_RELEASES (with
+      its .el<N> dist tag), and only when the package owns every path of the complete legacy inventory.
+      The SBOM check then verifies the signed SBOM where that inventory puts it.
+    * "in-repo" otherwise: integration mode always; any other or unreadable version-release; a legacy
+      version-release with the in-repo files (an in-repo build of the same version) or an incomplete
+      legacy inventory. For the last case ``note`` names what the legacy inventory lacks.
+    """
+    in_repo = _rpm_reference(IN_REPO_RPM_REFERENCE)
+    legacy = _rpm_reference(ENTERPRISE_LEGACY_RPM_REFERENCE)
+    owned = {f.strip() for f in owned_files if f and f.strip()}
+    in_repo_only, legacy_only = owned & (in_repo - legacy), owned & (legacy - in_repo)
+    if in_repo_only and legacy_only:
+        return "in-repo", (f"the package mixes two SBOM layouts: it owns {sorted(in_repo_only)} (in-repo) "
+                           f"and {sorted(legacy_only)} (enterprise-legacy)"), None
     if integration or not version_release:
-        return "in-repo"
+        return "in-repo", None, None
     m = re.fullmatch(r"(.+)\.el\d+", version_release.strip())
-    return "enterprise-legacy" if m and m.group(1) in ENTERPRISE_LEGACY_RPM_RELEASES else "in-repo"
+    if not (m and m.group(1) in ENTERPRISE_LEGACY_RPM_RELEASES):
+        return "in-repo", None, None
+    lacking = sorted(legacy - owned)
+    if not lacking:
+        return "enterprise-legacy", None, None
+    return "in-repo", None, (f"{version_release.strip()} is not the complete enterprise-legacy inventory "
+                             f"either (missing: {', '.join(lacking)})")
 
 
 def _rpm_layout(container, container_type, package):
-    """The layout rule for this container; DEB packages and integration runs never query a version."""
-    if container_type != "rhel" or INTEGRATION_REQUEST is not None:
-        return "in-repo"
-    rc, out = container.exec_run(["rpm", "-q", "--qf", "%{VERSION}-%{RELEASE}", package], user="root")
-    version_release = out.decode().strip() if rc == 0 and isinstance(out, (bytes, bytearray)) else None
-    layout = rpm_reference_layout(False, version_release)
-    print(f"RPM {package} {version_release or '(version unreadable)'}: {layout} inventory")
-    return layout
+    """(layout, problem, note) for this container. DEB packages have one layout; integration runs never
+    query the version-release."""
+    if container_type != "rhel":
+        return "in-repo", None, None
+    rc, out = container.exec_run(f"rpm -ql {package}", user="root")
+    owned = out.decode().splitlines() if rc == 0 and isinstance(out, (bytes, bytearray)) else []
+    version_release = None
+    if INTEGRATION_REQUEST is None:
+        rc, out = container.exec_run(["rpm", "-q", "--qf", "%{VERSION}-%{RELEASE}", package], user="root")
+        version_release = out.decode().strip() if rc == 0 and isinstance(out, (bytes, bytearray)) else None
+    layout, problem, note = rpm_layout_decision(INTEGRATION_REQUEST is not None, version_release, owned)
+    print(f"RPM {package} {version_release or '(version not asked or unreadable)'}: {layout} inventory"
+          + (f"; {problem}" if problem else ""))
+    return layout, problem, note
 
 
 def get_container_config(container_type):
@@ -519,8 +554,9 @@ def test_verify_bundled_files(container_name, container_type):
     expected-output/rpm/docloader or expected-output/deb/docloader, which list the
     payload pgEdge/pgedge-docloader's packaging defines (pkg/rpm/docloader.spec
     %files; pkg/deb/debian/rules, debian/docs and the changelog build-deb.sh writes).
-    A standalone run of a served enterprise-built RPM (ENTERPRISE_LEGACY_RPM_RELEASES) is
-    compared with expected-output/rpm/docloader-enterprise-legacy instead.
+    A standalone run of a served enterprise-built RPM (ENTERPRISE_LEGACY_RPM_RELEASES) that owns the
+    complete legacy inventory is compared with expected-output/rpm/docloader-enterprise-legacy instead;
+    an RPM owning SBOM paths of both layouts fails (rpm_layout_decision).
     """
     container_name = container_name.strip()
 
@@ -534,9 +570,10 @@ def test_verify_bundled_files(container_name, container_type):
 
     project_root = Path(__file__).parent.parent
 
-    expected_name = (ENTERPRISE_LEGACY_RPM_REFERENCE
-                     if _rpm_layout(container, container_type, actual_package) == "enterprise-legacy"
-                     else None)
+    layout, problem, note = _rpm_layout(container, container_type, actual_package)
+    if problem:
+        pytest.fail(problem)
+    expected_name = ENTERPRISE_LEGACY_RPM_REFERENCE if layout == "enterprise-legacy" else None
 
     try:
         success, details, message = file_management.verify_bundled_files(
@@ -560,6 +597,8 @@ def test_verify_bundled_files(container_name, container_type):
                     details_str += f"\nExtra files ({len(details['extra_files'])}):\n"
                     for file in details["extra_files"]:
                         details_str += f"  + {file}\n"
+            if note:
+                details_str += f"\n{note}\n"
             pytest.fail(f"{message}{details_str}")
 
     except Exception as e:
@@ -579,9 +618,10 @@ def test_verify_sbom(container_name, container_type):
     (pkg/rpm/docloader.spec %install/%files; pkg/deb/debian/rules), so a missing
     file is a package defect and fails the check. The served RPMs built by
     pgedge-enterprise-packages before its d80f6b7 (2026-04-17) put them directly under
-    {DECOUPLED_COMPONENTS_SBOM} instead; a standalone run of exactly those version-releases
-    (ENTERPRISE_LEGACY_RPM_RELEASES) looks there, and every other run, integration mode
-    always, requires the subdirectory.
+    {DECOUPLED_COMPONENTS_SBOM} instead; a standalone run looks there only for those
+    version-releases (ENTERPRISE_LEGACY_RPM_RELEASES) when the package owns the complete legacy
+    inventory, and every other run, integration mode always, requires the subdirectory. An RPM
+    owning SBOM paths of both layouts fails (rpm_layout_decision).
     """
     container_name = container_name.strip()
     if not container_name:
@@ -596,9 +636,13 @@ def test_verify_sbom(container_name, container_type):
     docloader_package = config["docloader_package"]
     # The SBOM file keeps the full package name (pgedge-docloader-sbom.json) and sits in the same
     # directory on both families: {decoupled_sbom_path}/pgedge-docloader/pgedge-docloader-sbom.json,
-    # except in a served enterprise-built legacy RPM (standalone only), where it is directly under it.
+    # except in a served enterprise-built RPM that owns the complete legacy inventory (standalone only),
+    # where it is directly under it. An RPM owning SBOM paths of both layouts fails before any check.
     sbom_name = docloader_package
-    if _rpm_layout(container, container_type, docloader_package) == "enterprise-legacy":
+    layout, problem, _note = _rpm_layout(container, container_type, docloader_package)
+    if problem:
+        pytest.fail(problem)
+    if layout == "enterprise-legacy":
         sbom_dir = decoupled_sbom_path
     else:
         sbom_dir = f"{decoupled_sbom_path}/{docloader_package}"

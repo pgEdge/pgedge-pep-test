@@ -230,7 +230,8 @@ def anonymizer_binary_owners(container, container_type):
 # `pgedge-anonymizer version` prints exactly "pgedge-anonymizer <version> (built <build time>)" on
 # stdout (cmd/pgedge-anonymizer/cmd/root.go versionCmd). A release build stamps the build time with
 # GoReleaser's {{.Date}}, the build's UTC time in RFC 3339 (.goreleaser.yaml ldflags); an unstamped
-# build prints internal/version's defaults, "1.0.0" and "unknown".
+# build prints internal/version's defaults: a hand-set version that the owner bumps with each release
+# (so it can equal the tag being certified) and "unknown". Only the build stamp tells them apart.
 _ANONYMIZER_VERSION_LINE = re.compile(r"pgedge-anonymizer (\S+) \(built (\S+)\)")
 _RFC3339 = re.compile(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})")
 
@@ -241,7 +242,7 @@ def parse_anonymizer_version(stdout):
 
     Raises ValueError when there is no such line, more than one, the line is malformed, or the
     build time is not a release build's RFC 3339 stamp (an unstamped build prints "unknown", and
-    its default version 1.0.0 must never pass for a release)."""
+    its hand-set default version, which can equal the release being certified, must never pass)."""
     lines = [line.strip() for line in stdout.splitlines() if line.strip()]
     if len(lines) != 1:
         raise ValueError(f"expected one line on stdout, found {len(lines)}")
@@ -592,7 +593,8 @@ def test_binary_version(container_name, container_type):
     the other release facts) and whose build time is a release build's RFC 3339
     stamp. The match is exact: "1.0.1" fails on any other build ("v1.0.1",
     "1.0.1-test1", "1.0.2-next"), and an unstamped build, which reports the
-    source defaults "1.0.0" and "unknown", never passes.
+    source defaults (internal/version/version.go, bumped with each release) and
+    "unknown", never passes, even when that default equals the tag.
     """
     if INTEGRATION_REQUEST is not None:
         expected_version, problems = expected_anonymizer_binary_version(INTEGRATION_REQUEST)

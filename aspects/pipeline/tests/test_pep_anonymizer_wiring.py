@@ -453,7 +453,8 @@ def test_the_owned_binary_reporting_the_tag_version_passes(monkeypatch, env, cty
     (_RC_RPM, "pgedge-anonymizer 9.8.7-rc1 (built %s)\n" % _STAMP),       # suffix without its dot
     (_GA_RPM, "pgedge-anonymizer 9.8.6 (built %s)\n" % _STAMP),           # different version
     (_GA_RPM, "pgedge-anonymizer 9.8.7.1 (built %s)\n" % _STAMP),         # expected version is only a prefix
-    (_GA_RPM, "pgedge-anonymizer 9.8.7 (built unknown)\n"),               # ldflags not applied (source default)
+    (_GA_RPM, "pgedge-anonymizer 9.8.7 (built unknown)\n"),               # ldflags not applied: the source
+    # default is bumped with each release, so it can equal the tag; only the missing stamp fails it
     (_GA_RPM, "pgedge-anonymizer 9.8.7 (built 2026-11-09)\n"),            # not a GoReleaser build stamp
     (_GA_RPM, "pgedge-anonymizer 9.8.7\n"),                               # no build stamp at all
     (_GA_RPM, "pgedge-anonymizer 9.8.7 (built %s) extra\n" % _STAMP),     # trailing text

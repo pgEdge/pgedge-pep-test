@@ -1,0 +1,652 @@
+name: PEP fcb90c0 AI-component existing-package expansion, 94 staging cases (temporary)
+# Temporary, branch-scoped caller; never merged. PACKAGE-TEST integration validation of ALREADY-PUBLISHED
+# staging packages through pep-integration.yml at the PEP candidate fcb90c05b2b8ca95c1a14a42a42adfdab81ccb83 (local Stage B,
+# which contains Stage A), on every platform PEP's catalogs make eligible (amd64 and arm64): anonymizer, mcp
+# and ai_db_workbench at PG17 everywhere; docloader at PG17 on the DEB platforms only (its served RPMs have the
+# legacy layout integration mode rejects); vectorizer at PG16, PG17 and PG18 everywhere. Temporary validation
+# selection only: production fan-out, PG19 and dependency policy are unchanged.
+# NOT full application QA and NOT release-workflow validation.
+# No build receipts exist for these packages; the sha256 values below come from the staging repository
+# metadata read before launch and are NOT receipts. Observe mode keeps failing product tests green, so
+# `assert` checks the uploaded evidence, never job colours. Nothing is published, tagged or notified.
+# Fresh run only: never re-run jobs of this run; push a new commit for a new run.
+on:
+  push:
+    branches: [validate/pep-fcb90c0-ai-expansion]
+permissions: {}
+concurrency:
+  group: validate-pep-fcb90c0-ai-expansion
+  cancel-in-progress: false
+
+env:
+  # The exact frozen testcase inventory of each (component, family, PG major), once; {C} is the container name.
+  INVENTORY_JSON: |
+    {
+      "ai_db_workbench/deb/17": {"classname":"component-test.test_pep_ai_db_workbench","tests":["test_install_prerequisites[{C}-deb]","test_configure_repository[{C}-deb]","test_ai_db_workbench_install[{C}-deb-pgedge-ai-dba-server]","test_ai_db_workbench_upgrade[{C}-deb-pgedge-ai-dba-server]","test_ai_db_workbench_package_version[{C}-deb-pgedge-ai-dba-server]","test_ai_db_workbench_identity[{C}-deb]","test_verify_bundled_files[{C}-deb-pgedge-ai-dba-server]","test_verify_sbom[{C}-deb-pgedge-ai-dba-server]","test_verify_license_file[{C}-deb-pgedge-ai-dba-server]","test_verify_readme_file[{C}-deb-pgedge-ai-dba-server]","test_verify_systemd_service[{C}-deb-pgedge-ai-dba-server]","test_verify_package_dependencies[{C}-deb-pgedge-ai-dba-server]","test_binary_version[{C}-deb-pgedge-ai-dba-server-/usr/bin/ai-dba-server]","test_binary_stripped[{C}-deb-pgedge-ai-dba-server-/usr/bin/ai-dba-server]","test_ai_db_workbench_uninstall[{C}-deb-pgedge-ai-dba-server]","test_pgedge_cleanup[{C}-deb]"],"skips":{"test_ai_db_workbench_upgrade[{C}-deb-pgedge-ai-dba-server]":"integration mode: certification never upgrades; the requested package is pinned","test_ai_db_workbench_package_version[{C}-deb-pgedge-ai-dba-server]":"integration mode: superseded by test_ai_db_workbench_identity, which checks the exact requested version","test_binary_version[{C}-deb-pgedge-ai-dba-server-/usr/bin/ai-dba-server]":"integration mode: the workbench binaries print a hand-maintained version constant that is not tied to the release tag; identity is the exact package version and checksum (test_ai_db_workbench_identity)"}},
+      "ai_db_workbench/rpm/17": {"classname":"component-test.test_pep_ai_db_workbench","tests":["test_install_prerequisites[{C}-rhel]","test_configure_repository[{C}-rhel]","test_ai_db_workbench_install[{C}-rhel-pgedge-ai-dba-server]","test_ai_db_workbench_upgrade[{C}-rhel-pgedge-ai-dba-server]","test_ai_db_workbench_package_version[{C}-rhel-pgedge-ai-dba-server]","test_ai_db_workbench_identity[{C}-rhel]","test_verify_bundled_files[{C}-rhel-pgedge-ai-dba-server]","test_verify_sbom[{C}-rhel-pgedge-ai-dba-server]","test_verify_license_file[{C}-rhel-pgedge-ai-dba-server]","test_verify_readme_file[{C}-rhel-pgedge-ai-dba-server]","test_verify_systemd_service[{C}-rhel-pgedge-ai-dba-server]","test_verify_package_dependencies[{C}-rhel-pgedge-ai-dba-server]","test_binary_version[{C}-rhel-pgedge-ai-dba-server-/usr/bin/ai-dba-server]","test_binary_stripped[{C}-rhel-pgedge-ai-dba-server-/usr/bin/ai-dba-server]","test_ai_db_workbench_uninstall[{C}-rhel-pgedge-ai-dba-server]","test_pgedge_cleanup[{C}-rhel]"],"skips":{"test_ai_db_workbench_upgrade[{C}-rhel-pgedge-ai-dba-server]":"integration mode: certification never upgrades; the requested package is pinned","test_ai_db_workbench_package_version[{C}-rhel-pgedge-ai-dba-server]":"integration mode: superseded by test_ai_db_workbench_identity, which checks the exact requested version","test_binary_version[{C}-rhel-pgedge-ai-dba-server-/usr/bin/ai-dba-server]":"integration mode: the workbench binaries print a hand-maintained version constant that is not tied to the release tag; identity is the exact package version and checksum (test_ai_db_workbench_identity)"}},
+      "anonymizer/deb/17": {"classname":"component-test.test_pep_anonymizer","tests":["test_install_prerequisites[{C}-deb]","test_configure_repository[{C}-deb]","test_component_install[{C}-deb]","test_component_upgrade[{C}-deb]","test_component_package_version[{C}-deb]","test_anonymizer_identity[{C}-deb]","test_verify_bundled_files[{C}-deb]","test_verify_sbom[{C}-deb]","test_binary_version[{C}-deb]","test_binary_stripped[{C}-deb]","test_package_uninstall[{C}-deb]","test_pgedge_cleanup[{C}-deb]"],"skips":{"test_component_upgrade[{C}-deb]":"integration mode: certification never upgrades; the requested package is pinned","test_component_package_version[{C}-deb]":"integration mode: superseded by test_anonymizer_identity, which checks the exact requested version"}},
+      "anonymizer/rpm/17": {"classname":"component-test.test_pep_anonymizer","tests":["test_install_prerequisites[{C}-rhel]","test_configure_repository[{C}-rhel]","test_component_install[{C}-rhel]","test_component_upgrade[{C}-rhel]","test_component_package_version[{C}-rhel]","test_anonymizer_identity[{C}-rhel]","test_verify_bundled_files[{C}-rhel]","test_verify_sbom[{C}-rhel]","test_binary_version[{C}-rhel]","test_binary_stripped[{C}-rhel]","test_package_uninstall[{C}-rhel]","test_pgedge_cleanup[{C}-rhel]"],"skips":{"test_component_upgrade[{C}-rhel]":"integration mode: certification never upgrades; the requested package is pinned","test_component_package_version[{C}-rhel]":"integration mode: superseded by test_anonymizer_identity, which checks the exact requested version"}},
+      "docloader/deb/17": {"classname":"component-test.test_pep_docloader","tests":["test_install_prerequisites[{C}-deb]","test_configure_repository[{C}-deb]","test_component_install[{C}-deb]","test_component_upgrade[{C}-deb]","test_component_package_version[{C}-deb]","test_docloader_identity[{C}-deb]","test_verify_bundled_files[{C}-deb]","test_verify_sbom[{C}-deb]","test_docloader_binary_version[{C}-deb]","test_package_uninstall[{C}-deb]","test_pgedge_cleanup[{C}-deb]"],"skips":{"test_component_upgrade[{C}-deb]":"integration mode: certification never upgrades; the requested package is pinned","test_component_package_version[{C}-deb]":"integration mode: superseded by test_docloader_identity, which checks the exact requested version"}},
+      "mcp/deb/17": {"classname":"component-test.test_pep_mcp","tests":["test_install_prerequisites[{C}-deb]","test_configure_repository[{C}-deb]","test_mcp_component_install[{C}-deb-pgedge-postgres-mcp]","test_mcp_component_upgrade[{C}-deb-pgedge-postgres-mcp]","test_mcp_component_version[{C}-deb-pgedge-postgres-mcp]","test_mcp_identity[{C}-deb]","test_verify_bundled_files[{C}-deb-pgedge-postgres-mcp]","test_verify_sbom[{C}-deb]","test_mcp_component_uninstall[{C}-deb-pgedge-postgres-mcp]","test_pgedge_cleanup[{C}-deb]"],"skips":{"test_mcp_component_upgrade[{C}-deb-pgedge-postgres-mcp]":"integration mode: certification never upgrades; the requested package is pinned","test_mcp_component_version[{C}-deb-pgedge-postgres-mcp]":"integration mode: superseded by test_mcp_identity, which checks the exact requested version"}},
+      "mcp/rpm/17": {"classname":"component-test.test_pep_mcp","tests":["test_install_prerequisites[{C}-rhel]","test_configure_repository[{C}-rhel]","test_mcp_component_install[{C}-rhel-pgedge-postgres-mcp]","test_mcp_component_upgrade[{C}-rhel-pgedge-postgres-mcp]","test_mcp_component_version[{C}-rhel-pgedge-postgres-mcp]","test_mcp_identity[{C}-rhel]","test_verify_bundled_files[{C}-rhel-pgedge-postgres-mcp]","test_verify_sbom[{C}-rhel]","test_mcp_component_uninstall[{C}-rhel-pgedge-postgres-mcp]","test_pgedge_cleanup[{C}-rhel]"],"skips":{"test_mcp_component_upgrade[{C}-rhel-pgedge-postgres-mcp]":"integration mode: certification never upgrades; the requested package is pinned","test_mcp_component_version[{C}-rhel-pgedge-postgres-mcp]":"integration mode: superseded by test_mcp_identity, which checks the exact requested version"}},
+      "vectorizer/deb/16": {"classname":"component-test.test_pep_vectorizer","tests":["test_install_prerequisites[{C}-deb]","test_configure_repository[{C}-deb]","test_component_install[{C}-deb]","test_component_upgrade[{C}-deb]","test_component_package_version[{C}-deb]","test_vectorizer_identity[{C}-deb]","test_verify_bundled_files[{C}-deb]","test_verify_sbom[{C}-deb]","test_copy_api_key[{C}-deb]","test_init_cluster[{C}-deb]","test_start_server[{C}-deb]","test_check_connection[{C}-deb]","test_vectorizer_requested_extension[{C}-deb]","test_component_functional_smoke[pgedge-vectorizer_16-{C}-deb]","test_stop_server[{C}-deb]","test_package_uninstall[{C}-deb]","test_pgedge_cleanup[{C}-deb]"],"skips":{"test_component_upgrade[{C}-deb]":"integration mode: the pinned requested package is never upgraded","test_component_package_version[{C}-deb]":"integration mode: test_vectorizer_identity checks the exact requested version","test_copy_api_key[{C}-deb]":"integration mode: no OpenAI API key is copied; the functional smoke that would use it needs a model-provider API key; certification makes no paid calls and has no provider credentials","test_component_functional_smoke[pgedge-vectorizer_16-{C}-deb]":"integration mode: sql/vectorizer.sql calls enable_vectorization without an embedding dimension, which probes the OpenAI provider; it needs a model-provider API key; certification makes no paid calls and has no provider credentials"}},
+      "vectorizer/deb/17": {"classname":"component-test.test_pep_vectorizer","tests":["test_install_prerequisites[{C}-deb]","test_configure_repository[{C}-deb]","test_component_install[{C}-deb]","test_component_upgrade[{C}-deb]","test_component_package_version[{C}-deb]","test_vectorizer_identity[{C}-deb]","test_verify_bundled_files[{C}-deb]","test_verify_sbom[{C}-deb]","test_copy_api_key[{C}-deb]","test_init_cluster[{C}-deb]","test_start_server[{C}-deb]","test_check_connection[{C}-deb]","test_vectorizer_requested_extension[{C}-deb]","test_component_functional_smoke[pgedge-vectorizer_17-{C}-deb]","test_stop_server[{C}-deb]","test_package_uninstall[{C}-deb]","test_pgedge_cleanup[{C}-deb]"],"skips":{"test_component_upgrade[{C}-deb]":"integration mode: the pinned requested package is never upgraded","test_component_package_version[{C}-deb]":"integration mode: test_vectorizer_identity checks the exact requested version","test_copy_api_key[{C}-deb]":"integration mode: no OpenAI API key is copied; the functional smoke that would use it needs a model-provider API key; certification makes no paid calls and has no provider credentials","test_component_functional_smoke[pgedge-vectorizer_17-{C}-deb]":"integration mode: sql/vectorizer.sql calls enable_vectorization without an embedding dimension, which probes the OpenAI provider; it needs a model-provider API key; certification makes no paid calls and has no provider credentials"}},
+      "vectorizer/deb/18": {"classname":"component-test.test_pep_vectorizer","tests":["test_install_prerequisites[{C}-deb]","test_configure_repository[{C}-deb]","test_component_install[{C}-deb]","test_component_upgrade[{C}-deb]","test_component_package_version[{C}-deb]","test_vectorizer_identity[{C}-deb]","test_verify_bundled_files[{C}-deb]","test_verify_sbom[{C}-deb]","test_copy_api_key[{C}-deb]","test_init_cluster[{C}-deb]","test_start_server[{C}-deb]","test_check_connection[{C}-deb]","test_vectorizer_requested_extension[{C}-deb]","test_component_functional_smoke[pgedge-vectorizer_18-{C}-deb]","test_stop_server[{C}-deb]","test_package_uninstall[{C}-deb]","test_pgedge_cleanup[{C}-deb]"],"skips":{"test_component_upgrade[{C}-deb]":"integration mode: the pinned requested package is never upgraded","test_component_package_version[{C}-deb]":"integration mode: test_vectorizer_identity checks the exact requested version","test_copy_api_key[{C}-deb]":"integration mode: no OpenAI API key is copied; the functional smoke that would use it needs a model-provider API key; certification makes no paid calls and has no provider credentials","test_component_functional_smoke[pgedge-vectorizer_18-{C}-deb]":"integration mode: sql/vectorizer.sql calls enable_vectorization without an embedding dimension, which probes the OpenAI provider; it needs a model-provider API key; certification makes no paid calls and has no provider credentials"}},
+      "vectorizer/rpm/16": {"classname":"component-test.test_pep_vectorizer","tests":["test_install_prerequisites[{C}-rhel]","test_configure_repository[{C}-rhel]","test_component_install[{C}-rhel]","test_component_upgrade[{C}-rhel]","test_component_package_version[{C}-rhel]","test_vectorizer_identity[{C}-rhel]","test_verify_bundled_files[{C}-rhel]","test_verify_sbom[{C}-rhel]","test_copy_api_key[{C}-rhel]","test_init_cluster[{C}-rhel]","test_start_server[{C}-rhel]","test_check_connection[{C}-rhel]","test_vectorizer_requested_extension[{C}-rhel]","test_component_functional_smoke[pgedge-vectorizer_16-{C}-rhel]","test_stop_server[{C}-rhel]","test_package_uninstall[{C}-rhel]","test_pgedge_cleanup[{C}-rhel]"],"skips":{"test_component_upgrade[{C}-rhel]":"integration mode: the pinned requested package is never upgraded","test_component_package_version[{C}-rhel]":"integration mode: test_vectorizer_identity checks the exact requested version","test_copy_api_key[{C}-rhel]":"integration mode: no OpenAI API key is copied; the functional smoke that would use it needs a model-provider API key; certification makes no paid calls and has no provider credentials","test_component_functional_smoke[pgedge-vectorizer_16-{C}-rhel]":"integration mode: sql/vectorizer.sql calls enable_vectorization without an embedding dimension, which probes the OpenAI provider; it needs a model-provider API key; certification makes no paid calls and has no provider credentials"}},
+      "vectorizer/rpm/17": {"classname":"component-test.test_pep_vectorizer","tests":["test_install_prerequisites[{C}-rhel]","test_configure_repository[{C}-rhel]","test_component_install[{C}-rhel]","test_component_upgrade[{C}-rhel]","test_component_package_version[{C}-rhel]","test_vectorizer_identity[{C}-rhel]","test_verify_bundled_files[{C}-rhel]","test_verify_sbom[{C}-rhel]","test_copy_api_key[{C}-rhel]","test_init_cluster[{C}-rhel]","test_start_server[{C}-rhel]","test_check_connection[{C}-rhel]","test_vectorizer_requested_extension[{C}-rhel]","test_component_functional_smoke[pgedge-vectorizer_17-{C}-rhel]","test_stop_server[{C}-rhel]","test_package_uninstall[{C}-rhel]","test_pgedge_cleanup[{C}-rhel]"],"skips":{"test_component_upgrade[{C}-rhel]":"integration mode: the pinned requested package is never upgraded","test_component_package_version[{C}-rhel]":"integration mode: test_vectorizer_identity checks the exact requested version","test_copy_api_key[{C}-rhel]":"integration mode: no OpenAI API key is copied; the functional smoke that would use it needs a model-provider API key; certification makes no paid calls and has no provider credentials","test_component_functional_smoke[pgedge-vectorizer_17-{C}-rhel]":"integration mode: sql/vectorizer.sql calls enable_vectorization without an embedding dimension, which probes the OpenAI provider; it needs a model-provider API key; certification makes no paid calls and has no provider credentials"}},
+      "vectorizer/rpm/18": {"classname":"component-test.test_pep_vectorizer","tests":["test_install_prerequisites[{C}-rhel]","test_configure_repository[{C}-rhel]","test_component_install[{C}-rhel]","test_component_upgrade[{C}-rhel]","test_component_package_version[{C}-rhel]","test_vectorizer_identity[{C}-rhel]","test_verify_bundled_files[{C}-rhel]","test_verify_sbom[{C}-rhel]","test_copy_api_key[{C}-rhel]","test_init_cluster[{C}-rhel]","test_start_server[{C}-rhel]","test_check_connection[{C}-rhel]","test_vectorizer_requested_extension[{C}-rhel]","test_component_functional_smoke[pgedge-vectorizer_18-{C}-rhel]","test_stop_server[{C}-rhel]","test_package_uninstall[{C}-rhel]","test_pgedge_cleanup[{C}-rhel]"],"skips":{"test_component_upgrade[{C}-rhel]":"integration mode: the pinned requested package is never upgraded","test_component_package_version[{C}-rhel]":"integration mode: test_vectorizer_identity checks the exact requested version","test_copy_api_key[{C}-rhel]":"integration mode: no OpenAI API key is copied; the functional smoke that would use it needs a model-provider API key; certification makes no paid calls and has no provider credentials","test_component_functional_smoke[pgedge-vectorizer_18-{C}-rhel]":"integration mode: sql/vectorizer.sql calls enable_vectorization without an embedding dimension, which probes the OpenAI provider; it needs a model-provider API key; certification makes no paid calls and has no provider credentials"}}
+    }
+  # One line per case: the single source of the matrix and of every assertion (with INVENTORY_JSON).
+  CASES_JSON: |
+    [
+      {"iid":"exp-anonymizer-debian12-amd64-pg17","component":"anonymizer","package":"pgedge-anonymizer","family":"deb","arch":"amd64","alias":"debian12-amd64","container":"auto-debian12-amd","dist":"bookworm","pg":"17","token":"1.0.1-1.bookworm","version":"1.0.1","buildnum":"1","tag":"v1.0.1","sha256":"f044ccf0755dcb9f529bac3668ea3bd833e0133006469db5ca680cf92a3178b7","title":"Anonymizer · debian12-amd64 · PG17 · pgedge-anonymizer 1.0.1-1.bookworm (staging)","report":"report-deb-anonymizer-17.xml","prereq":null},
+      {"iid":"exp-anonymizer-debian12-arm64-pg17","component":"anonymizer","package":"pgedge-anonymizer","family":"deb","arch":"arm64","alias":"debian12-arm64","container":"auto-debian12-arm","dist":"bookworm","pg":"17","token":"1.0.1-1.bookworm","version":"1.0.1","buildnum":"1","tag":"v1.0.1","sha256":"219c95d568785749cca65ed435b019392d86f712e12a9ed0b89a58ed3b196dad","title":"Anonymizer · debian12-arm64 · PG17 · pgedge-anonymizer 1.0.1-1.bookworm (staging)","report":"report-deb-anonymizer-17.xml","prereq":null},
+      {"iid":"exp-anonymizer-debian13-amd64-pg17","component":"anonymizer","package":"pgedge-anonymizer","family":"deb","arch":"amd64","alias":"debian13-amd64","container":"auto-debian13-amd","dist":"trixie","pg":"17","token":"1.0.1-1.trixie","version":"1.0.1","buildnum":"1","tag":"v1.0.1","sha256":"fa0de7091cf69696f701f23a58c4d905609278f3112223ebe3c9b6079b9f59a2","title":"Anonymizer · debian13-amd64 · PG17 · pgedge-anonymizer 1.0.1-1.trixie (staging)","report":"report-deb-anonymizer-17.xml","prereq":null},
+      {"iid":"exp-anonymizer-debian13-arm64-pg17","component":"anonymizer","package":"pgedge-anonymizer","family":"deb","arch":"arm64","alias":"debian13-arm64","container":"auto-debian13-arm","dist":"trixie","pg":"17","token":"1.0.1-1.trixie","version":"1.0.1","buildnum":"1","tag":"v1.0.1","sha256":"d0809c43aaabcf6ea11fb87806e6fce54b3b0fbe2d80e3cb485121d2a1657660","title":"Anonymizer · debian13-arm64 · PG17 · pgedge-anonymizer 1.0.1-1.trixie (staging)","report":"report-deb-anonymizer-17.xml","prereq":null},
+      {"iid":"exp-anonymizer-ubuntu2204-amd64-pg17","component":"anonymizer","package":"pgedge-anonymizer","family":"deb","arch":"amd64","alias":"ubuntu2204-amd64","container":"auto-ubuntu2204-amd","dist":"jammy","pg":"17","token":"1.0.1-1.jammy","version":"1.0.1","buildnum":"1","tag":"v1.0.1","sha256":"89250517121b75bb74b1ff1a3ad4d1bf5a92aeaf9429555107ba4f218d1b33de","title":"Anonymizer · ubuntu2204-amd64 · PG17 · pgedge-anonymizer 1.0.1-1.jammy (staging)","report":"report-deb-anonymizer-17.xml","prereq":null},
+      {"iid":"exp-anonymizer-ubuntu2204-arm64-pg17","component":"anonymizer","package":"pgedge-anonymizer","family":"deb","arch":"arm64","alias":"ubuntu2204-arm64","container":"auto-ubuntu2204-arm","dist":"jammy","pg":"17","token":"1.0.1-1.jammy","version":"1.0.1","buildnum":"1","tag":"v1.0.1","sha256":"ef948e764ef998591c4960374e96c54350ce8e4af5bcce2c5bb98fce8131a10a","title":"Anonymizer · ubuntu2204-arm64 · PG17 · pgedge-anonymizer 1.0.1-1.jammy (staging)","report":"report-deb-anonymizer-17.xml","prereq":null},
+      {"iid":"exp-anonymizer-ubuntu2404-amd64-pg17","component":"anonymizer","package":"pgedge-anonymizer","family":"deb","arch":"amd64","alias":"ubuntu2404-amd64","container":"auto-ubuntu2404-amd","dist":"noble","pg":"17","token":"1.0.1-1.noble","version":"1.0.1","buildnum":"1","tag":"v1.0.1","sha256":"53bc65b4fa7bf4487db9ad6170880c5dc16cdac72e310521558414d689ed2c90","title":"Anonymizer · ubuntu2404-amd64 · PG17 · pgedge-anonymizer 1.0.1-1.noble (staging)","report":"report-deb-anonymizer-17.xml","prereq":null},
+      {"iid":"exp-anonymizer-ubuntu2404-arm64-pg17","component":"anonymizer","package":"pgedge-anonymizer","family":"deb","arch":"arm64","alias":"ubuntu2404-arm64","container":"auto-ubuntu2404-arm","dist":"noble","pg":"17","token":"1.0.1-1.noble","version":"1.0.1","buildnum":"1","tag":"v1.0.1","sha256":"fe942cd9149fa375b8082d050ec0261ae2a355de3d4d43f466c020e95a745a51","title":"Anonymizer · ubuntu2404-arm64 · PG17 · pgedge-anonymizer 1.0.1-1.noble (staging)","report":"report-deb-anonymizer-17.xml","prereq":null},
+      {"iid":"exp-anonymizer-ubuntu2604-amd64-pg17","component":"anonymizer","package":"pgedge-anonymizer","family":"deb","arch":"amd64","alias":"ubuntu2604-amd64","container":"auto-ubuntu2604-amd","dist":"resolute","pg":"17","token":"1.0.1-1.resolute","version":"1.0.1","buildnum":"1","tag":"v1.0.1","sha256":"944799f95cd868fe33959aa9b1b1514aab3f26dd81ce39283e4f87b9d7e67235","title":"Anonymizer · ubuntu2604-amd64 · PG17 · pgedge-anonymizer 1.0.1-1.resolute (staging)","report":"report-deb-anonymizer-17.xml","prereq":null},
+      {"iid":"exp-anonymizer-ubuntu2604-arm64-pg17","component":"anonymizer","package":"pgedge-anonymizer","family":"deb","arch":"arm64","alias":"ubuntu2604-arm64","container":"auto-ubuntu2604-arm","dist":"resolute","pg":"17","token":"1.0.1-1.resolute","version":"1.0.1","buildnum":"1","tag":"v1.0.1","sha256":"b22602be5ddcaa3bf0d5e0b75f7be0a4051b6e47da8e1fd35c5774e05af148e2","title":"Anonymizer · ubuntu2604-arm64 · PG17 · pgedge-anonymizer 1.0.1-1.resolute (staging)","report":"report-deb-anonymizer-17.xml","prereq":null},
+      {"iid":"exp-anonymizer-alma10-amd64-pg17","component":"anonymizer","package":"pgedge-anonymizer","family":"rpm","arch":"amd64","alias":"alma10-amd64","container":"auto-alma10-amd","dist":"el10","pg":"17","token":"1.0.1-1.el10","version":"1.0.1","buildnum":"1","tag":"v1.0.1","sha256":"b5aeb0512e8c1519913dfd06d26df668f94989cfc95efb379737a555cd002c82","title":"Anonymizer · alma10-amd64 · PG17 · pgedge-anonymizer 1.0.1-1.el10 (staging)","report":"report-rpm-anonymizer-17.xml","prereq":null},
+      {"iid":"exp-anonymizer-alma10-arm64-pg17","component":"anonymizer","package":"pgedge-anonymizer","family":"rpm","arch":"arm64","alias":"alma10-arm64","container":"auto-alma10-arm","dist":"el10","pg":"17","token":"1.0.1-1.el10","version":"1.0.1","buildnum":"1","tag":"v1.0.1","sha256":"7b5bb52ca9810db4ec09572cf5d968e12ef6fd9bb49d8caba7ef7b3db4d13432","title":"Anonymizer · alma10-arm64 · PG17 · pgedge-anonymizer 1.0.1-1.el10 (staging)","report":"report-rpm-anonymizer-17.xml","prereq":null},
+      {"iid":"exp-anonymizer-alma9-arm64-pg17","component":"anonymizer","package":"pgedge-anonymizer","family":"rpm","arch":"arm64","alias":"alma9-arm64","container":"auto-alma9-arm","dist":"el9","pg":"17","token":"1.0.1-1.el9","version":"1.0.1","buildnum":"1","tag":"v1.0.1","sha256":"84fdb4cdab57d00bf4cb3a9f9b9a6dd2de5f6ac1d2509699f595a7363d5aa36f","title":"Anonymizer · alma9-arm64 · PG17 · pgedge-anonymizer 1.0.1-1.el9 (staging)","report":"report-rpm-anonymizer-17.xml","prereq":null},
+      {"iid":"exp-anonymizer-oel9-amd64-pg17","component":"anonymizer","package":"pgedge-anonymizer","family":"rpm","arch":"amd64","alias":"oel9-amd64","container":"auto-oel9-amd","dist":"el9","pg":"17","token":"1.0.1-1.el9","version":"1.0.1","buildnum":"1","tag":"v1.0.1","sha256":"07f4c04801d069f84013a3667ec8a678f79b119102bf41cab76dac5d971c96b1","title":"Anonymizer · oel9-amd64 · PG17 · pgedge-anonymizer 1.0.1-1.el9 (staging)","report":"report-rpm-anonymizer-17.xml","prereq":null},
+      {"iid":"exp-mcp-debian12-amd64-pg17","component":"mcp","package":"pgedge-postgres-mcp","family":"deb","arch":"amd64","alias":"debian12-amd64","container":"auto-debian12-amd","dist":"bookworm","pg":"17","token":"1.2.0~beta1-1.bookworm","version":"1.2.0","buildnum":"beta1_1","tag":"v1.2.0-beta1","sha256":"a9f65de9928bf2f6525ff72113ee0229b6215c897dfabb2a36855a9fb72490ed","title":"MCP · debian12-amd64 · PG17 · pgedge-postgres-mcp 1.2.0~beta1-1.bookworm (staging)","report":"report-deb-mcp-17.xml","prereq":null},
+      {"iid":"exp-mcp-debian12-arm64-pg17","component":"mcp","package":"pgedge-postgres-mcp","family":"deb","arch":"arm64","alias":"debian12-arm64","container":"auto-debian12-arm","dist":"bookworm","pg":"17","token":"1.2.0~beta1-1.bookworm","version":"1.2.0","buildnum":"beta1_1","tag":"v1.2.0-beta1","sha256":"a90b99f79aa1f2ada548c73d228a54a3cb9a3b26114aa4f9c0405fd1a5b35264","title":"MCP · debian12-arm64 · PG17 · pgedge-postgres-mcp 1.2.0~beta1-1.bookworm (staging)","report":"report-deb-mcp-17.xml","prereq":null},
+      {"iid":"exp-mcp-debian13-amd64-pg17","component":"mcp","package":"pgedge-postgres-mcp","family":"deb","arch":"amd64","alias":"debian13-amd64","container":"auto-debian13-amd","dist":"trixie","pg":"17","token":"1.2.0~beta1-1.trixie","version":"1.2.0","buildnum":"beta1_1","tag":"v1.2.0-beta1","sha256":"aab34729b31456f018d03a0eeb112f99414bb1c66e0ec3fa328e8c3537c24fe8","title":"MCP · debian13-amd64 · PG17 · pgedge-postgres-mcp 1.2.0~beta1-1.trixie (staging)","report":"report-deb-mcp-17.xml","prereq":null},
+      {"iid":"exp-mcp-debian13-arm64-pg17","component":"mcp","package":"pgedge-postgres-mcp","family":"deb","arch":"arm64","alias":"debian13-arm64","container":"auto-debian13-arm","dist":"trixie","pg":"17","token":"1.2.0~beta1-1.trixie","version":"1.2.0","buildnum":"beta1_1","tag":"v1.2.0-beta1","sha256":"3f6dead6932d87fa16da7a9a60fb9b3221409f57baaa854405df75044dee5bf3","title":"MCP · debian13-arm64 · PG17 · pgedge-postgres-mcp 1.2.0~beta1-1.trixie (staging)","report":"report-deb-mcp-17.xml","prereq":null},
+      {"iid":"exp-mcp-ubuntu2204-amd64-pg17","component":"mcp","package":"pgedge-postgres-mcp","family":"deb","arch":"amd64","alias":"ubuntu2204-amd64","container":"auto-ubuntu2204-amd","dist":"jammy","pg":"17","token":"1.2.0~beta1-1.jammy","version":"1.2.0","buildnum":"beta1_1","tag":"v1.2.0-beta1","sha256":"64742aa530577aec65ee9baac26386bbd88baeb51aecb68e0d05fe4dacf6117a","title":"MCP · ubuntu2204-amd64 · PG17 · pgedge-postgres-mcp 1.2.0~beta1-1.jammy (staging)","report":"report-deb-mcp-17.xml","prereq":null},
+      {"iid":"exp-mcp-ubuntu2204-arm64-pg17","component":"mcp","package":"pgedge-postgres-mcp","family":"deb","arch":"arm64","alias":"ubuntu2204-arm64","container":"auto-ubuntu2204-arm","dist":"jammy","pg":"17","token":"1.2.0~beta1-1.jammy","version":"1.2.0","buildnum":"beta1_1","tag":"v1.2.0-beta1","sha256":"4364415c6b649824f2c796d1b41840cd211c5f4bb710d547c78c0446b115b331","title":"MCP · ubuntu2204-arm64 · PG17 · pgedge-postgres-mcp 1.2.0~beta1-1.jammy (staging)","report":"report-deb-mcp-17.xml","prereq":null},
+      {"iid":"exp-mcp-ubuntu2404-amd64-pg17","component":"mcp","package":"pgedge-postgres-mcp","family":"deb","arch":"amd64","alias":"ubuntu2404-amd64","container":"auto-ubuntu2404-amd","dist":"noble","pg":"17","token":"1.2.0~beta1-1.noble","version":"1.2.0","buildnum":"beta1_1","tag":"v1.2.0-beta1","sha256":"2eb6484ecd3154fefad93f267e127f7001a78fb44467e4a7ab034686df443119","title":"MCP · ubuntu2404-amd64 · PG17 · pgedge-postgres-mcp 1.2.0~beta1-1.noble (staging)","report":"report-deb-mcp-17.xml","prereq":null},
+      {"iid":"exp-mcp-ubuntu2404-arm64-pg17","component":"mcp","package":"pgedge-postgres-mcp","family":"deb","arch":"arm64","alias":"ubuntu2404-arm64","container":"auto-ubuntu2404-arm","dist":"noble","pg":"17","token":"1.2.0~beta1-1.noble","version":"1.2.0","buildnum":"beta1_1","tag":"v1.2.0-beta1","sha256":"733370bf239def01f38882d7173e610ddc88cd320b4ceda0974610a52d9e9006","title":"MCP · ubuntu2404-arm64 · PG17 · pgedge-postgres-mcp 1.2.0~beta1-1.noble (staging)","report":"report-deb-mcp-17.xml","prereq":null},
+      {"iid":"exp-mcp-ubuntu2604-amd64-pg17","component":"mcp","package":"pgedge-postgres-mcp","family":"deb","arch":"amd64","alias":"ubuntu2604-amd64","container":"auto-ubuntu2604-amd","dist":"resolute","pg":"17","token":"1.2.0~beta1-1.resolute","version":"1.2.0","buildnum":"beta1_1","tag":"v1.2.0-beta1","sha256":"270090f40d61859c5855a4246e87ade8aa89f1b810c42367115027ab23b98b9b","title":"MCP · ubuntu2604-amd64 · PG17 · pgedge-postgres-mcp 1.2.0~beta1-1.resolute (staging)","report":"report-deb-mcp-17.xml","prereq":null},
+      {"iid":"exp-mcp-ubuntu2604-arm64-pg17","component":"mcp","package":"pgedge-postgres-mcp","family":"deb","arch":"arm64","alias":"ubuntu2604-arm64","container":"auto-ubuntu2604-arm","dist":"resolute","pg":"17","token":"1.2.0~beta1-1.resolute","version":"1.2.0","buildnum":"beta1_1","tag":"v1.2.0-beta1","sha256":"c17a292e1394ce653c0819ab22633b66e0e5a2f7e184722a294a6d8433240d4b","title":"MCP · ubuntu2604-arm64 · PG17 · pgedge-postgres-mcp 1.2.0~beta1-1.resolute (staging)","report":"report-deb-mcp-17.xml","prereq":null},
+      {"iid":"exp-mcp-alma10-amd64-pg17","component":"mcp","package":"pgedge-postgres-mcp","family":"rpm","arch":"amd64","alias":"alma10-amd64","container":"auto-alma10-amd","dist":"el10","pg":"17","token":"1.2.0-beta1_1.el10","version":"1.2.0","buildnum":"beta1_1","tag":"v1.2.0-beta1","sha256":"9e7ece95b6e0149f960d3843e51d9b384ad1888aa2b589ebff3ca27fe4207692","title":"MCP · alma10-amd64 · PG17 · pgedge-postgres-mcp 1.2.0-beta1_1.el10 (staging)","report":"report-rpm-mcp-17.xml","prereq":null},
+      {"iid":"exp-mcp-alma10-arm64-pg17","component":"mcp","package":"pgedge-postgres-mcp","family":"rpm","arch":"arm64","alias":"alma10-arm64","container":"auto-alma10-arm","dist":"el10","pg":"17","token":"1.2.0-beta1_1.el10","version":"1.2.0","buildnum":"beta1_1","tag":"v1.2.0-beta1","sha256":"2c7beec45d5b8428f71da6652c0d156e17795bec72da064f2b87fd8d260c581a","title":"MCP · alma10-arm64 · PG17 · pgedge-postgres-mcp 1.2.0-beta1_1.el10 (staging)","report":"report-rpm-mcp-17.xml","prereq":null},
+      {"iid":"exp-mcp-alma9-arm64-pg17","component":"mcp","package":"pgedge-postgres-mcp","family":"rpm","arch":"arm64","alias":"alma9-arm64","container":"auto-alma9-arm","dist":"el9","pg":"17","token":"1.2.0-beta1_1.el9","version":"1.2.0","buildnum":"beta1_1","tag":"v1.2.0-beta1","sha256":"eb17d793a6a54e44d19dc5950b9b710c5631c67cc248c836be15253ae5745499","title":"MCP · alma9-arm64 · PG17 · pgedge-postgres-mcp 1.2.0-beta1_1.el9 (staging)","report":"report-rpm-mcp-17.xml","prereq":null},
+      {"iid":"exp-mcp-oel9-amd64-pg17","component":"mcp","package":"pgedge-postgres-mcp","family":"rpm","arch":"amd64","alias":"oel9-amd64","container":"auto-oel9-amd","dist":"el9","pg":"17","token":"1.2.0-beta1_1.el9","version":"1.2.0","buildnum":"beta1_1","tag":"v1.2.0-beta1","sha256":"babcac4854288dcee5dbf2beb759d77cf3c84894f2837955e13b20b28f3e0d70","title":"MCP · oel9-amd64 · PG17 · pgedge-postgres-mcp 1.2.0-beta1_1.el9 (staging)","report":"report-rpm-mcp-17.xml","prereq":null},
+      {"iid":"exp-ai-db-workbench-debian12-amd64-pg17","component":"ai_db_workbench","package":"pgedge-ai-dba-server","family":"deb","arch":"amd64","alias":"debian12-amd64","container":"auto-debian12-amd","dist":"bookworm","pg":"17","token":"2.0.0~beta1-1.bookworm","version":"2.0.0","buildnum":"beta1_1","tag":"v2.0.0-beta1","sha256":"27e0a4fd72b8281cbba734216ccd0e976b1f446deedd6c60a79be9b7207306a7","title":"AI DBA Workbench · debian12-amd64 · PG17 · pgedge-ai-dba-server 2.0.0~beta1-1.bookworm (staging)","report":"report-deb-ai_db_workbench-17.xml","prereq":{"kind":"workbench","dependency":"pgedge-ai-dba-upgrade-check","field":"Pre-Depends","frozen":"2.0.0~beta1-1.bookworm","constraint":{"op":">=","version":"2.0.0~beta1-1.bookworm"}}},
+      {"iid":"exp-ai-db-workbench-debian12-arm64-pg17","component":"ai_db_workbench","package":"pgedge-ai-dba-server","family":"deb","arch":"arm64","alias":"debian12-arm64","container":"auto-debian12-arm","dist":"bookworm","pg":"17","token":"2.0.0~beta1-1.bookworm","version":"2.0.0","buildnum":"beta1_1","tag":"v2.0.0-beta1","sha256":"515f8e072fc91f99c249f8c6dee8c9958cd863b2e3c3e0fdec37343730e1ad22","title":"AI DBA Workbench · debian12-arm64 · PG17 · pgedge-ai-dba-server 2.0.0~beta1-1.bookworm (staging)","report":"report-deb-ai_db_workbench-17.xml","prereq":{"kind":"workbench","dependency":"pgedge-ai-dba-upgrade-check","field":"Pre-Depends","frozen":"2.0.0~beta1-1.bookworm","constraint":{"op":">=","version":"2.0.0~beta1-1.bookworm"}}},
+      {"iid":"exp-ai-db-workbench-debian13-amd64-pg17","component":"ai_db_workbench","package":"pgedge-ai-dba-server","family":"deb","arch":"amd64","alias":"debian13-amd64","container":"auto-debian13-amd","dist":"trixie","pg":"17","token":"2.0.0~beta1-1.trixie","version":"2.0.0","buildnum":"beta1_1","tag":"v2.0.0-beta1","sha256":"43576882d3cdb61f5e9088694260fd18a785afa45bdca362bfd4d10c1a35106b","title":"AI DBA Workbench · debian13-amd64 · PG17 · pgedge-ai-dba-server 2.0.0~beta1-1.trixie (staging)","report":"report-deb-ai_db_workbench-17.xml","prereq":{"kind":"workbench","dependency":"pgedge-ai-dba-upgrade-check","field":"Pre-Depends","frozen":"2.0.0~beta1-1.trixie","constraint":{"op":">=","version":"2.0.0~beta1-1.trixie"}}},
+      {"iid":"exp-ai-db-workbench-debian13-arm64-pg17","component":"ai_db_workbench","package":"pgedge-ai-dba-server","family":"deb","arch":"arm64","alias":"debian13-arm64","container":"auto-debian13-arm","dist":"trixie","pg":"17","token":"2.0.0~beta1-1.trixie","version":"2.0.0","buildnum":"beta1_1","tag":"v2.0.0-beta1","sha256":"31cc1ee8cbbc7fe8faf106c67ecbe19c69b26be342214418392b0587c0127d4f","title":"AI DBA Workbench · debian13-arm64 · PG17 · pgedge-ai-dba-server 2.0.0~beta1-1.trixie (staging)","report":"report-deb-ai_db_workbench-17.xml","prereq":{"kind":"workbench","dependency":"pgedge-ai-dba-upgrade-check","field":"Pre-Depends","frozen":"2.0.0~beta1-1.trixie","constraint":{"op":">=","version":"2.0.0~beta1-1.trixie"}}},
+      {"iid":"exp-ai-db-workbench-ubuntu2204-amd64-pg17","component":"ai_db_workbench","package":"pgedge-ai-dba-server","family":"deb","arch":"amd64","alias":"ubuntu2204-amd64","container":"auto-ubuntu2204-amd","dist":"jammy","pg":"17","token":"2.0.0~beta1-1.jammy","version":"2.0.0","buildnum":"beta1_1","tag":"v2.0.0-beta1","sha256":"1cdcab82ad67003377ae2ddf63cf69eb24d1437f4152d410a04a8e0b8cf578ae","title":"AI DBA Workbench · ubuntu2204-amd64 · PG17 · pgedge-ai-dba-server 2.0.0~beta1-1.jammy (staging)","report":"report-deb-ai_db_workbench-17.xml","prereq":{"kind":"workbench","dependency":"pgedge-ai-dba-upgrade-check","field":"Pre-Depends","frozen":"2.0.0~beta1-1.jammy","constraint":{"op":">=","version":"2.0.0~beta1-1.jammy"}}},
+      {"iid":"exp-ai-db-workbench-ubuntu2204-arm64-pg17","component":"ai_db_workbench","package":"pgedge-ai-dba-server","family":"deb","arch":"arm64","alias":"ubuntu2204-arm64","container":"auto-ubuntu2204-arm","dist":"jammy","pg":"17","token":"2.0.0~beta1-1.jammy","version":"2.0.0","buildnum":"beta1_1","tag":"v2.0.0-beta1","sha256":"51b66f1d4ab7d166077b80598a82020bf257b9a86447111e8204643c8db1ce52","title":"AI DBA Workbench · ubuntu2204-arm64 · PG17 · pgedge-ai-dba-server 2.0.0~beta1-1.jammy (staging)","report":"report-deb-ai_db_workbench-17.xml","prereq":{"kind":"workbench","dependency":"pgedge-ai-dba-upgrade-check","field":"Pre-Depends","frozen":"2.0.0~beta1-1.jammy","constraint":{"op":">=","version":"2.0.0~beta1-1.jammy"}}},
+      {"iid":"exp-ai-db-workbench-ubuntu2404-amd64-pg17","component":"ai_db_workbench","package":"pgedge-ai-dba-server","family":"deb","arch":"amd64","alias":"ubuntu2404-amd64","container":"auto-ubuntu2404-amd","dist":"noble","pg":"17","token":"2.0.0~beta1-1.noble","version":"2.0.0","buildnum":"beta1_1","tag":"v2.0.0-beta1","sha256":"2990b83625e0a6022a3889ce191bcea6582ed169ec7747275543a0bec58afad5","title":"AI DBA Workbench · ubuntu2404-amd64 · PG17 · pgedge-ai-dba-server 2.0.0~beta1-1.noble (staging)","report":"report-deb-ai_db_workbench-17.xml","prereq":{"kind":"workbench","dependency":"pgedge-ai-dba-upgrade-check","field":"Pre-Depends","frozen":"2.0.0~beta1-1.noble","constraint":{"op":">=","version":"2.0.0~beta1-1.noble"}}},
+      {"iid":"exp-ai-db-workbench-ubuntu2404-arm64-pg17","component":"ai_db_workbench","package":"pgedge-ai-dba-server","family":"deb","arch":"arm64","alias":"ubuntu2404-arm64","container":"auto-ubuntu2404-arm","dist":"noble","pg":"17","token":"2.0.0~beta1-1.noble","version":"2.0.0","buildnum":"beta1_1","tag":"v2.0.0-beta1","sha256":"5d7fc9347cb3fc0bd201b80fff3989d59e8127efe817d833e52c5e2aec887b8f","title":"AI DBA Workbench · ubuntu2404-arm64 · PG17 · pgedge-ai-dba-server 2.0.0~beta1-1.noble (staging)","report":"report-deb-ai_db_workbench-17.xml","prereq":{"kind":"workbench","dependency":"pgedge-ai-dba-upgrade-check","field":"Pre-Depends","frozen":"2.0.0~beta1-1.noble","constraint":{"op":">=","version":"2.0.0~beta1-1.noble"}}},
+      {"iid":"exp-ai-db-workbench-ubuntu2604-amd64-pg17","component":"ai_db_workbench","package":"pgedge-ai-dba-server","family":"deb","arch":"amd64","alias":"ubuntu2604-amd64","container":"auto-ubuntu2604-amd","dist":"resolute","pg":"17","token":"2.0.0~beta1-1.resolute","version":"2.0.0","buildnum":"beta1_1","tag":"v2.0.0-beta1","sha256":"aaf6d8d7522d62fa392273ec11a6c58122d84b7566bc5d9991067184f1947cd8","title":"AI DBA Workbench · ubuntu2604-amd64 · PG17 · pgedge-ai-dba-server 2.0.0~beta1-1.resolute (staging)","report":"report-deb-ai_db_workbench-17.xml","prereq":{"kind":"workbench","dependency":"pgedge-ai-dba-upgrade-check","field":"Pre-Depends","frozen":"2.0.0~beta1-1.resolute","constraint":{"op":">=","version":"2.0.0~beta1-1.resolute"}}},
+      {"iid":"exp-ai-db-workbench-ubuntu2604-arm64-pg17","component":"ai_db_workbench","package":"pgedge-ai-dba-server","family":"deb","arch":"arm64","alias":"ubuntu2604-arm64","container":"auto-ubuntu2604-arm","dist":"resolute","pg":"17","token":"2.0.0~beta1-1.resolute","version":"2.0.0","buildnum":"beta1_1","tag":"v2.0.0-beta1","sha256":"0a1dcc9a2e8044c60c9d324a18f90fb4a274ede140d39e72b984cbc98f2cc3e2","title":"AI DBA Workbench · ubuntu2604-arm64 · PG17 · pgedge-ai-dba-server 2.0.0~beta1-1.resolute (staging)","report":"report-deb-ai_db_workbench-17.xml","prereq":{"kind":"workbench","dependency":"pgedge-ai-dba-upgrade-check","field":"Pre-Depends","frozen":"2.0.0~beta1-1.resolute","constraint":{"op":">=","version":"2.0.0~beta1-1.resolute"}}},
+      {"iid":"exp-ai-db-workbench-alma10-amd64-pg17","component":"ai_db_workbench","package":"pgedge-ai-dba-server","family":"rpm","arch":"amd64","alias":"alma10-amd64","container":"auto-alma10-amd","dist":"el10","pg":"17","token":"2.0.0-beta1_1.el10","version":"2.0.0","buildnum":"beta1_1","tag":"v2.0.0-beta1","sha256":"6b513469679e3293f610367a4625584796c227e410d0a57cd730fb772dc2b818","title":"AI DBA Workbench · alma10-amd64 · PG17 · pgedge-ai-dba-server 2.0.0-beta1_1.el10 (staging)","report":"report-rpm-ai_db_workbench-17.xml","prereq":{"kind":"workbench","dependency":"pgedge-ai-dba-upgrade-check","field":"Requires(pre)","frozen":"2.0.0-beta1_1.el10","constraint":{"op":"EQ","version":"2.0.0-beta1_1.el10"}}},
+      {"iid":"exp-ai-db-workbench-alma10-arm64-pg17","component":"ai_db_workbench","package":"pgedge-ai-dba-server","family":"rpm","arch":"arm64","alias":"alma10-arm64","container":"auto-alma10-arm","dist":"el10","pg":"17","token":"2.0.0-beta1_1.el10","version":"2.0.0","buildnum":"beta1_1","tag":"v2.0.0-beta1","sha256":"5f45fca22a5d0daf419b009d929aa7914be258828960e66dc7b5450bddb57626","title":"AI DBA Workbench · alma10-arm64 · PG17 · pgedge-ai-dba-server 2.0.0-beta1_1.el10 (staging)","report":"report-rpm-ai_db_workbench-17.xml","prereq":{"kind":"workbench","dependency":"pgedge-ai-dba-upgrade-check","field":"Requires(pre)","frozen":"2.0.0-beta1_1.el10","constraint":{"op":"EQ","version":"2.0.0-beta1_1.el10"}}},
+      {"iid":"exp-ai-db-workbench-alma9-arm64-pg17","component":"ai_db_workbench","package":"pgedge-ai-dba-server","family":"rpm","arch":"arm64","alias":"alma9-arm64","container":"auto-alma9-arm","dist":"el9","pg":"17","token":"2.0.0-beta1_1.el9","version":"2.0.0","buildnum":"beta1_1","tag":"v2.0.0-beta1","sha256":"dad1a91cbca59cbf545280aa7aa3b559cf2f0bb26872da145a9671800a2056ac","title":"AI DBA Workbench · alma9-arm64 · PG17 · pgedge-ai-dba-server 2.0.0-beta1_1.el9 (staging)","report":"report-rpm-ai_db_workbench-17.xml","prereq":{"kind":"workbench","dependency":"pgedge-ai-dba-upgrade-check","field":"Requires(pre)","frozen":"2.0.0-beta1_1.el9","constraint":{"op":"EQ","version":"2.0.0-beta1_1.el9"}}},
+      {"iid":"exp-ai-db-workbench-oel9-amd64-pg17","component":"ai_db_workbench","package":"pgedge-ai-dba-server","family":"rpm","arch":"amd64","alias":"oel9-amd64","container":"auto-oel9-amd","dist":"el9","pg":"17","token":"2.0.0-beta1_1.el9","version":"2.0.0","buildnum":"beta1_1","tag":"v2.0.0-beta1","sha256":"84f97a4d6658b8b54513e011e89fcf72df82c146bc893d8fb7f80238aea17b72","title":"AI DBA Workbench · oel9-amd64 · PG17 · pgedge-ai-dba-server 2.0.0-beta1_1.el9 (staging)","report":"report-rpm-ai_db_workbench-17.xml","prereq":{"kind":"workbench","dependency":"pgedge-ai-dba-upgrade-check","field":"Requires(pre)","frozen":"2.0.0-beta1_1.el9","constraint":{"op":"EQ","version":"2.0.0-beta1_1.el9"}}},
+      {"iid":"exp-docloader-debian12-amd64-pg17","component":"docloader","package":"pgedge-docloader","family":"deb","arch":"amd64","alias":"debian12-amd64","container":"auto-debian12-amd","dist":"bookworm","pg":"17","token":"1.0.0-1.bookworm","version":"1.0.0","buildnum":"1","tag":"v1.0.0","sha256":"7f7f335db8e1a318b5b676e8c52231722947dd5b10bfb0261031310a432daaba","title":"Docloader · debian12-amd64 · PG17 · pgedge-docloader 1.0.0-1.bookworm (staging)","report":"report-deb-docloader-17.xml","prereq":null},
+      {"iid":"exp-docloader-debian12-arm64-pg17","component":"docloader","package":"pgedge-docloader","family":"deb","arch":"arm64","alias":"debian12-arm64","container":"auto-debian12-arm","dist":"bookworm","pg":"17","token":"1.0.0-1.bookworm","version":"1.0.0","buildnum":"1","tag":"v1.0.0","sha256":"dcda65345f1da2b78b85932ab8db7faf08e22ea91f450f28a90231eaa093ecc3","title":"Docloader · debian12-arm64 · PG17 · pgedge-docloader 1.0.0-1.bookworm (staging)","report":"report-deb-docloader-17.xml","prereq":null},
+      {"iid":"exp-docloader-debian13-amd64-pg17","component":"docloader","package":"pgedge-docloader","family":"deb","arch":"amd64","alias":"debian13-amd64","container":"auto-debian13-amd","dist":"trixie","pg":"17","token":"1.0.0-1.trixie","version":"1.0.0","buildnum":"1","tag":"v1.0.0","sha256":"5a5dc775957c348fd700792183da06cd46776b7ce909c38e4ae6df454f1863df","title":"Docloader · debian13-amd64 · PG17 · pgedge-docloader 1.0.0-1.trixie (staging)","report":"report-deb-docloader-17.xml","prereq":null},
+      {"iid":"exp-docloader-debian13-arm64-pg17","component":"docloader","package":"pgedge-docloader","family":"deb","arch":"arm64","alias":"debian13-arm64","container":"auto-debian13-arm","dist":"trixie","pg":"17","token":"1.0.0-1.trixie","version":"1.0.0","buildnum":"1","tag":"v1.0.0","sha256":"8c23066b8ba094eb89ea49b8533c95c7c86df30ec5c18df08435cf5c535b4ad6","title":"Docloader · debian13-arm64 · PG17 · pgedge-docloader 1.0.0-1.trixie (staging)","report":"report-deb-docloader-17.xml","prereq":null},
+      {"iid":"exp-docloader-ubuntu2204-amd64-pg17","component":"docloader","package":"pgedge-docloader","family":"deb","arch":"amd64","alias":"ubuntu2204-amd64","container":"auto-ubuntu2204-amd","dist":"jammy","pg":"17","token":"1.0.0-1.jammy","version":"1.0.0","buildnum":"1","tag":"v1.0.0","sha256":"d706e39e83f351c44d0b0d8e6c5a11072458f4404bf7029d0e1793b2f41b2c36","title":"Docloader · ubuntu2204-amd64 · PG17 · pgedge-docloader 1.0.0-1.jammy (staging)","report":"report-deb-docloader-17.xml","prereq":null},
+      {"iid":"exp-docloader-ubuntu2204-arm64-pg17","component":"docloader","package":"pgedge-docloader","family":"deb","arch":"arm64","alias":"ubuntu2204-arm64","container":"auto-ubuntu2204-arm","dist":"jammy","pg":"17","token":"1.0.0-1.jammy","version":"1.0.0","buildnum":"1","tag":"v1.0.0","sha256":"e95c1bf7ac244ecb511507a7313d11a6aaa5bde6bb3ac2419c148cba3972d163","title":"Docloader · ubuntu2204-arm64 · PG17 · pgedge-docloader 1.0.0-1.jammy (staging)","report":"report-deb-docloader-17.xml","prereq":null},
+      {"iid":"exp-docloader-ubuntu2404-amd64-pg17","component":"docloader","package":"pgedge-docloader","family":"deb","arch":"amd64","alias":"ubuntu2404-amd64","container":"auto-ubuntu2404-amd","dist":"noble","pg":"17","token":"1.0.0-1.noble","version":"1.0.0","buildnum":"1","tag":"v1.0.0","sha256":"6fce3b09abacd5178ef5008f04a3631e1eb703d823c4587eafca40127344b974","title":"Docloader · ubuntu2404-amd64 · PG17 · pgedge-docloader 1.0.0-1.noble (staging)","report":"report-deb-docloader-17.xml","prereq":null},
+      {"iid":"exp-docloader-ubuntu2404-arm64-pg17","component":"docloader","package":"pgedge-docloader","family":"deb","arch":"arm64","alias":"ubuntu2404-arm64","container":"auto-ubuntu2404-arm","dist":"noble","pg":"17","token":"1.0.0-1.noble","version":"1.0.0","buildnum":"1","tag":"v1.0.0","sha256":"af31653032c75665e127a4b859e99018459f562510d214f6bd6e0f3ecb62626a","title":"Docloader · ubuntu2404-arm64 · PG17 · pgedge-docloader 1.0.0-1.noble (staging)","report":"report-deb-docloader-17.xml","prereq":null},
+      {"iid":"exp-docloader-ubuntu2604-amd64-pg17","component":"docloader","package":"pgedge-docloader","family":"deb","arch":"amd64","alias":"ubuntu2604-amd64","container":"auto-ubuntu2604-amd","dist":"resolute","pg":"17","token":"1.0.0-1.resolute","version":"1.0.0","buildnum":"1","tag":"v1.0.0","sha256":"dc6e3ebfea3fd075e8a9df6503498fa05fddd7a4e367b8bdcd55d483eadfd066","title":"Docloader · ubuntu2604-amd64 · PG17 · pgedge-docloader 1.0.0-1.resolute (staging)","report":"report-deb-docloader-17.xml","prereq":null},
+      {"iid":"exp-docloader-ubuntu2604-arm64-pg17","component":"docloader","package":"pgedge-docloader","family":"deb","arch":"arm64","alias":"ubuntu2604-arm64","container":"auto-ubuntu2604-arm","dist":"resolute","pg":"17","token":"1.0.0-1.resolute","version":"1.0.0","buildnum":"1","tag":"v1.0.0","sha256":"10ea5af2b530c10f12a713733c7950c995bb283a4387ebecd789dd39f6569652","title":"Docloader · ubuntu2604-arm64 · PG17 · pgedge-docloader 1.0.0-1.resolute (staging)","report":"report-deb-docloader-17.xml","prereq":null},
+      {"iid":"exp-vectorizer-debian12-amd64-pg16","component":"vectorizer","package":"pgedge-postgresql-16-vectorizer","family":"deb","arch":"amd64","alias":"debian12-amd64","container":"auto-debian12-amd","dist":"bookworm","pg":"16","token":"1.1-1.bookworm","version":"1.1","buildnum":"1","tag":"v1.1","sha256":"23bb1cdfd9162f6493a364383f2d53a5db6c383c379626ef11b303f3f68ef98d","title":"Vectorizer · debian12-amd64 · PG16 · pgedge-postgresql-16-vectorizer 1.1-1.bookworm (staging)","report":"report-deb-vectorizer-16.xml","prereq":{"kind":"vectorizer","server":"pgedge-postgresql-16","server_frozen":"16.16-1.bookworm","pgvector":"pgedge-postgresql-16-pgvector","pgvector_frozen":"0.8.7-1.bookworm"}},
+      {"iid":"exp-vectorizer-debian12-amd64-pg17","component":"vectorizer","package":"pgedge-postgresql-17-vectorizer","family":"deb","arch":"amd64","alias":"debian12-amd64","container":"auto-debian12-amd","dist":"bookworm","pg":"17","token":"1.1-1.bookworm","version":"1.1","buildnum":"1","tag":"v1.1","sha256":"5f70e94801689f75235a2ab415be1a324664579a04ec167189930f67d647f240","title":"Vectorizer · debian12-amd64 · PG17 · pgedge-postgresql-17-vectorizer 1.1-1.bookworm (staging)","report":"report-deb-vectorizer-17.xml","prereq":{"kind":"vectorizer","server":"pgedge-postgresql-17","server_frozen":"17.12-1.bookworm","pgvector":"pgedge-postgresql-17-pgvector","pgvector_frozen":"0.8.7-1.bookworm"}},
+      {"iid":"exp-vectorizer-debian12-amd64-pg18","component":"vectorizer","package":"pgedge-postgresql-18-vectorizer","family":"deb","arch":"amd64","alias":"debian12-amd64","container":"auto-debian12-amd","dist":"bookworm","pg":"18","token":"1.1-1.bookworm","version":"1.1","buildnum":"1","tag":"v1.1","sha256":"ad21b8320e1f7d458aa6e578b489350384b7836aed119b6203a66a1f4a6f53e4","title":"Vectorizer · debian12-amd64 · PG18 · pgedge-postgresql-18-vectorizer 1.1-1.bookworm (staging)","report":"report-deb-vectorizer-18.xml","prereq":{"kind":"vectorizer","server":"pgedge-postgresql-18","server_frozen":"18.7-1.bookworm","pgvector":"pgedge-postgresql-18-pgvector","pgvector_frozen":"0.8.7-1.bookworm"}},
+      {"iid":"exp-vectorizer-debian12-arm64-pg16","component":"vectorizer","package":"pgedge-postgresql-16-vectorizer","family":"deb","arch":"arm64","alias":"debian12-arm64","container":"auto-debian12-arm","dist":"bookworm","pg":"16","token":"1.1-1.bookworm","version":"1.1","buildnum":"1","tag":"v1.1","sha256":"a94ea4b339520591b877bcb5ff9f8b69fa994c2d66757257ec218d33c5a54d4b","title":"Vectorizer · debian12-arm64 · PG16 · pgedge-postgresql-16-vectorizer 1.1-1.bookworm (staging)","report":"report-deb-vectorizer-16.xml","prereq":{"kind":"vectorizer","server":"pgedge-postgresql-16","server_frozen":"16.16-1.bookworm","pgvector":"pgedge-postgresql-16-pgvector","pgvector_frozen":"0.8.7-1.bookworm"}},
+      {"iid":"exp-vectorizer-debian12-arm64-pg17","component":"vectorizer","package":"pgedge-postgresql-17-vectorizer","family":"deb","arch":"arm64","alias":"debian12-arm64","container":"auto-debian12-arm","dist":"bookworm","pg":"17","token":"1.1-1.bookworm","version":"1.1","buildnum":"1","tag":"v1.1","sha256":"668b4008a33322148600b109e65f79415040c3e27a53b183d0fc95fa1dc7fb69","title":"Vectorizer · debian12-arm64 · PG17 · pgedge-postgresql-17-vectorizer 1.1-1.bookworm (staging)","report":"report-deb-vectorizer-17.xml","prereq":{"kind":"vectorizer","server":"pgedge-postgresql-17","server_frozen":"17.12-1.bookworm","pgvector":"pgedge-postgresql-17-pgvector","pgvector_frozen":"0.8.7-1.bookworm"}},
+      {"iid":"exp-vectorizer-debian12-arm64-pg18","component":"vectorizer","package":"pgedge-postgresql-18-vectorizer","family":"deb","arch":"arm64","alias":"debian12-arm64","container":"auto-debian12-arm","dist":"bookworm","pg":"18","token":"1.1-1.bookworm","version":"1.1","buildnum":"1","tag":"v1.1","sha256":"318d15a6d649a1949cd521072fbf7b1a248001c71b32e36ad33b1fa2c0c69f5a","title":"Vectorizer · debian12-arm64 · PG18 · pgedge-postgresql-18-vectorizer 1.1-1.bookworm (staging)","report":"report-deb-vectorizer-18.xml","prereq":{"kind":"vectorizer","server":"pgedge-postgresql-18","server_frozen":"18.7-1.bookworm","pgvector":"pgedge-postgresql-18-pgvector","pgvector_frozen":"0.8.7-1.bookworm"}},
+      {"iid":"exp-vectorizer-debian13-amd64-pg16","component":"vectorizer","package":"pgedge-postgresql-16-vectorizer","family":"deb","arch":"amd64","alias":"debian13-amd64","container":"auto-debian13-amd","dist":"trixie","pg":"16","token":"1.1-1.trixie","version":"1.1","buildnum":"1","tag":"v1.1","sha256":"ad00e996b9752a186a20a92fd24ca1d1447af22d133d09e8869995b91e4b8eba","title":"Vectorizer · debian13-amd64 · PG16 · pgedge-postgresql-16-vectorizer 1.1-1.trixie (staging)","report":"report-deb-vectorizer-16.xml","prereq":{"kind":"vectorizer","server":"pgedge-postgresql-16","server_frozen":"16.16-1.trixie","pgvector":"pgedge-postgresql-16-pgvector","pgvector_frozen":"0.8.7-1.trixie"}},
+      {"iid":"exp-vectorizer-debian13-amd64-pg17","component":"vectorizer","package":"pgedge-postgresql-17-vectorizer","family":"deb","arch":"amd64","alias":"debian13-amd64","container":"auto-debian13-amd","dist":"trixie","pg":"17","token":"1.1-1.trixie","version":"1.1","buildnum":"1","tag":"v1.1","sha256":"8bdc2f323211551d20920a4f6e2f3d84276f9256b5585842a5de167cbd97101a","title":"Vectorizer · debian13-amd64 · PG17 · pgedge-postgresql-17-vectorizer 1.1-1.trixie (staging)","report":"report-deb-vectorizer-17.xml","prereq":{"kind":"vectorizer","server":"pgedge-postgresql-17","server_frozen":"17.12-1.trixie","pgvector":"pgedge-postgresql-17-pgvector","pgvector_frozen":"0.8.7-1.trixie"}},
+      {"iid":"exp-vectorizer-debian13-amd64-pg18","component":"vectorizer","package":"pgedge-postgresql-18-vectorizer","family":"deb","arch":"amd64","alias":"debian13-amd64","container":"auto-debian13-amd","dist":"trixie","pg":"18","token":"1.1-1.trixie","version":"1.1","buildnum":"1","tag":"v1.1","sha256":"4c074a392d1525e8e89357a458402edf098ac6b983c2a8d497a1f8a933f8336b","title":"Vectorizer · debian13-amd64 · PG18 · pgedge-postgresql-18-vectorizer 1.1-1.trixie (staging)","report":"report-deb-vectorizer-18.xml","prereq":{"kind":"vectorizer","server":"pgedge-postgresql-18","server_frozen":"18.7-1.trixie","pgvector":"pgedge-postgresql-18-pgvector","pgvector_frozen":"0.8.7-1.trixie"}},
+      {"iid":"exp-vectorizer-debian13-arm64-pg16","component":"vectorizer","package":"pgedge-postgresql-16-vectorizer","family":"deb","arch":"arm64","alias":"debian13-arm64","container":"auto-debian13-arm","dist":"trixie","pg":"16","token":"1.1-1.trixie","version":"1.1","buildnum":"1","tag":"v1.1","sha256":"96f1736cd3fa088c5e2fc31d9e4f23b331626266c70b8d4f6a856b3d642a7af3","title":"Vectorizer · debian13-arm64 · PG16 · pgedge-postgresql-16-vectorizer 1.1-1.trixie (staging)","report":"report-deb-vectorizer-16.xml","prereq":{"kind":"vectorizer","server":"pgedge-postgresql-16","server_frozen":"16.16-1.trixie","pgvector":"pgedge-postgresql-16-pgvector","pgvector_frozen":"0.8.7-1.trixie"}},
+      {"iid":"exp-vectorizer-debian13-arm64-pg17","component":"vectorizer","package":"pgedge-postgresql-17-vectorizer","family":"deb","arch":"arm64","alias":"debian13-arm64","container":"auto-debian13-arm","dist":"trixie","pg":"17","token":"1.1-1.trixie","version":"1.1","buildnum":"1","tag":"v1.1","sha256":"b308c5065a19b143638d9c24138175703a7483871e4b68521f9e9089507117ea","title":"Vectorizer · debian13-arm64 · PG17 · pgedge-postgresql-17-vectorizer 1.1-1.trixie (staging)","report":"report-deb-vectorizer-17.xml","prereq":{"kind":"vectorizer","server":"pgedge-postgresql-17","server_frozen":"17.12-1.trixie","pgvector":"pgedge-postgresql-17-pgvector","pgvector_frozen":"0.8.7-1.trixie"}},
+      {"iid":"exp-vectorizer-debian13-arm64-pg18","component":"vectorizer","package":"pgedge-postgresql-18-vectorizer","family":"deb","arch":"arm64","alias":"debian13-arm64","container":"auto-debian13-arm","dist":"trixie","pg":"18","token":"1.1-1.trixie","version":"1.1","buildnum":"1","tag":"v1.1","sha256":"9a4e8ca2619dbc9d5ae77b3ff1b2f614a81d4fce39ab1ed4ba02bfcc93d4e3aa","title":"Vectorizer · debian13-arm64 · PG18 · pgedge-postgresql-18-vectorizer 1.1-1.trixie (staging)","report":"report-deb-vectorizer-18.xml","prereq":{"kind":"vectorizer","server":"pgedge-postgresql-18","server_frozen":"18.7-1.trixie","pgvector":"pgedge-postgresql-18-pgvector","pgvector_frozen":"0.8.7-1.trixie"}},
+      {"iid":"exp-vectorizer-ubuntu2204-amd64-pg16","component":"vectorizer","package":"pgedge-postgresql-16-vectorizer","family":"deb","arch":"amd64","alias":"ubuntu2204-amd64","container":"auto-ubuntu2204-amd","dist":"jammy","pg":"16","token":"1.1-1.jammy","version":"1.1","buildnum":"1","tag":"v1.1","sha256":"665c9568b68cab0d4fbe5819e0ba32c3abb1a65b52fba2b105a5dba78f93a9f9","title":"Vectorizer · ubuntu2204-amd64 · PG16 · pgedge-postgresql-16-vectorizer 1.1-1.jammy (staging)","report":"report-deb-vectorizer-16.xml","prereq":{"kind":"vectorizer","server":"pgedge-postgresql-16","server_frozen":"16.16-1.jammy","pgvector":"pgedge-postgresql-16-pgvector","pgvector_frozen":"0.8.7-1.jammy"}},
+      {"iid":"exp-vectorizer-ubuntu2204-amd64-pg17","component":"vectorizer","package":"pgedge-postgresql-17-vectorizer","family":"deb","arch":"amd64","alias":"ubuntu2204-amd64","container":"auto-ubuntu2204-amd","dist":"jammy","pg":"17","token":"1.1-1.jammy","version":"1.1","buildnum":"1","tag":"v1.1","sha256":"cf0d99fb627952ac5a6c1646186c75b363382cc3cbd058214d0bdc90f23bdf4a","title":"Vectorizer · ubuntu2204-amd64 · PG17 · pgedge-postgresql-17-vectorizer 1.1-1.jammy (staging)","report":"report-deb-vectorizer-17.xml","prereq":{"kind":"vectorizer","server":"pgedge-postgresql-17","server_frozen":"17.12-1.jammy","pgvector":"pgedge-postgresql-17-pgvector","pgvector_frozen":"0.8.7-1.jammy"}},
+      {"iid":"exp-vectorizer-ubuntu2204-amd64-pg18","component":"vectorizer","package":"pgedge-postgresql-18-vectorizer","family":"deb","arch":"amd64","alias":"ubuntu2204-amd64","container":"auto-ubuntu2204-amd","dist":"jammy","pg":"18","token":"1.1-1.jammy","version":"1.1","buildnum":"1","tag":"v1.1","sha256":"1ddf1c662e7e71ee5f9d6266f1c3d11f2833fc2ca06236c9ef14828849884eb9","title":"Vectorizer · ubuntu2204-amd64 · PG18 · pgedge-postgresql-18-vectorizer 1.1-1.jammy (staging)","report":"report-deb-vectorizer-18.xml","prereq":{"kind":"vectorizer","server":"pgedge-postgresql-18","server_frozen":"18.7-1.jammy","pgvector":"pgedge-postgresql-18-pgvector","pgvector_frozen":"0.8.7-1.jammy"}},
+      {"iid":"exp-vectorizer-ubuntu2204-arm64-pg16","component":"vectorizer","package":"pgedge-postgresql-16-vectorizer","family":"deb","arch":"arm64","alias":"ubuntu2204-arm64","container":"auto-ubuntu2204-arm","dist":"jammy","pg":"16","token":"1.1-1.jammy","version":"1.1","buildnum":"1","tag":"v1.1","sha256":"16d9a7591d9df762f320d7fcd38fb5a1a488c270b787984714b7d7fcaa10eba6","title":"Vectorizer · ubuntu2204-arm64 · PG16 · pgedge-postgresql-16-vectorizer 1.1-1.jammy (staging)","report":"report-deb-vectorizer-16.xml","prereq":{"kind":"vectorizer","server":"pgedge-postgresql-16","server_frozen":"16.16-1.jammy","pgvector":"pgedge-postgresql-16-pgvector","pgvector_frozen":"0.8.7-1.jammy"}},
+      {"iid":"exp-vectorizer-ubuntu2204-arm64-pg17","component":"vectorizer","package":"pgedge-postgresql-17-vectorizer","family":"deb","arch":"arm64","alias":"ubuntu2204-arm64","container":"auto-ubuntu2204-arm","dist":"jammy","pg":"17","token":"1.1-1.jammy","version":"1.1","buildnum":"1","tag":"v1.1","sha256":"d2a0b5e12dcb4e6712a52d1f6e2a4d7acae4a637564a57dd67128baf7a4fb5f9","title":"Vectorizer · ubuntu2204-arm64 · PG17 · pgedge-postgresql-17-vectorizer 1.1-1.jammy (staging)","report":"report-deb-vectorizer-17.xml","prereq":{"kind":"vectorizer","server":"pgedge-postgresql-17","server_frozen":"17.12-1.jammy","pgvector":"pgedge-postgresql-17-pgvector","pgvector_frozen":"0.8.7-1.jammy"}},
+      {"iid":"exp-vectorizer-ubuntu2204-arm64-pg18","component":"vectorizer","package":"pgedge-postgresql-18-vectorizer","family":"deb","arch":"arm64","alias":"ubuntu2204-arm64","container":"auto-ubuntu2204-arm","dist":"jammy","pg":"18","token":"1.1-1.jammy","version":"1.1","buildnum":"1","tag":"v1.1","sha256":"9682204eb0463e791c8fdcd507ddc5cb43e273091ac5afdb69d1bd3ebd93fccb","title":"Vectorizer · ubuntu2204-arm64 · PG18 · pgedge-postgresql-18-vectorizer 1.1-1.jammy (staging)","report":"report-deb-vectorizer-18.xml","prereq":{"kind":"vectorizer","server":"pgedge-postgresql-18","server_frozen":"18.7-1.jammy","pgvector":"pgedge-postgresql-18-pgvector","pgvector_frozen":"0.8.7-1.jammy"}},
+      {"iid":"exp-vectorizer-ubuntu2404-amd64-pg16","component":"vectorizer","package":"pgedge-postgresql-16-vectorizer","family":"deb","arch":"amd64","alias":"ubuntu2404-amd64","container":"auto-ubuntu2404-amd","dist":"noble","pg":"16","token":"1.1-1.noble","version":"1.1","buildnum":"1","tag":"v1.1","sha256":"27910081acf42bc16a65dc270a28bebada8ff7f89dbfe68fd04fdedc86a204ab","title":"Vectorizer · ubuntu2404-amd64 · PG16 · pgedge-postgresql-16-vectorizer 1.1-1.noble (staging)","report":"report-deb-vectorizer-16.xml","prereq":{"kind":"vectorizer","server":"pgedge-postgresql-16","server_frozen":"16.16-1.noble","pgvector":"pgedge-postgresql-16-pgvector","pgvector_frozen":"0.8.7-1.noble"}},
+      {"iid":"exp-vectorizer-ubuntu2404-amd64-pg17","component":"vectorizer","package":"pgedge-postgresql-17-vectorizer","family":"deb","arch":"amd64","alias":"ubuntu2404-amd64","container":"auto-ubuntu2404-amd","dist":"noble","pg":"17","token":"1.1-1.noble","version":"1.1","buildnum":"1","tag":"v1.1","sha256":"be27056859aa833201036f76a40964ba1acb344f7ba572ce144199611e7bd5d5","title":"Vectorizer · ubuntu2404-amd64 · PG17 · pgedge-postgresql-17-vectorizer 1.1-1.noble (staging)","report":"report-deb-vectorizer-17.xml","prereq":{"kind":"vectorizer","server":"pgedge-postgresql-17","server_frozen":"17.12-1.noble","pgvector":"pgedge-postgresql-17-pgvector","pgvector_frozen":"0.8.7-1.noble"}},
+      {"iid":"exp-vectorizer-ubuntu2404-amd64-pg18","component":"vectorizer","package":"pgedge-postgresql-18-vectorizer","family":"deb","arch":"amd64","alias":"ubuntu2404-amd64","container":"auto-ubuntu2404-amd","dist":"noble","pg":"18","token":"1.1-1.noble","version":"1.1","buildnum":"1","tag":"v1.1","sha256":"14c197fb33eaefdae8a267013ee91242e3c4888e56e7fce871fe5ed30a295996","title":"Vectorizer · ubuntu2404-amd64 · PG18 · pgedge-postgresql-18-vectorizer 1.1-1.noble (staging)","report":"report-deb-vectorizer-18.xml","prereq":{"kind":"vectorizer","server":"pgedge-postgresql-18","server_frozen":"18.7-1.noble","pgvector":"pgedge-postgresql-18-pgvector","pgvector_frozen":"0.8.7-1.noble"}},
+      {"iid":"exp-vectorizer-ubuntu2404-arm64-pg16","component":"vectorizer","package":"pgedge-postgresql-16-vectorizer","family":"deb","arch":"arm64","alias":"ubuntu2404-arm64","container":"auto-ubuntu2404-arm","dist":"noble","pg":"16","token":"1.1-1.noble","version":"1.1","buildnum":"1","tag":"v1.1","sha256":"eecea0ce2c1e54801dc2c989334785a4916f9d1ac64c26819299ae6bc44a2094","title":"Vectorizer · ubuntu2404-arm64 · PG16 · pgedge-postgresql-16-vectorizer 1.1-1.noble (staging)","report":"report-deb-vectorizer-16.xml","prereq":{"kind":"vectorizer","server":"pgedge-postgresql-16","server_frozen":"16.16-1.noble","pgvector":"pgedge-postgresql-16-pgvector","pgvector_frozen":"0.8.7-1.noble"}},
+      {"iid":"exp-vectorizer-ubuntu2404-arm64-pg17","component":"vectorizer","package":"pgedge-postgresql-17-vectorizer","family":"deb","arch":"arm64","alias":"ubuntu2404-arm64","container":"auto-ubuntu2404-arm","dist":"noble","pg":"17","token":"1.1-1.noble","version":"1.1","buildnum":"1","tag":"v1.1","sha256":"86ac6fd497f229256ea7a6ba529e9c2cba12bce18782d496f9ac7613fc9bcb3e","title":"Vectorizer · ubuntu2404-arm64 · PG17 · pgedge-postgresql-17-vectorizer 1.1-1.noble (staging)","report":"report-deb-vectorizer-17.xml","prereq":{"kind":"vectorizer","server":"pgedge-postgresql-17","server_frozen":"17.12-1.noble","pgvector":"pgedge-postgresql-17-pgvector","pgvector_frozen":"0.8.7-1.noble"}},
+      {"iid":"exp-vectorizer-ubuntu2404-arm64-pg18","component":"vectorizer","package":"pgedge-postgresql-18-vectorizer","family":"deb","arch":"arm64","alias":"ubuntu2404-arm64","container":"auto-ubuntu2404-arm","dist":"noble","pg":"18","token":"1.1-1.noble","version":"1.1","buildnum":"1","tag":"v1.1","sha256":"cbbdd64297daf199c279cf988e60c97806cf0d606aedc240ae7bed84930536e4","title":"Vectorizer · ubuntu2404-arm64 · PG18 · pgedge-postgresql-18-vectorizer 1.1-1.noble (staging)","report":"report-deb-vectorizer-18.xml","prereq":{"kind":"vectorizer","server":"pgedge-postgresql-18","server_frozen":"18.7-1.noble","pgvector":"pgedge-postgresql-18-pgvector","pgvector_frozen":"0.8.7-1.noble"}},
+      {"iid":"exp-vectorizer-ubuntu2604-amd64-pg16","component":"vectorizer","package":"pgedge-postgresql-16-vectorizer","family":"deb","arch":"amd64","alias":"ubuntu2604-amd64","container":"auto-ubuntu2604-amd","dist":"resolute","pg":"16","token":"1.1-1.resolute","version":"1.1","buildnum":"1","tag":"v1.1","sha256":"eb762ad3986ca1b1e84becfd03d25136cccf6e3a8d7adff307a96e7a517e94cf","title":"Vectorizer · ubuntu2604-amd64 · PG16 · pgedge-postgresql-16-vectorizer 1.1-1.resolute (staging)","report":"report-deb-vectorizer-16.xml","prereq":{"kind":"vectorizer","server":"pgedge-postgresql-16","server_frozen":"16.16-1.resolute","pgvector":"pgedge-postgresql-16-pgvector","pgvector_frozen":"0.8.7-1.resolute"}},
+      {"iid":"exp-vectorizer-ubuntu2604-amd64-pg17","component":"vectorizer","package":"pgedge-postgresql-17-vectorizer","family":"deb","arch":"amd64","alias":"ubuntu2604-amd64","container":"auto-ubuntu2604-amd","dist":"resolute","pg":"17","token":"1.1-1.resolute","version":"1.1","buildnum":"1","tag":"v1.1","sha256":"abda51f708d8ddc02f55a5a7fb7541d29847fb60a6f0f86dd2dbacb5a2accc00","title":"Vectorizer · ubuntu2604-amd64 · PG17 · pgedge-postgresql-17-vectorizer 1.1-1.resolute (staging)","report":"report-deb-vectorizer-17.xml","prereq":{"kind":"vectorizer","server":"pgedge-postgresql-17","server_frozen":"17.12-1.resolute","pgvector":"pgedge-postgresql-17-pgvector","pgvector_frozen":"0.8.7-1.resolute"}},
+      {"iid":"exp-vectorizer-ubuntu2604-amd64-pg18","component":"vectorizer","package":"pgedge-postgresql-18-vectorizer","family":"deb","arch":"amd64","alias":"ubuntu2604-amd64","container":"auto-ubuntu2604-amd","dist":"resolute","pg":"18","token":"1.1-1.resolute","version":"1.1","buildnum":"1","tag":"v1.1","sha256":"6a4df98209e04cf58d64f717575e5cdf400cb2d630e2e583ca42b42c6e229d82","title":"Vectorizer · ubuntu2604-amd64 · PG18 · pgedge-postgresql-18-vectorizer 1.1-1.resolute (staging)","report":"report-deb-vectorizer-18.xml","prereq":{"kind":"vectorizer","server":"pgedge-postgresql-18","server_frozen":"18.7-1.resolute","pgvector":"pgedge-postgresql-18-pgvector","pgvector_frozen":"0.8.7-1.resolute"}},
+      {"iid":"exp-vectorizer-ubuntu2604-arm64-pg16","component":"vectorizer","package":"pgedge-postgresql-16-vectorizer","family":"deb","arch":"arm64","alias":"ubuntu2604-arm64","container":"auto-ubuntu2604-arm","dist":"resolute","pg":"16","token":"1.1-1.resolute","version":"1.1","buildnum":"1","tag":"v1.1","sha256":"2197cd3a310127ef3cc172f8e616dddda33100faa24d8e09d3bbdaca00b02da6","title":"Vectorizer · ubuntu2604-arm64 · PG16 · pgedge-postgresql-16-vectorizer 1.1-1.resolute (staging)","report":"report-deb-vectorizer-16.xml","prereq":{"kind":"vectorizer","server":"pgedge-postgresql-16","server_frozen":"16.16-1.resolute","pgvector":"pgedge-postgresql-16-pgvector","pgvector_frozen":"0.8.7-1.resolute"}},
+      {"iid":"exp-vectorizer-ubuntu2604-arm64-pg17","component":"vectorizer","package":"pgedge-postgresql-17-vectorizer","family":"deb","arch":"arm64","alias":"ubuntu2604-arm64","container":"auto-ubuntu2604-arm","dist":"resolute","pg":"17","token":"1.1-1.resolute","version":"1.1","buildnum":"1","tag":"v1.1","sha256":"52a822c377e261fd2d26e0d80bee2182305c3327cfce023d42bce313155e09e3","title":"Vectorizer · ubuntu2604-arm64 · PG17 · pgedge-postgresql-17-vectorizer 1.1-1.resolute (staging)","report":"report-deb-vectorizer-17.xml","prereq":{"kind":"vectorizer","server":"pgedge-postgresql-17","server_frozen":"17.12-1.resolute","pgvector":"pgedge-postgresql-17-pgvector","pgvector_frozen":"0.8.7-1.resolute"}},
+      {"iid":"exp-vectorizer-ubuntu2604-arm64-pg18","component":"vectorizer","package":"pgedge-postgresql-18-vectorizer","family":"deb","arch":"arm64","alias":"ubuntu2604-arm64","container":"auto-ubuntu2604-arm","dist":"resolute","pg":"18","token":"1.1-1.resolute","version":"1.1","buildnum":"1","tag":"v1.1","sha256":"47e9b711e8ad895453b475e6b964e275ef8a975fa620b6bdd23ca315a04d1cc6","title":"Vectorizer · ubuntu2604-arm64 · PG18 · pgedge-postgresql-18-vectorizer 1.1-1.resolute (staging)","report":"report-deb-vectorizer-18.xml","prereq":{"kind":"vectorizer","server":"pgedge-postgresql-18","server_frozen":"18.7-1.resolute","pgvector":"pgedge-postgresql-18-pgvector","pgvector_frozen":"0.8.7-1.resolute"}},
+      {"iid":"exp-vectorizer-alma10-amd64-pg16","component":"vectorizer","package":"pgedge-vectorizer_16","family":"rpm","arch":"amd64","alias":"alma10-amd64","container":"auto-alma10-amd","dist":"el10","pg":"16","token":"1.1-1.el10","version":"1.1","buildnum":"1","tag":"v1.1","sha256":"82502ac62879a1c97dd326443605e62c69533a421ce2d745ca1f253f6e7bbdd2","title":"Vectorizer · alma10-amd64 · PG16 · pgedge-vectorizer_16 1.1-1.el10 (staging)","report":"report-rpm-vectorizer-16.xml","prereq":{"kind":"vectorizer","server":"pgedge-postgresql16-server","server_frozen":"16.16-1.el10","pgvector":"pgedge-pgvector_16","pgvector_frozen":"0.8.7-1.el10"}},
+      {"iid":"exp-vectorizer-alma10-amd64-pg17","component":"vectorizer","package":"pgedge-vectorizer_17","family":"rpm","arch":"amd64","alias":"alma10-amd64","container":"auto-alma10-amd","dist":"el10","pg":"17","token":"1.1-1.el10","version":"1.1","buildnum":"1","tag":"v1.1","sha256":"86af8f695bbf9f17c113cf2a63de84873381c90f93db9fb423a424cbaa15a862","title":"Vectorizer · alma10-amd64 · PG17 · pgedge-vectorizer_17 1.1-1.el10 (staging)","report":"report-rpm-vectorizer-17.xml","prereq":{"kind":"vectorizer","server":"pgedge-postgresql17-server","server_frozen":"17.12-1.el10","pgvector":"pgedge-pgvector_17","pgvector_frozen":"0.8.7-1.el10"}},
+      {"iid":"exp-vectorizer-alma10-amd64-pg18","component":"vectorizer","package":"pgedge-vectorizer_18","family":"rpm","arch":"amd64","alias":"alma10-amd64","container":"auto-alma10-amd","dist":"el10","pg":"18","token":"1.1-1.el10","version":"1.1","buildnum":"1","tag":"v1.1","sha256":"2f97087c43e1dc916fedd66d3ae9228c1013e1fa2b7b3d64245e102e2717f624","title":"Vectorizer · alma10-amd64 · PG18 · pgedge-vectorizer_18 1.1-1.el10 (staging)","report":"report-rpm-vectorizer-18.xml","prereq":{"kind":"vectorizer","server":"pgedge-postgresql18-server","server_frozen":"18.7-1.el10","pgvector":"pgedge-pgvector_18","pgvector_frozen":"0.8.7-1.el10"}},
+      {"iid":"exp-vectorizer-alma10-arm64-pg16","component":"vectorizer","package":"pgedge-vectorizer_16","family":"rpm","arch":"arm64","alias":"alma10-arm64","container":"auto-alma10-arm","dist":"el10","pg":"16","token":"1.1-1.el10","version":"1.1","buildnum":"1","tag":"v1.1","sha256":"1bdfa7d7842181593ad563899e6228785db3b3feff52679c2f7e6ee3dc20921a","title":"Vectorizer · alma10-arm64 · PG16 · pgedge-vectorizer_16 1.1-1.el10 (staging)","report":"report-rpm-vectorizer-16.xml","prereq":{"kind":"vectorizer","server":"pgedge-postgresql16-server","server_frozen":"16.16-1.el10","pgvector":"pgedge-pgvector_16","pgvector_frozen":"0.8.7-1.el10"}},
+      {"iid":"exp-vectorizer-alma10-arm64-pg17","component":"vectorizer","package":"pgedge-vectorizer_17","family":"rpm","arch":"arm64","alias":"alma10-arm64","container":"auto-alma10-arm","dist":"el10","pg":"17","token":"1.1-1.el10","version":"1.1","buildnum":"1","tag":"v1.1","sha256":"5b74b1c6b9d63b4820f4576c7f471dec2b3b02321b66717ddffbcede28f4828e","title":"Vectorizer · alma10-arm64 · PG17 · pgedge-vectorizer_17 1.1-1.el10 (staging)","report":"report-rpm-vectorizer-17.xml","prereq":{"kind":"vectorizer","server":"pgedge-postgresql17-server","server_frozen":"17.12-1.el10","pgvector":"pgedge-pgvector_17","pgvector_frozen":"0.8.7-1.el10"}},
+      {"iid":"exp-vectorizer-alma10-arm64-pg18","component":"vectorizer","package":"pgedge-vectorizer_18","family":"rpm","arch":"arm64","alias":"alma10-arm64","container":"auto-alma10-arm","dist":"el10","pg":"18","token":"1.1-1.el10","version":"1.1","buildnum":"1","tag":"v1.1","sha256":"b2d56124fa76454cddafaea3394a136e2fc99b5501ef4ce940f3f152f1f4d594","title":"Vectorizer · alma10-arm64 · PG18 · pgedge-vectorizer_18 1.1-1.el10 (staging)","report":"report-rpm-vectorizer-18.xml","prereq":{"kind":"vectorizer","server":"pgedge-postgresql18-server","server_frozen":"18.7-1.el10","pgvector":"pgedge-pgvector_18","pgvector_frozen":"0.8.7-1.el10"}},
+      {"iid":"exp-vectorizer-alma9-arm64-pg16","component":"vectorizer","package":"pgedge-vectorizer_16","family":"rpm","arch":"arm64","alias":"alma9-arm64","container":"auto-alma9-arm","dist":"el9","pg":"16","token":"1.1-1.el9","version":"1.1","buildnum":"1","tag":"v1.1","sha256":"5298b18436af4d97f1b4b9cacf9362b34ae5cd611c75553d7f5a7b58a117eeba","title":"Vectorizer · alma9-arm64 · PG16 · pgedge-vectorizer_16 1.1-1.el9 (staging)","report":"report-rpm-vectorizer-16.xml","prereq":{"kind":"vectorizer","server":"pgedge-postgresql16-server","server_frozen":"16.16-1.el9","pgvector":"pgedge-pgvector_16","pgvector_frozen":"0.8.7-1.el9"}},
+      {"iid":"exp-vectorizer-alma9-arm64-pg17","component":"vectorizer","package":"pgedge-vectorizer_17","family":"rpm","arch":"arm64","alias":"alma9-arm64","container":"auto-alma9-arm","dist":"el9","pg":"17","token":"1.1-1.el9","version":"1.1","buildnum":"1","tag":"v1.1","sha256":"80907d5824a94efa4d959860f1bf99787e36aad3ddd82f6e03c119a905c183ac","title":"Vectorizer · alma9-arm64 · PG17 · pgedge-vectorizer_17 1.1-1.el9 (staging)","report":"report-rpm-vectorizer-17.xml","prereq":{"kind":"vectorizer","server":"pgedge-postgresql17-server","server_frozen":"17.12-1.el9","pgvector":"pgedge-pgvector_17","pgvector_frozen":"0.8.7-1.el9"}},
+      {"iid":"exp-vectorizer-alma9-arm64-pg18","component":"vectorizer","package":"pgedge-vectorizer_18","family":"rpm","arch":"arm64","alias":"alma9-arm64","container":"auto-alma9-arm","dist":"el9","pg":"18","token":"1.1-1.el9","version":"1.1","buildnum":"1","tag":"v1.1","sha256":"fe05fdfa09f69303fc31ee8d860c5c83e423d9f1802408265b69a6e877761fbd","title":"Vectorizer · alma9-arm64 · PG18 · pgedge-vectorizer_18 1.1-1.el9 (staging)","report":"report-rpm-vectorizer-18.xml","prereq":{"kind":"vectorizer","server":"pgedge-postgresql18-server","server_frozen":"18.7-1.el9","pgvector":"pgedge-pgvector_18","pgvector_frozen":"0.8.7-1.el9"}},
+      {"iid":"exp-vectorizer-oel9-amd64-pg16","component":"vectorizer","package":"pgedge-vectorizer_16","family":"rpm","arch":"amd64","alias":"oel9-amd64","container":"auto-oel9-amd","dist":"el9","pg":"16","token":"1.1-1.el9","version":"1.1","buildnum":"1","tag":"v1.1","sha256":"7575b821a884f3f37142e07bec75dfab5eaec281ec7467b79dc95ba68d1a41ad","title":"Vectorizer · oel9-amd64 · PG16 · pgedge-vectorizer_16 1.1-1.el9 (staging)","report":"report-rpm-vectorizer-16.xml","prereq":{"kind":"vectorizer","server":"pgedge-postgresql16-server","server_frozen":"16.16-1.el9","pgvector":"pgedge-pgvector_16","pgvector_frozen":"0.8.7-1.el9"}},
+      {"iid":"exp-vectorizer-oel9-amd64-pg17","component":"vectorizer","package":"pgedge-vectorizer_17","family":"rpm","arch":"amd64","alias":"oel9-amd64","container":"auto-oel9-amd","dist":"el9","pg":"17","token":"1.1-1.el9","version":"1.1","buildnum":"1","tag":"v1.1","sha256":"a678534816d709879c6bda1410bfe773ebe83d829fea9e23b1fcd5c3876b0b88","title":"Vectorizer · oel9-amd64 · PG17 · pgedge-vectorizer_17 1.1-1.el9 (staging)","report":"report-rpm-vectorizer-17.xml","prereq":{"kind":"vectorizer","server":"pgedge-postgresql17-server","server_frozen":"17.12-1.el9","pgvector":"pgedge-pgvector_17","pgvector_frozen":"0.8.7-1.el9"}},
+      {"iid":"exp-vectorizer-oel9-amd64-pg18","component":"vectorizer","package":"pgedge-vectorizer_18","family":"rpm","arch":"amd64","alias":"oel9-amd64","container":"auto-oel9-amd","dist":"el9","pg":"18","token":"1.1-1.el9","version":"1.1","buildnum":"1","tag":"v1.1","sha256":"44094397eabadee1c280d3f9b60e74e15a3c612d217bd615fec7d66064f3b3a7","title":"Vectorizer · oel9-amd64 · PG18 · pgedge-vectorizer_18 1.1-1.el9 (staging)","report":"report-rpm-vectorizer-18.xml","prereq":{"kind":"vectorizer","server":"pgedge-postgresql18-server","server_frozen":"18.7-1.el9","pgvector":"pgedge-pgvector_18","pgvector_frozen":"0.8.7-1.el9"}}
+    ]
+
+jobs:
+  cases:
+    name: case fixture (94 staging cases; consistency only, no network)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions: {}
+    outputs:
+      matrix: ${{ steps.fixture.outputs.matrix }}
+    steps:
+      - name: Check the fixture and emit the matrix
+        id: fixture
+        run: |
+          python3 - <<'PY'
+          import json, os, re
+          E = os.environ
+          cases = json.loads(E["CASES_JSON"])
+          inventory = json.loads(E["INVENTORY_JSON"])
+          # alias -> (family, arch, dist, container name): PEP's eligible platforms at the candidate (from its catalogs).
+          cells = {"alma10-amd64":["rpm","amd64","el10","auto-alma10-amd"],"alma10-arm64":["rpm","arm64","el10","auto-alma10-arm"],"alma9-arm64":["rpm","arm64","el9","auto-alma9-arm"],"debian12-amd64":["deb","amd64","bookworm","auto-debian12-amd"],"debian12-arm64":["deb","arm64","bookworm","auto-debian12-arm"],"debian13-amd64":["deb","amd64","trixie","auto-debian13-amd"],"debian13-arm64":["deb","arm64","trixie","auto-debian13-arm"],"oel9-amd64":["rpm","amd64","el9","auto-oel9-amd"],"ubuntu2204-amd64":["deb","amd64","jammy","auto-ubuntu2204-amd"],"ubuntu2204-arm64":["deb","arm64","jammy","auto-ubuntu2204-arm"],"ubuntu2404-amd64":["deb","amd64","noble","auto-ubuntu2404-amd"],"ubuntu2404-arm64":["deb","arm64","noble","auto-ubuntu2404-arm"],"ubuntu2604-amd64":["deb","amd64","resolute","auto-ubuntu2604-amd"],"ubuntu2604-arm64":["deb","arm64","resolute","auto-ubuntu2604-arm"]}
+          names = {"anonymizer": ("pgedge-anonymizer", "pgedge-anonymizer"), "mcp": ("pgedge-postgres-mcp", "pgedge-postgres-mcp"),
+                   "ai_db_workbench": ("pgedge-ai-dba-server", "pgedge-ai-dba-server"), "docloader": ("pgedge-docloader", "pgedge-docloader"),
+                   "vectorizer": ("pgedge-vectorizer_%s", "pgedge-postgresql-%s-vectorizer")}
+          # The temporary selection, restated: anonymizer, mcp and ai_db_workbench at PG17 on every platform; docloader at PG17
+          # on every DEB platform (its served RPMs have the legacy layout); vectorizer at PG16, PG17 and PG18 on every platform.
+          want_keys = sorted([(c, a, "17") for a in cells for c in ("anonymizer", "mcp", "ai_db_workbench")]
+                             + [("docloader", a, "17") for a in cells if cells[a][0] == "deb"]
+                             + [("vectorizer", a, pg) for a in cells for pg in ("16", "17", "18")])
+          bad = []
+          if sorted((c["component"], c["alias"], c["pg"]) for c in cases) != want_keys:
+              bad.append("case set %r" % sorted(set((c["component"], c["alias"], c["pg"]) for c in cases) ^ set(want_keys)))
+          tests_n = skips_n = 0
+          for c in cases:
+              fam, arch, dist, container = cells.get(c["alias"], (None,) * 4)
+              pre, _, n = c["buildnum"].rpartition("_")
+              tok = ("%s-%s.%s" % (c["version"], c["buildnum"], dist)) if fam == "rpm" else (
+                  ("%s~%s-%s.%s" % (c["version"], pre, n, dist)) if pre else ("%s-%s.%s" % (c["version"], n, dist)))
+              pkg = names[c["component"]][0 if fam == "rpm" else 1]
+              pkg = pkg % c["pg"] if "%s" in pkg else pkg
+              want = {"family": fam, "arch": arch, "dist": dist, "container": container, "package": pkg, "token": tok,
+                      "iid": "exp-%s-%s-pg%s" % (c["component"].replace("_", "-"), c["alias"], c["pg"]),
+                      "report": "report-%s-%s-%s.xml" % (fam, c["component"], c["pg"])}
+              got = {k: c.get(k) for k in want}
+              if got != want:
+                  bad.append("%s: %r != %r" % (c.get("iid"), got, want))
+              if not re.fullmatch(r"[0-9a-f]{64}", c.get("sha256", "")):
+                  bad.append("%s: sha256 malformed" % c.get("iid"))
+              t = inventory.get("%s/%s/%s" % (c["component"], fam, c["pg"]))
+              if t is None:
+                  bad.append("%s: no inventory" % c.get("iid"))
+                  continue
+              tests = [x.replace("{C}", container) for x in t["tests"]]
+              skips = [x.replace("{C}", container) for x in t["skips"]]
+              if not (set(skips) <= set(tests) and len(set(tests)) == len(tests) and all(x.count("{C}") == 1 for x in t["tests"])):
+                  bad.append("%s: skips not a subset of the unique testcases" % c.get("iid"))
+              tests_n, skips_n = tests_n + len(tests), skips_n + len(skips)
+              if not c["tag"].startswith("v" + c["version"]):
+                  bad.append("%s: tag %r does not carry version %r" % (c.get("iid"), c["tag"], c["version"]))
+          if (len(cases), len({c["sha256"] for c in cases}), tests_n, skips_n) != (94, 94, 1356, 286):
+              bad.append("expected 94 cases with distinct digests, 1356 testcases and 286 skips; got %r" % (
+                  (len(cases), len({c["sha256"] for c in cases}), tests_n, skips_n),))
+          if bad:
+              raise SystemExit("fixture problems:\n" + "\n".join(bad))
+          keep = ("iid", "component", "package", "family", "arch", "alias", "pg", "token", "version", "buildnum", "tag", "title")
+          with open(E["GITHUB_OUTPUT"], "a") as f:
+              f.write("matrix=%s\n" % json.dumps({"include": [{k: c[k] for k in keep} for c in cases]}, separators=(",", ":")))
+          print("%d cases consistent" % len(cases))
+          PY
+
+  expansion:
+    name: ${{ matrix.title }}
+    needs: cases
+    permissions: {contents: read}
+    strategy:
+      fail-fast: false
+      max-parallel: 42   # caps this workflow's concurrent matrix jobs only
+      matrix: ${{ fromJSON(needs.cases.outputs.matrix) }}
+    uses: pgEdge/pgedge-pep-test/.github/workflows/pep-integration.yml@fcb90c05b2b8ca95c1a14a42a42adfdab81ccb83
+    with:
+      component: ${{ matrix.component }}
+      package_name: ${{ matrix.package }}
+      channel: staging
+      expected_version: ${{ matrix.version }}
+      expected_buildnum: ${{ matrix.buildnum }}
+      effective_tag: ${{ matrix.tag }}
+      expected_rpm: ${{ matrix.family == 'rpm' && matrix.token || '' }}
+      expected_deb: ${{ matrix.family == 'deb' && matrix.token || '' }}
+      container_alias: ${{ matrix.alias }}
+      pg_major: ${{ matrix.pg }}
+      family: ${{ matrix.family }}
+      arch: ${{ matrix.arch }}
+      scenario: certification
+      mode: observe
+      execution_mode: full
+      invocation_id: ${{ matrix.iid }}
+      pep_implementation_ref: fcb90c05b2b8ca95c1a14a42a42adfdab81ccb83
+    secrets:
+      # Named explicitly (never `secrets: inherit`). The certificate pair enables the gated pgEdge
+      # repositories inside the test container; the Docker Hub pair only lifts pull rate limits.
+      PGEDGE_REPO_CLIENT_CRT: ${{ secrets.PGEDGE_REPO_CLIENT_CRT }}
+      PGEDGE_REPO_CLIENT_KEY: ${{ secrets.PGEDGE_REPO_CLIENT_KEY }}
+      DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+      DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+
+  assert:
+    name: assert validation evidence (94 AI-component cases)
+    needs: [cases, expansion]
+    if: ${{ always() }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    permissions:
+      actions: read        # run metadata (referenced_workflows), this attempt's jobs and artifacts, called-job logs
+      contents: read       # sparse checkout of the PEP candidate's pipeline/ (production layout contract)
+    env:
+      CANDIDATE: fcb90c05b2b8ca95c1a14a42a42adfdab81ccb83
+      RESULTS_JSON: ${{ toJSON(needs) }}
+      GH_TOKEN: ${{ github.token }}
+      # One source for the download step and the assert (only this run's pep-summary artifacts match).
+      SUMMARY_PATTERN: pep-summary-*-r${{ github.run_number }}-a${{ github.run_attempt }}
+    steps:
+      - name: Check out the PEP candidate's artifact collector (layout contract only)
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803  # v6.1.0
+        with:
+          repository: pgEdge/pgedge-pep-test
+          ref: fcb90c05b2b8ca95c1a14a42a42adfdab81ccb83
+          path: pep
+          sparse-checkout: pipeline
+          persist-credentials: false
+      - name: Download this run's 94 summaries (current attempt only)
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131  # v7.0.0
+        with:
+          pattern: ${{ env.SUMMARY_PATTERN }}
+          path: summaries
+      - name: Check every case from evidence, not job colour
+        run: |
+          python3 - <<'PY'
+          import fnmatch, http.client, json, os, re, subprocess, sys, time, urllib.error, urllib.request
+          import xml.etree.ElementTree as ET
+          from pathlib import Path
+          from urllib.parse import urlsplit
+
+          E = os.environ
+          CAND, REPO = E["CANDIDATE"], E["GITHUB_REPOSITORY"]
+          RUN_ID, ATT, RUN_NO = E["GITHUB_RUN_ID"], E["GITHUB_RUN_ATTEMPT"], E["GITHUB_RUN_NUMBER"]
+          NEEDS = json.loads(E["RESULTS_JSON"])
+          CASES = json.loads(E["CASES_JSON"])
+          # The exact frozen testcase inventories, one per (component, family, PG major); {C} is the case's container name.
+          INVENTORY = json.loads(E["INVENTORY_JSON"])
+          for c_ in CASES:
+              t_ = INVENTORY["%s/%s/%s" % (c_["component"], c_["family"], c_["pg"])]
+              c_["tests"] = [n_.replace("{C}", c_["container"]) for n_ in t_["tests"]]
+              c_["skips"] = {n_.replace("{C}", c_["container"]): m_ for n_, m_ in t_["skips"].items()}
+              c_["classname"] = t_["classname"]
+          ROOT = Path("summaries")
+          SUFFIX = " / full test (install and product tests)"
+          IDENTITY = {"l2a": "proven", "l2b": "not_attempted", "l1": "proven"}
+          SUMMARY_KEYS = {"invocation_id", "execution_status", "test_verdict", "enforcement_mode",
+                          "identity_evidence", "counts", "provenance", "installed_package_sha256"}
+          problems, notes, rows, details = [], [], [], {}
+
+          def check(ok, what):
+              if not ok:
+                  problems.append(what)
+              return ok
+
+          # Debian version ordering (a port of dpkg's verrevcmp): epoch numerically, then upstream, then revision;
+          # '~' sorts before anything (even the end), letters before other characters, digit runs numerically.
+          def dpkg_cmp(a, b):
+              def split(v):
+                  e, colon, rest = v.partition(":")
+                  if not colon:
+                      e, rest = "0", v
+                  up, dash, rev = rest.rpartition("-")
+                  return (int(e), up, rev) if dash else (int(e), rest, "")
+
+              def order(ch):
+                  return 0 if ch == "" or ch.isdigit() else ord(ch) if ch.isalpha() else -1 if ch == "~" else ord(ch) + 256
+
+              def verrev(x, y):
+                  i = j = 0
+                  while i < len(x) or j < len(y):
+                      while (i < len(x) and not x[i].isdigit()) or (j < len(y) and not y[j].isdigit()):
+                          ac, bc = order(x[i] if i < len(x) else ""), order(y[j] if j < len(y) else "")
+                          if ac != bc:
+                              return ac - bc
+                          i, j = i + 1, j + 1
+                      while i < len(x) and x[i] == "0":
+                          i += 1
+                      while j < len(y) and y[j] == "0":
+                          j += 1
+                      first = 0
+                      while i < len(x) and j < len(y) and x[i].isdigit() and y[j].isdigit():
+                          first = first or ord(x[i]) - ord(y[j])
+                          i, j = i + 1, j + 1
+                      if i < len(x) and x[i].isdigit():
+                          return 1
+                      if j < len(y) and y[j].isdigit():
+                          return -1
+                      if first:
+                          return first
+                  return 0
+              (ea, ua, ra), (eb, ub, rb) = split(a), split(b)
+              c = (ea > eb) - (ea < eb) or verrev(ua, ub) or verrev(ra, rb)
+              return (c > 0) - (c < 0)
+
+          DEB_REL = {"=": lambda c: c == 0, ">=": lambda c: c >= 0, "<=": lambda c: c <= 0, ">>": lambda c: c > 0, "<<": lambda c: c < 0}
+          DEB_VERSION = re.compile(r"(?:\d+:)?\d[A-Za-z0-9.+~-]*")
+
+          def gh(path, tries=1):
+              for i in range(tries):
+                  r = subprocess.run(["gh", "api", path], capture_output=True, text=True)
+                  if r.returncode == 0:
+                      return r.stdout
+                  if i + 1 < tries:
+                      time.sleep(15)
+              raise RuntimeError("gh api %s failed: %s" % (path, r.stderr.strip()[:300]))
+
+          # Job logs are read as bytes over HTTPS (newer gh refuses text with colour codes). The token is an
+          # unredirected header, so it reaches api.github.com only, never the signed log URL; redirects must
+          # stay on HTTPS. Control sequences are stripped.
+          CONTROL = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)|\x1b[@-_]|[\x00-\x08\x0b-\x1f\x7f-\x9f]")
+
+          class HttpsOnlyRedirect(urllib.request.HTTPRedirectHandler):
+              def redirect_request(self, req, fp, code, msg, headers, newurl):
+                  if urlsplit(newurl).scheme != "https":
+                      raise urllib.error.URLError("refused non-HTTPS redirect")
+                  return super().redirect_request(req, fp, code, msg, headers, newurl)
+
+          def job_log(jid, tries=4):
+              req = urllib.request.Request("https://api.github.com/repos/%s/actions/jobs/%s/logs" % (REPO, jid))
+              req.add_unredirected_header("Authorization", "Bearer " + E.get("GH_TOKEN", ""))
+              err = None
+              for i in range(tries):
+                  try:
+                      with urllib.request.build_opener(HttpsOnlyRedirect).open(req, timeout=120) as r:
+                          return CONTROL.sub("", r.read().decode("utf-8", "replace"))
+                  except (OSError, ValueError, http.client.HTTPException) as e:
+                      err = e
+                  if i + 1 < tries:
+                      time.sleep(15)
+              raise RuntimeError("job %s log: %s" % (jid, err))
+
+          # Run level: the one reusable-workflow ref (the candidate), this run and attempt, the caller jobs' results.
+          for job in ("cases", "expansion"):
+              check((NEEDS.get(job) or {}).get("result") == "success", "needs.%s.result %r" % (job, (NEEDS.get(job) or {}).get("result")))
+          try:
+              run = json.loads(gh("repos/%s/actions/runs/%s" % (REPO, RUN_ID), 3))
+              refs = sorted((r.get("path"), r.get("sha")) for r in (run.get("referenced_workflows") or []))
+              check(refs == [("pgEdge/pgedge-pep-test/.github/workflows/pep-integration.yml@" + CAND, CAND)], "run: referenced_workflows %r" % refs)
+              check((run.get("head_sha"), str(run.get("run_attempt"))) == (E["GITHUB_SHA"], ATT),
+                    "run: head_sha/run_attempt %r" % ((run.get("head_sha"), run.get("run_attempt")),))
+              jobs, page_ = [], 1
+              while True:
+                  got_ = json.loads(gh("repos/%s/actions/runs/%s/attempts/%s/jobs?per_page=100&page=%d" % (REPO, RUN_ID, ATT, page_), 3))
+                  jobs += got_["jobs"]
+                  if len(got_["jobs"]) < 100:
+                      break
+                  page_ += 1
+              check(len(jobs) == got_.get("total_count") and len({j["id"] for j in jobs}) == len(jobs),
+                    "run: jobs listing holds %d of %r" % (len(jobs), got_.get("total_count")))
+          except (RuntimeError, ValueError) as e:
+              problems.append("run: metadata unavailable: %s" % e)
+              jobs = []
+
+          def art(c):
+              return "pep-summary-%s-%s-%s-pg%s-staging-%s-certification-full-%s-r%s-a%s" % (
+                  c["component"], c["family"], c["arch"], c["pg"], c["alias"], c["iid"], RUN_NO, ATT)
+
+          names = {c["iid"]: art(c) for c in CASES}
+          # Download layout: download-artifact v7.0.0 with `pattern:` -> none: nothing; ONE: flat into summaries/;
+          # several: summaries/<name>/. The downloaded set is re-derived from this run's artifact listing with the
+          # same pattern, and each case root is resolved with PEP's production collector contract at the candidate.
+          sys.path.insert(0, str(Path("pep/pipeline").resolve()))
+          import pep_result_io as RIO
+          listed = []
+          try:
+              page = 1
+              while True:
+                  got = json.loads(gh("repos/%s/actions/runs/%s/artifacts?per_page=100&page=%d" % (REPO, RUN_ID, page), 3))["artifacts"]
+                  listed += got
+                  if len(got) < 100:
+                      break
+                  page += 1
+          except (RuntimeError, ValueError, KeyError, TypeError) as e:
+              problems.append("artifacts: run listing unavailable: %s" % e)
+          matched = [a.get("name") for a in listed if fnmatch.fnmatchcase(a.get("name") or "", E["SUMMARY_PATTERN"]) and not a.get("expired")]
+          downloaded = sorted(set(matched))
+          check(len(matched) == len(downloaded), "artifacts: duplicate names %r" % sorted({n for n in matched if matched.count(n) > 1}))
+          check(downloaded == sorted(names.values()), "artifacts: %d downloaded, %d expected; missing %r; unexpected %r" % (
+              len(downloaded), len(names), sorted(set(names.values()) - set(downloaded)), sorted(set(downloaded) - set(names.values()))))
+          entries = sorted(p.name for p in ROOT.iterdir()) if ROOT.is_dir() else []
+          if len(downloaded) > 1:
+              check(entries == downloaded, "artifacts: download folder holds %r, expected one folder per downloaded artifact" % entries[:10])
+          roots = {}
+          for iid_, name_ in names.items():
+              # Like the production collector, only a DOWNLOADED artifact is resolved (a flat root never stands in for another name).
+              root_, anomaly_ = RIO._resolve_root(str(ROOT), name_, len(downloaded)) if name_ in downloaded else (None, RIO.EX_MISSING)
+              if anomaly_ is None:
+                  roots[iid_] = Path(root_)
+              else:
+                  problems.append("%s: artifact layout %s for %s" % (iid_, anomaly_, name_))
+
+          def markers(c, pv):
+              """Per-product job-log lines the candidate prints on success (regex -> optional check)."""
+              pkg, tok, esc = c["package"], c["token"], re.escape(c["package"])
+              m = {"pinned_install": re.escape("pinned install: %s=%s sha256=%s" % (pkg, tok, c["sha256"]))}
+              comp = c["component"]
+              if comp == "anonymizer":
+                  m.update(single=r"Only %s is installed among anonymizer packages" % esc,
+                           owner=r"/usr/bin/pgedge-anonymizer belongs to %s\s" % esc,
+                           binary=r"/usr/bin/pgedge-anonymizer reports version %s, built \S+ \(expected %s\)" % (re.escape(c["version"]), re.escape(c["version"])),
+                           stripped=r"/usr/bin/pgedge-anonymizer is stripped")
+              elif comp == "docloader":
+                  m.update(single=r"Only %s is installed among docloader packages" % esc,
+                           owner=r"/usr/bin/pgedge-docloader belongs to %s\s" % esc,
+                           binary=re.escape("/usr/bin/pgedge-docloader reports version %s (expected %s)" % (c["version"], c["version"])))
+              elif comp == "mcp":
+                  m.update(single=r"Only %s is installed among MCP packages" % esc)
+              elif comp == "ai_db_workbench":
+                  dep = re.escape(c["prereq"]["dependency"])
+                  m.update(single=r"Only %s and its dependency %s are installed among workbench packages" % (esc, dep),
+                           dependency_installed=r"installed %s = (\S+)" % dep,
+                           dependency_declared=r"Dependency '%s' declared in %s" % (dep, esc),
+                           stripped=r"/usr/bin/ai-dba-server is stripped")
+              elif comp == "vectorizer":
+                  p = c["prereq"]
+                  m.update(single=r"Only %s is installed among vectorizer packages" % esc,
+                           server_installed=r"installed %s = (%s\.\d+-\S+)" % (re.escape(p["server"]), c["pg"]),
+                           pgvector_installed=r"installed %s = (\S+)" % re.escape(p["pgvector"]),
+                           package_installed=r"installed %s = (%s)\s" % (esc, re.escape(tok)),
+                           create_vector=r"CREATE EXTENSION vector\s",
+                           create_vectorizer=r"CREATE EXTENSION pgedge_vectorizer\s",
+                           library_owner=r"\S+/pgedge_vectorizer\.so belongs to %s\s" % esc,
+                           server=r"port \d+: PostgreSQL (\d+), pgedge_vectorizer (\S+)")
+              return m
+
+          for c in CASES:
+              fam, pkg, tok, pg, digest, iid = c["family"], c["package"], c["token"], c["pg"], c["sha256"], c["iid"]
+              tag = iid + ": "
+              d = roots.get(iid) or ROOT / ".layout-unresolved" / names[iid]   # unresolved -> evidence missing, never read
+              det = details[iid] = {"artifact": names[iid], "pep": CAND, "expected_sha256": digest}
+              target = {"package_name": pkg, "family": fam, "arch": c["arch"], "pg_major": pg,
+                        "container_alias": c["alias"], "channel": "staging"}
+              run_token = "%s-%s" % (RUN_ID, ATT)
+
+              def load(f):
+                  return json.loads((d / f).read_text())
+              try:
+                  s, inst, obs, ide, prov, rc, cur = (load(f) for f in (
+                      "summary.json", "install-evidence.json", "observed-identity.json", "identity-evidence.json",
+                      "provenance.json", "resolved-config.json", "current-run.json"))
+              except (OSError, ValueError) as e:
+                  problems.append(tag + "evidence missing/unreadable: %s" % e)
+                  rows.append("| %s | evidence missing | | | |" % iid)
+                  continue
+              want_prov = {"caller_repo": REPO, "caller_sha": E["GITHUB_SHA"], "caller_ref": E["GITHUB_REF"],
+                           "caller_run_id": RUN_ID, "caller_run_attempt": ATT,
+                           "pep_requested_ref": CAND, "pep_resolved_sha": CAND}
+              want_counts = {"tests": len(c["tests"]), "failures": 0, "errors": 0, "skipped": len(c["skips"])}
+              check(set(s) == SUMMARY_KEYS, tag + "summary keys %r (reason/malformed_reports must be absent)" % sorted(s))
+              check(s.get("invocation_id") == iid, tag + "invocation_id %r" % s.get("invocation_id"))
+              check((s.get("execution_status"), s.get("test_verdict"), s.get("enforcement_mode")) == ("completed", "pass", "observe"),
+                    tag + "status %r, expected completed/pass/observe" % ((s.get("execution_status"), s.get("test_verdict"), s.get("enforcement_mode")),))
+              check(s.get("identity_evidence") == IDENTITY and ide == IDENTITY, tag + "identity %r / %r" % (s.get("identity_evidence"), ide))
+              check(s.get("counts") == want_counts, tag + "counts %r != %r" % (s.get("counts"), want_counts))
+              check(s.get("installed_package_sha256") == digest, tag + "installed sha256 %r != staging metadata %r" % (s.get("installed_package_sha256"), digest))
+              check(prov == want_prov and s.get("provenance") == want_prov, tag + "provenance %r / %r" % (prov, s.get("provenance")))
+              check(inst == {"run_token": run_token, "installed": True, "install_kind": "pinned", "install_token": tok,
+                             "installed_sha256": digest, "target": target, "expected_version": c["version"]},
+                    tag + "install evidence %r" % inst)
+              ob = obs.get("observed") or {}
+              check(obs.get("run_token") == run_token and obs.get("target") == target
+                    and ob.get("package_manager_version") == tok and ob.get("component_version") == tok
+                    and ob.get("binary_version") is None, tag + "observed identity %r" % obs)
+              check(rc.get("repo") == {"value": "staging", "source": "caller"}
+                    and rc.get("scenario") == {"value": "certification", "source": "caller"}
+                    and (rc.get("upgrade") or {}).get("value") == "false", tag + "resolved-config %r" % rc)
+              det.update(installed_sha256=s.get("installed_package_sha256"), counts=s.get("counts"), observed=ob)
+
+              reports = sorted({re.sub(r"^.*?test-logs/", "", r) for r in (cur.get("reports") or [])})
+              if not check(len(reports) == 1 and Path(reports[0]).name == c["report"], tag + "reports %r" % cur.get("reports")):
+                  rows.append("| %s | %s/%s | reports wrong | | |" % (iid, s.get("execution_status"), s.get("test_verdict")))
+                  continue
+              try:
+                  xml_root = ET.parse(d / reports[0]).getroot()
+              except (OSError, ET.ParseError) as e:
+                  problems.append(tag + "JUnit unreadable: %s" % e)
+                  continue
+              want_names, want_skips = c["tests"], c["skips"]
+              tcs = list(xml_root.iter("testcase"))
+              names_seen = [tc.get("name") or "" for tc in tcs]
+              dup = sorted({n for n in names_seen if names_seen.count(n) > 1})
+              check(names_seen == want_names, tag + "testcases differ from the frozen inventory: missing %r, unexpected %r, "
+                    "duplicated %r, same set in another order: %s" % (sorted(set(want_names) - set(names_seen)),
+                    sorted(set(names_seen) - set(want_names)), dup, sorted(names_seen) == sorted(want_names) and names_seen != want_names))
+              skipped, failed = {}, {}
+              for tc in tcs:
+                  nm = tc.get("name") or ""
+                  check(tc.get("classname") == c["classname"], tag + "%s classname %r" % (nm, tc.get("classname")))
+                  kinds = [k for k in ("failure", "error", "skipped") if tc.find(k) is not None]
+                  if kinds == ["skipped"]:
+                      skipped[nm] = tc.find("skipped").get("message")
+                  elif kinds:
+                      el = tc.find(kinds[0])
+                      failed[nm] = "/".join(kinds) + ": " + (el.get("message") or "") + "\n" + (el.text or "")
+              check(not failed, tag + "failed or errored testcases %r" % {k: v[:300] for k, v in failed.items()})
+              check(skipped == want_skips, tag + "skips %r != %r" % (skipped, want_skips))
+              passed = [n for n in names_seen if n not in skipped and n not in failed]
+              check(passed == [n for n in want_names if n not in want_skips], tag + "passed testcases %r" % passed)
+              suites = list(xml_root.iter("testsuite"))
+              totals = {k: sum(int(ts.get(k) or 0) for ts in suites) for k in ("tests", "failures", "errors", "skipped")}
+              check(len(suites) == 1 and totals == want_counts, tag + "JUnit testsuite totals %r != %r" % (totals, want_counts))
+              det.update(passed=len(passed), skipped=skipped, failed=sorted(failed), testcases=names_seen)
+
+              # Prerequisite evidence: vectorizer (server + pgvector, unversioned), workbench (the declared upgrade-check
+              # dependency, never certified, checked against its declared constraint); docloader, anonymizer and mcp
+              # install nothing else and write none.
+              pv_path = d / "prerequisite-versions.json"
+              p = c["prereq"]
+              pv = {}
+              if p is None:
+                  check(not pv_path.exists(), tag + "unexpected prerequisite-versions.json for a package with no prerequisite")
+              else:
+                  try:
+                      pv = json.loads(pv_path.read_text())
+                  except (OSError, ValueError) as e:
+                      problems.append(tag + "prerequisite-versions.json: %s" % e)
+                  iv = pv.get("installed_versions") or {}
+                  if p["kind"] == "vectorizer":
+                      ok_ = (pv.get("channel") == "staging" and pv.get("pg_major") == pg and pv.get("requested_package") == pkg
+                             and set(iv) == {p["server"], p["pgvector"], pkg} and iv.get(pkg) == tok
+                             and re.fullmatch(r"%s\.\d+-\S+" % pg, iv.get(p["server"]) or "") is not None and bool(iv.get(p["pgvector"])))
+                      check(ok_, tag + "prerequisites %r" % pv)
+                      for k_, want_ in ((p["server"], p["server_frozen"]), (p["pgvector"], p["pgvector_frozen"])):
+                          if iv.get(k_) != want_:
+                              notes.append(tag + "%s %s differs from the %s staging served at prep time" % (k_, iv.get(k_), want_))
+                  else:
+                      dep, con = p["dependency"], p["constraint"]
+                      have = iv.get(dep)
+                      check(pv.get("channel") == "staging" and pv.get("requested_package") == pkg
+                            and pv.get("installed_as_dependency") == [dep] and set(iv) == {dep, pkg} and iv.get(pkg) == tok,
+                            tag + "prerequisites %r" % pv)
+                      if fam == "rpm":
+                          # Requires(pre): dep = <EVR>: only that exact build is acceptable.
+                          check(con["op"] == "EQ" and have == con["version"] == p["frozen"],
+                                tag + "%s %r, the RPM requires exactly %s" % (dep, have, con["version"]))
+                      else:
+                          # Pre-Depends: dep (<op> <version>): enforced with Debian version ordering; below the minimum
+                          # fails, a newer version that satisfies it is a note.
+                          rel = DEB_REL.get(con["op"])
+                          sat = (rel is not None and isinstance(have, str) and DEB_VERSION.fullmatch(have) is not None
+                                 and rel(dpkg_cmp(have, con["version"])))
+                          if check(sat, tag + "%s %r does not satisfy the declared %s: %s (%s %s) (Debian version ordering)" % (
+                                  dep, have, p["field"], dep, con["op"], con["version"])) and have != p["frozen"]:
+                              notes.append(tag + "%s %s differs from the %s staging served at prep time (it satisfies %s %s)" % (
+                                  dep, have, p["frozen"], con["op"], con["version"]))
+
+              jid = [j["id"] for j in jobs if j["name"].startswith(c["title"]) and j["name"].endswith(SUFFIX)]
+              # pep-integration.yml runs arm64 on ubuntu-24.04-arm and everything else on ubuntu-24.04.
+              runner_ = "ubuntu-24.04-arm" if c["arch"] == "arm64" else "ubuntu-24.04"
+              ran_on_ = [j.get("labels") for j in jobs if j["id"] in jid]
+              check(len(jid) != 1 or ran_on_ == [[runner_]], tag + "called job ran on %r, expected the %s runner %r" % (ran_on_, c["arch"], runner_))
+              log = ""
+              if check(len(jid) == 1 and all(j["conclusion"] == "success" for j in jobs if j["id"] in jid), tag + "called job %r" % jid):
+                  try:
+                      log = job_log(jid[0])
+                  except RuntimeError as e:
+                      problems.append(tag + "job log unavailable: %s" % e)
+              seen = {}
+              for key, pat in markers(c, pv).items():
+                  m = re.search(pat, log)
+                  seen[key] = m.group(0).strip() if m else None
+                  check(m is not None, tag + "job log lacks %s (%r)" % (key, pat))
+                  iv = pv.get("installed_versions") or {}
+                  if m and key == "server":
+                      mm = re.fullmatch(r"%s\.(\d+)-\S+" % pg, iv.get(c["prereq"]["server"]) or "")
+                      want_num = "%s00%02d" % (pg, int(mm.group(1))) if mm else None
+                      check(m.group(1) == want_num and m.group(2) == c["version"],
+                            tag + "server runs PostgreSQL %s pgedge_vectorizer %s, expected %s / %s" % (m.group(1), m.group(2), want_num, c["version"]))
+                  if m and key in ("server_installed", "pgvector_installed", "dependency_installed"):
+                      want_ = iv.get({"server_installed": (c["prereq"] or {}).get("server"), "pgvector_installed": (c["prereq"] or {}).get("pgvector"),
+                                      "dependency_installed": (c["prereq"] or {}).get("dependency")}[key])
+                      check(m.group(1) == want_, tag + "log %s %s != evidence %s" % (key, m.group(1), want_))
+              det.update(prerequisites=pv.get("installed_versions"), log_markers=seen, called_job_id=jid[0] if jid else None)
+              rows.append("| %s | %s/%s | %d passed, %d skipped, %d failed | `%s` | %s |" % (
+                  iid, s.get("execution_status"), s.get("test_verdict"), len(passed), len(skipped), len(failed),
+                  s.get("installed_package_sha256"), "match" if s.get("installed_package_sha256") == digest else "MISMATCH"))
+
+          verdict = "fail" if problems else "pass"
+          Path("validation-result.json").write_text(json.dumps(
+              {"candidate_pep": CAND, "run_id": RUN_ID, "run_attempt": ATT, "caller_sha": E["GITHUB_SHA"],
+               "cases_frozen": CASES, "verdict": verdict, "problems": problems, "notes": notes, "cases": details}, indent=1, sort_keys=True))
+          head = "All %d cases verified from evidence: the frozen testcase inventories, %d passed and only the %d documented skips.\n" % (
+              len(CASES), sum(len(c["tests"]) - len(c["skips"]) for c in CASES), sum(len(c["skips"]) for c in CASES))
+          with open(E["GITHUB_STEP_SUMMARY"], "a") as f:
+              f.write("### PEP fcb90c0 AI-component existing-package expansion: package-test integration validation of existing staging packages "
+                      "(not full application QA, not release-workflow validation)\n\n"
+                      "| case | status | testcases | installed sha256 | vs staging metadata |\n|---|---|---|---|---|\n"
+                      + "\n".join(rows) + "\n\n"
+                      + ("**FAILED**\n\n" + "\n".join("- " + p for p in problems) if problems else head)
+                      + ("\n\nNotes:\n" + "\n".join("- " + n for n in notes) if notes else ""))
+          print("\n".join(rows))
+          if notes:
+              print("\n".join(notes))
+          if problems:
+              print("\n".join(problems), file=sys.stderr)
+              sys.exit(1)
+          print(head)
+          PY
+      - name: Upload the assertion result
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
+        with:
+          name: pep-validation-fcb90c0-ai-expansion-result-r${{ github.run_number }}-a${{ github.run_attempt }}
+          path: validation-result.json
+          if-no-files-found: warn

@@ -1,5 +1,7 @@
+import io
 import os
 import sys
+import tarfile
 import time
 from pathlib import Path
 
@@ -153,10 +155,42 @@ def _copy_file_to_container(container, local_path, remote_path, msg=""):
     if isinstance(container, _SSHExecutor):
         container.put_file(str(local_path), remote_path)
         return
-    with open(local_path, "r") as fh:
-        content = fh.read()
-    _exec(container, f"cat > {remote_path} << 'PEPCOPYEOF'\n{content}\nPEPCOPYEOF",
-          msg=msg or f"Copy {remote_path}")
+    # Docker: stream the file in via the archive (tar) API. Inlining it as a
+    # `cat > ... << heredoc` bash -c argument fails for large files — a single
+    # argv element is capped at MAX_ARG_STRLEN (128 KiB on a 4 KiB-page kernel),
+    # so e.g. northwind.sql (~342 KB) aborts with "argument list too long".
+    with open(local_path, "rb") as fh:
+        data = fh.read()
+    tar_stream = io.BytesIO()
+    with tarfile.open(fileobj=tar_stream, mode="w") as tar:
+        info = tarfile.TarInfo(name=os.path.basename(remote_path))
+        info.size = len(data)
+        tar.addfile(info, io.BytesIO(data))
+    dest_dir = os.path.dirname(remote_path) or "/"
+    ok = container.put_archive(dest_dir, tar_stream.getvalue())
+    assert ok, msg or f"Copy {remote_path}: put_archive to {dest_dir} failed"
+
+
+# ============================================================================
+# STEP 0 – Sanity: node ports must be distinct
+# ============================================================================
+
+def test_failover_port_layout_is_sane():
+    """Step 0: n1/n2/n3 must listen on distinct ports.
+
+    n2_port is PATRONI_FAILOVER_BASE_PORT + 1 and n3_port is
+    PATRONI_STANDBY_PORT. If they collide (e.g. base_port=6431 makes n2=6432 =
+    n3's 6432), only one server binds the port: n3 never starts and every 'n3'
+    check silently hits n2, the primary — so the read-only INSERT at step 16
+    succeeds and the failure masquerades as a spock/read-only bug. Fail here
+    instead, with the real cause.
+    """
+    ports = {"n1": n1_port, "n2": n2_port, "n3": n3_port}
+    assert len(set(ports.values())) == 3, (
+        f"Node ports must be distinct but overlap: {ports}. "
+        f"Check PATRONI_FAILOVER_BASE_PORT (n2 = base + 1) vs "
+        f"PATRONI_STANDBY_PORT (n3)."
+    )
 
 
 # ============================================================================
@@ -768,7 +802,7 @@ def test_start_patroni_n3(container_name, container_type):
 # ============================================================================
 
 @pytest.mark.parametrize("container_name,container_type", all_containers)
-def validate_patroni_cluster(container_name, container_type):
+def test_validate_patroni_cluster(container_name, container_type):
     """Step 13: Verify patronictl list shows n2 as Leader and n3 as Replica"""
     container_name = container_name.strip()
     if not container_name:
@@ -1067,6 +1101,25 @@ def test_readonly_n3_refuses_insert(container_name, container_type):
 
     config = get_container_config(container_type)
     pguser = config["pguser"]
+
+    # First confirm n3 is actually a read-only standby. If a port collision or an
+    # unexpected promotion left a *primary* answering on n3_port, the INSERT below
+    # would succeed and the failure would read as a spock/read-only bug rather than
+    # the real cause. pg_is_in_recovery() makes the diagnosis unambiguous.
+    print(f"\nChecking n3 (port {n3_port}) is in recovery (read-only standby)")
+    rc_rec, out_rec = container.exec_run(
+        ["bash", "-c",
+         f"psql -h localhost -p {n3_port} -U {pguser} -d postgres "
+         f"-tAc 'SELECT pg_is_in_recovery();' 2>&1"],
+        user="root"
+    )
+    recovery = out_rec.decode().strip()
+    print(f"n3 pg_is_in_recovery: {recovery!r} (rc={rc_rec})")
+    assert rc_rec == 0 and recovery == "t", (
+        f"n3 (port {n3_port}) is not a read-only standby (pg_is_in_recovery={recovery!r}, "
+        f"rc={rc_rec}). A primary is answering on n3's port — check for a port collision "
+        f"(n2_port={n2_port} vs n3_port={n3_port}) or an unexpected promotion/failover."
+    )
 
     print(f"\nAttempting INSERT on n3 (port {n3_port}) — should be refused")
     rc, out = container.exec_run(

@@ -139,10 +139,22 @@ INTEGRATION_PROBLEM = integration_problem(INTEGRATION_REQUEST)
 ENTERPRISE_LEGACY_RPM_RELEASES = frozenset({"1.0.0-1", "1.0.0-beta1_1"})
 ENTERPRISE_LEGACY_RPM_REFERENCE = "docloader-enterprise-legacy"
 IN_REPO_RPM_REFERENCE = "docloader"
+# Where each RPM layout puts the SBOM and its signature: exactly the paths the two references do not
+# share (test_pep_docloader_wiring checks this against both files). The mixed-layout check uses these,
+# so it never needs a reference file.
+IN_REPO_RPM_SBOM_PATHS = frozenset({"/usr/share/pgedge-docloader/pgedge-docloader-sbom.json",
+                                    "/usr/share/pgedge-docloader/pgedge-docloader-sbom.json.asc"})
+ENTERPRISE_LEGACY_RPM_SBOM_PATHS = frozenset({"/usr/share/pgedge-docloader-sbom.json",
+                                              "/usr/share/pgedge-docloader-sbom.json.asc"})
 
 
 def _rpm_reference(name):
+    """The paths expected-output/rpm/<name> lists. A missing file raises FileNotFoundError with the
+    shared verifier's wording, and _rpm_layout handles it the same way (standalone skip, integration
+    fail)."""
     path = Path(__file__).parent.parent / "expected-output" / "rpm" / name
+    if not path.is_file():
+        raise FileNotFoundError(f"No expected file found for {name} at {path}")
     return frozenset(line.strip() for line in path.read_text().splitlines() if line.strip())
 
 
@@ -159,11 +171,11 @@ def rpm_layout_decision(integration, version_release, owned_files):
     * "in-repo" otherwise: integration mode always; any other or unreadable version-release; a legacy
       version-release with the in-repo files (an in-repo build of the same version) or an incomplete
       legacy inventory. For the last case ``note`` names what the legacy inventory lacks.
+    The only reference read here is the legacy one, and only when it could be selected (a standalone
+    run of a legacy version-release); a missing one raises FileNotFoundError.
     """
-    in_repo = _rpm_reference(IN_REPO_RPM_REFERENCE)
-    legacy = _rpm_reference(ENTERPRISE_LEGACY_RPM_REFERENCE)
     owned = {f.strip() for f in owned_files if f and f.strip()}
-    in_repo_only, legacy_only = owned & (in_repo - legacy), owned & (legacy - in_repo)
+    in_repo_only, legacy_only = owned & IN_REPO_RPM_SBOM_PATHS, owned & ENTERPRISE_LEGACY_RPM_SBOM_PATHS
     if in_repo_only and legacy_only:
         return "in-repo", (f"the package mixes two SBOM layouts: it owns {sorted(in_repo_only)} (in-repo) "
                            f"and {sorted(legacy_only)} (enterprise-legacy)"), None
@@ -172,6 +184,7 @@ def rpm_layout_decision(integration, version_release, owned_files):
     m = re.fullmatch(r"(.+)\.el\d+", version_release.strip())
     if not (m and m.group(1) in ENTERPRISE_LEGACY_RPM_RELEASES):
         return "in-repo", None, None
+    legacy = _rpm_reference(ENTERPRISE_LEGACY_RPM_REFERENCE)
     lacking = sorted(legacy - owned)
     if not lacking:
         return "enterprise-legacy", None, None
@@ -181,16 +194,24 @@ def rpm_layout_decision(integration, version_release, owned_files):
 
 def _rpm_layout(container, container_type, package):
     """(layout, problem, note) for this container. DEB packages have one layout; integration runs never
-    query the version-release."""
+    query the version-release. A file list rpm cannot give is a problem in every mode: read as empty, it
+    would leave the mixed-layout check blind. A missing reference the decision needs skips a standalone
+    run and fails an integration run."""
     if container_type != "rhel":
         return "in-repo", None, None
     rc, out = container.exec_run(f"rpm -ql {package}", user="root")
-    owned = out.decode().splitlines() if rc == 0 and isinstance(out, (bytes, bytearray)) else []
+    if rc != 0 or not isinstance(out, (bytes, bytearray)):
+        said = out.decode(errors="replace").strip() if isinstance(out, (bytes, bytearray)) else out
+        return "in-repo", f"cannot read the files {package} owns (rpm -ql exited {rc}: {said!r})", None
+    owned = out.decode().splitlines()
     version_release = None
     if INTEGRATION_REQUEST is None:
         rc, out = container.exec_run(["rpm", "-q", "--qf", "%{VERSION}-%{RELEASE}", package], user="root")
         version_release = out.decode().strip() if rc == 0 and isinstance(out, (bytes, bytearray)) else None
-    layout, problem, note = rpm_layout_decision(INTEGRATION_REQUEST is not None, version_release, owned)
+    try:
+        layout, problem, note = rpm_layout_decision(INTEGRATION_REQUEST is not None, version_release, owned)
+    except FileNotFoundError as e:
+        _skip_or_fail(str(e))
     print(f"RPM {package} {version_release or '(version not asked or unreadable)'}: {layout} inventory"
           + (f"; {problem}" if problem else ""))
     return layout, problem, note

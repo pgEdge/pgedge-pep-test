@@ -19,11 +19,16 @@ test_pep_radar_wiring.py. Versions are synthetic (9.8.7), never a real docloader
     their inventory only when the package owns all of it, and verifies its signed SBOM there; an in-repo
     build with the same version-release is checked as one; SBOM paths of both layouts fail in every mode;
     integration mode always demands the in-repo layout.
+  * the RPM layout inputs fail closed: a file list rpm cannot give fails both layout checks in every
+    mode; an expected-output reference is read only where it could be selected, and a missing one
+    (really absent on disk) then skips a standalone run and fails an integration run; the mixed-layout
+    check needs no reference.
 The existing test has no strip check and none is added, so there is nothing to cover for it here.
 """
 import importlib.util
 import itertools
 import json
+import shutil
 import sys
 from pathlib import Path
 
@@ -889,3 +894,120 @@ def test_deb_runs_never_ask_the_rpm_version(monkeypatch, env):
     monkeypatch.setattr(m, "client", _Client(c))
     assert outcome(m.test_verify_sbom, "x", "deb") == ("passed", "")
     assert _VR_QUERY not in c.cmds
+
+
+# --------------------------------------------------------------------------- RPM layout inputs fail closed
+_RPM_QL = "rpm -ql pgedge-docloader"
+_IN_REPO_MISSING = "No expected file found for docloader at"
+_LEGACY_MISSING = "No expected file found for docloader-enterprise-legacy at"
+
+
+def test_the_sbom_path_constants_are_exactly_what_the_two_references_do_not_share(monkeypatch):
+    # The mixed-layout check uses these constants instead of reading the references, so they must stay
+    # equal to what the reference files say each layout owns alone.
+    m = load(monkeypatch, _STANDALONE)
+    in_repo, legacy = (set((_REPO / "expected-output" / "rpm" / n).read_text().split())
+                       for n in ("docloader", "docloader-enterprise-legacy"))
+    assert in_repo - legacy == set(m.IN_REPO_RPM_SBOM_PATHS) == set(_IN_REPO_SBOMS)
+    assert legacy - in_repo == set(m.ENTERPRISE_LEGACY_RPM_SBOM_PATHS) == set(_LEGACY_SBOMS)
+
+
+def _tree_with(tmp_path, references):
+    """A tree holding only ``references`` (names under expected-output/rpm, copied from this repository),
+    and the path the component test's __file__ takes in it; any other reference really is absent."""
+    (tmp_path / "component-test").mkdir()
+    for family in ("rpm", "deb"):
+        (tmp_path / "expected-output" / family).mkdir(parents=True)
+    for name in references:
+        shutil.copy(str(_REPO / "expected-output" / "rpm" / name), str(tmp_path / "expected-output" / "rpm" / name))
+    return str(tmp_path / "component-test" / "test_pep_docloader.py")
+
+
+_IN_REPO_ONLY, _LEGACY_ONLY, _NEITHER = ("docloader",), ("docloader-enterprise-legacy",), ()
+
+
+@pytest.mark.parametrize("references,env,vr,files,bundled,sbom", [
+    # The legacy reference is absent: only a standalone run of a legacy version-release could select it.
+    (_IN_REPO_ONLY, _GA_RPM, "9.8.7-1.el9", _RPM_PAYLOAD, ("passed", ""), ("passed", _SBOM_DIR)),
+    (_IN_REPO_ONLY, _V100_RPM, "1.0.0-1.el9", _RPM_PAYLOAD, ("passed", ""), ("passed", _SBOM_DIR)),
+    (_IN_REPO_ONLY, _STANDALONE, "9.8.7-1.el9", _RPM_PAYLOAD, ("passed", ""), ("passed", _SBOM_DIR)),
+    (_IN_REPO_ONLY, _STANDALONE, "1.0.0-1.el9", _LEGACY_RPM_PAYLOAD,
+     ("skipped", _LEGACY_MISSING), ("skipped", _LEGACY_MISSING)),
+    # The in-repo reference is absent: the bundled-file check routes it (standalone skip, integration
+    # fail); the SBOM check never needed it; a legacy build still meets its own, present, reference.
+    (_LEGACY_ONLY, _STANDALONE, "9.8.7-1.el9", _RPM_PAYLOAD, ("skipped", _IN_REPO_MISSING), ("passed", _SBOM_DIR)),
+    (_LEGACY_ONLY, _GA_RPM, "9.8.7-1.el9", _RPM_PAYLOAD, ("failed", _IN_REPO_MISSING), ("passed", _SBOM_DIR)),
+    (_LEGACY_ONLY, _STANDALONE, "1.0.0-1.el9", _LEGACY_RPM_PAYLOAD, ("passed", ""), ("passed", "/usr/share")),
+    # Neither reference.
+    (_NEITHER, _STANDALONE, "9.8.7-1.el9", _RPM_PAYLOAD, ("skipped", _IN_REPO_MISSING), ("passed", _SBOM_DIR)),
+    (_NEITHER, _GA_RPM, "9.8.7-1.el9", _RPM_PAYLOAD, ("failed", _IN_REPO_MISSING), ("passed", _SBOM_DIR)),
+    (_NEITHER, _STANDALONE, "1.0.0-1.el9", _LEGACY_RPM_PAYLOAD,
+     ("skipped", _LEGACY_MISSING), ("skipped", _LEGACY_MISSING)),
+    # A package mixing both SBOM layouts fails whichever reference is absent.
+    (_IN_REPO_ONLY, _STANDALONE, "1.0.0-1.el9", _MIXED_RPM_PAYLOAD,
+     ("failed", "mixes two SBOM layouts"), ("failed", "mixes two SBOM layouts")),
+    (_IN_REPO_ONLY, _GA_RPM, "9.8.7-1.el9", _MIXED_RPM_PAYLOAD,
+     ("failed", "mixes two SBOM layouts"), ("failed", "mixes two SBOM layouts")),
+    (_LEGACY_ONLY, _GA_RPM, "9.8.7-1.el9", _MIXED_RPM_PAYLOAD,
+     ("failed", "mixes two SBOM layouts"), ("failed", "mixes two SBOM layouts")),
+    (_NEITHER, _STANDALONE, "9.8.7-1.el9", _MIXED_RPM_PAYLOAD,
+     ("failed", "mixes two SBOM layouts"), ("failed", "mixes two SBOM layouts")),
+], ids=["no-legacy-integration", "no-legacy-integration-v1.0.0", "no-legacy-standalone",
+        "no-legacy-standalone-legacy-build", "no-in-repo-standalone", "no-in-repo-integration",
+        "no-in-repo-standalone-legacy-build", "neither-standalone", "neither-integration",
+        "neither-standalone-legacy-build", "mixed-no-legacy-standalone", "mixed-no-legacy-integration",
+        "mixed-no-in-repo-integration", "mixed-neither-standalone"])
+def test_an_rpm_reference_is_needed_only_where_it_could_be_selected(
+        monkeypatch, tmp_path, references, env, vr, files, bundled, sbom):
+    m = load(monkeypatch, env)
+    monkeypatch.setattr(m, "__file__", _tree_with(tmp_path, references))
+    monkeypatch.setattr(m, "client", _Client(_Container(_rpm(vr, files))))
+    status, msg = outcome(m.test_verify_bundled_files, "x", "rhel")
+    assert status == bundled[0] and bundled[1] in msg, (status, msg)
+    c = _Container(_rpm(vr, files))
+    monkeypatch.setattr(m, "client", _Client(c))
+    status, msg = outcome(m.test_verify_sbom, "x", "rhel")
+    verify = _sq_verify(c)
+    if sbom[0] == "passed":
+        assert status == "passed" and len(verify) == 1 and ("cd %s && sq verify" % sbom[1]) in verify[0], (status, msg)
+    else:
+        assert status == sbom[0] and sbom[1] in msg and not verify, (status, msg)
+
+
+def _rpm_ql_fails_first(vr, files):
+    """An RPM container whose first `rpm -ql` fails (the layout read) and whose later ones succeed."""
+    base, calls = _rpm(vr, files), []
+
+    def respond(cmd):
+        if cmd == _RPM_QL:
+            calls.append(cmd)
+            if len(calls) == 1:
+                return 1, "error: rpmdb: BDB0113 Thread/process failed"
+        return base(cmd)
+    return respond
+
+
+@pytest.mark.parametrize("env,vr", [(_STANDALONE, "9.8.7-1.el9"), (_STANDALONE, "1.0.0-1.el9"), (_STANDALONE, None),
+                                    (_GA_RPM, "9.8.7-1.el9"), (_V100_RPM, "1.0.0-1.el9")],
+                         ids=["standalone", "standalone-legacy-vr", "standalone-unreadable-vr", "integration",
+                              "integration-v1.0.0"])
+@pytest.mark.parametrize("files", [_MIXED_RPM_PAYLOAD, _RPM_PAYLOAD], ids=["mixed", "in-repo"])
+def test_an_unreadable_rpm_file_list_fails_both_layout_checks(monkeypatch, env, vr, files):
+    # Read as empty, a failed `rpm -ql` would hide the legacy paths of a mixed package: the bundled-file
+    # check tolerates extra files and the SBOM check would verify only the in-repo pair.
+    m = load(monkeypatch, env)
+    c = _Container(_rpm_ql_fails_first(vr, files))
+    monkeypatch.setattr(m, "client", _Client(c))
+    status, msg = outcome(m.test_verify_bundled_files, "x", "rhel")
+    assert status == "failed" and "cannot read the files pgedge-docloader owns (rpm -ql exited 1" in msg, msg
+    assert c.cmds.count(_RPM_QL) == 1                       # the shared file check never ran
+    c = _Container(_rpm_ql_fails_first(vr, files))
+    monkeypatch.setattr(m, "client", _Client(c))
+    status, msg = outcome(m.test_verify_sbom, "x", "rhel")
+    assert status == "failed" and "cannot read the files pgedge-docloader owns" in msg, msg
+    assert not [cmd for cmd in c.cmds if isinstance(cmd, list) and cmd[:2] == ["test", "-f"]] and not _sq_verify(c)
+    # A readable file list keeps its result.
+    monkeypatch.setattr(m, "client", _Client(_Container(_rpm(vr, files))))
+    expected = "passed" if files is _RPM_PAYLOAD else "failed"
+    assert outcome(m.test_verify_bundled_files, "x", "rhel")[0] == expected
+    assert outcome(m.test_verify_sbom, "x", "rhel")[0] == expected

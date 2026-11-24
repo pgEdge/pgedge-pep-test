@@ -233,7 +233,26 @@ def anonymizer_binary_owners(container, container_type):
 # build prints internal/version's defaults: a hand-set version that the owner bumps with each release
 # (so it can equal the tag being certified) and "unknown". Only the build stamp tells them apart.
 _ANONYMIZER_VERSION_LINE = re.compile(r"pgedge-anonymizer (\S+) \(built (\S+)\)")
-_RFC3339 = re.compile(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})")
+_RFC3339 = re.compile(r"(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.\d+)?(?:Z|[+-](\d{2}):(\d{2}))",
+                      re.ASCII)
+
+
+def is_release_build_stamp(built):
+    """True when ``built`` is an RFC 3339 date-time naming a real instant: ASCII digits in the
+    shape above (fractional seconds of any length and a numeric offset allowed), a real calendar
+    date and time, and an offset of at most 23:59. "2026-02-30T10:11:12Z" fails. Go never writes a
+    leap second, so ":60" fails too. The fields are checked one by one because Python 3.9's
+    datetime.fromisoformat reads neither "Z" nor every fraction length."""
+    match = _RFC3339.fullmatch(built)
+    if not match:
+        return False
+    year, month, day, hour, minute, second = (int(g) for g in match.groups()[:6])
+    try:
+        datetime(year, month, day, hour, minute, second)
+    except ValueError:
+        return False
+    offset_hour, offset_minute = match.group(7), match.group(8)
+    return offset_hour is None or (int(offset_hour) <= 23 and int(offset_minute) <= 59)
 
 
 def parse_anonymizer_version(stdout):
@@ -243,8 +262,9 @@ def parse_anonymizer_version(stdout):
     version lines; any other stdout line is ignored.
 
     Raises ValueError when there is no such line, more than one, the line is malformed, or the
-    build time is not a release build's RFC 3339 stamp (an unstamped build prints "unknown", and
-    its hand-set default version, which can equal the release being certified, must never pass)."""
+    build time is not a release build's RFC 3339 stamp (is_release_build_stamp; an unstamped build
+    prints "unknown", and its hand-set default version, which can equal the release being
+    certified, must never pass)."""
     lines = [line.strip() for line in stdout.splitlines()
              if re.match(r"pgedge-anonymizer(\s|$)", line.strip())]
     if len(lines) != 1:
@@ -254,7 +274,7 @@ def parse_anonymizer_version(stdout):
     if not match:
         raise ValueError(f"malformed version line {lines[0]!r}")
     version, built = match.group(1), match.group(2)
-    if not _RFC3339.fullmatch(built):
+    if not is_release_build_stamp(built):
         raise ValueError(f"build time {built!r} is not a release build's RFC 3339 stamp")
     return version, built
 
@@ -628,10 +648,12 @@ def test_binary_version(container_name, container_type):
         print(f"✅ {binary} belongs to {requested}")
 
         print(f"\n--- Checking {binary} version on {container_name} ({container_type}) ---")
-        # demux returns stdout and stderr separately; without it docker merges them.
+        # demux returns stdout and stderr separately; without it docker merges them. stderr is only
+        # printed and quoted, never parsed, so bytes that are not UTF-8 are escaped rather than
+        # failing the check; stdout is still decoded strictly.
         exit_code, (stdout, stderr) = container.exec_run([binary, "version"], user="root", demux=True)
         stdout = (stdout or b"").decode()
-        stderr = (stderr or b"").decode()
+        stderr = (stderr or b"").decode(errors="backslashreplace")
         print(f"   stdout: {stdout.strip()}")
         if stderr.strip():
             print(f"   stderr: {stderr.strip()}")

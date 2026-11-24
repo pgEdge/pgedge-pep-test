@@ -10,7 +10,7 @@ test_pep_radar_wiring.py. Versions are synthetic (9.8.7), never a real anonymize
     is refused before anything is installed; the requested package is the only install (pinned, with
     checksum evidence) and the only anonymizer package present; the shared identity step; ownership
     of /usr/bin/pgedge-anonymizer and an exact `pgedge-anonymizer version` line derived from the
-    request's effective tag;
+    request's effective tag (other stdout lines and stderr are ignored; a second version line fails);
   * required checks fail instead of skipping in integration mode (missing container, expected-output
     reference or SBOM location);
   * the stripped-ELF check (both modes) and the expected-output references derived from the
@@ -468,6 +468,67 @@ def test_a_binary_reporting_any_other_version_line_fails(monkeypatch, env, out):
     m = load(monkeypatch, env)
     monkeypatch.setattr(m, "client", _Client(_Container(_binary(out))))
     assert outcome(m.test_binary_version, "x", "rhel")[0] == "failed"
+
+
+# Only lines whose first word is "pgedge-anonymizer" are version lines; any other stdout line is ignored.
+_LINE = "pgedge-anonymizer 9.8.7 (built %s)\n" % _STAMP
+_FOUND = "expected one 'pgedge-anonymizer <version> (built ...)' line on stdout, found %d"
+
+
+@pytest.mark.parametrize("env,ctype", [(_GA_RPM, "rhel"), (_GA_DEB, "deb")], ids=["rpm", "deb"])
+@pytest.mark.parametrize("out", [
+    "a notice\n" + _LINE,
+    _LINE + "\nA newer release is available.\n",
+    "pgedge-anonymizer: a note\n" + _LINE,
+], ids=["leading-notice", "trailing-blank-and-banner", "colon-prefixed-note"])
+def test_unrelated_stdout_lines_around_the_one_version_line_are_ignored(monkeypatch, env, ctype, out):
+    m = load(monkeypatch, env)
+    monkeypatch.setattr(m, "client", _Client(_Container(_binary(out))))
+    assert outcome(m.test_binary_version, "x", ctype) == ("passed", "")
+
+
+@pytest.mark.parametrize("out,needle", [
+    ("a notice\n\nA newer release is available.\n", _FOUND % 0),
+    ("pgedge-anonymizer: a note\n", _FOUND % 0),
+    ("a notice\n" + _LINE + _LINE, _FOUND % 2),
+    (_LINE + "pgedge-anonymizer 9.8.7 built later\n", _FOUND % 2),
+    ("a notice\npgedge-anonymizer 9.8.7\n", "malformed version line 'pgedge-anonymizer 9.8.7'"),
+    ("a notice\npgedge-anonymizer 9.8.7 (built unknown)\n",
+     "build time 'unknown' is not a release build's RFC 3339 stamp"),
+], ids=["noise-without-version-line", "colon-prefixed-note-only", "duplicate", "malformed-second-version-line",
+        "noise-and-malformed", "noise-and-unstamped"])
+def test_unrelated_stdout_lines_never_make_a_bad_version_line_pass(monkeypatch, out, needle):
+    m = load(monkeypatch, _GA_RPM)
+    monkeypatch.setattr(m, "client", _Client(_Container(_binary(out))))
+    status, msg = outcome(m.test_binary_version, "x", "rhel")
+    assert status == "failed" and needle in msg, msg
+
+
+class _StderrContainer(_Container):
+    """A _Container whose demuxed exec_run also returns ``stderr`` on its own stream."""
+
+    def __init__(self, respond, stderr):
+        super().__init__(respond)
+        self.stderr = stderr
+
+    def exec_run(self, cmd, user=None, demux=False, **kwargs):
+        ec, out = super().exec_run(cmd, user=user, demux=demux, **kwargs)
+        return (ec, (out[0], self.stderr.encode())) if demux else (ec, out)
+
+
+@pytest.mark.parametrize("out,err,needle", [
+    (_LINE, "a warning\npgedge-anonymizer 9.8.6 (built %s)\n" % _STAMP, None),
+    ("", _LINE, _FOUND % 0),
+], ids=["stderr-version-line-ignored", "version-only-on-stderr"])
+def test_stderr_is_never_read_for_the_version(monkeypatch, capsys, out, err, needle):
+    m = load(monkeypatch, _GA_RPM)
+    monkeypatch.setattr(m, "client", _Client(_StderrContainer(_binary(out), err)))
+    status, msg = outcome(m.test_binary_version, "x", "rhel")
+    assert "stderr: " + err.splitlines()[0] in capsys.readouterr().out      # the stderr did reach the check
+    if needle is None:
+        assert (status, msg) == ("passed", "")
+    else:
+        assert status == "failed" and needle in msg, msg
 
 
 def test_a_failing_version_command_fails(monkeypatch):

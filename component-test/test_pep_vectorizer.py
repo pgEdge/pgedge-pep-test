@@ -1,5 +1,4 @@
 import importlib.util as _ilu
-import json
 import os
 import re
 import sys
@@ -173,59 +172,12 @@ def get_running_container(container_name):
 def pgvector_prerequisites(container_type, pg_major):
     """pgvector for the requested PG major: a hard dependency of the vectorizer packages
     (pkg/rpm/pgedge_vectorizer.spec Requires pgedge-pgvector_<pg>; pkg/deb/debian/control.in Depends
-    pgedge-postgresql-<pg>-pgvector), and pgedge_vectorizer.control has requires = 'vector'."""
+    pgedge-postgresql-<pg>-pgvector), and pgedge_vectorizer.control has requires = 'vector'.
+    Integration mode passes it to pep_extension_checks.install_requested_extension as the extra
+    prerequisite installed after the server and before the pinned package."""
     if container_type == "rhel":
         return [f"pgedge-pgvector_{pg_major}"]
     return [f"pgedge-postgresql-{pg_major}-pgvector"]
-
-
-def record_prerequisite_versions(container, container_type, request, pg_major, channel):
-    """Audit only: the installed versions of the server, of pgvector and of the requested package,
-    printed and written to PEP_PREREQ_OUT (the shape pep_extension_checks writes, plus pgvector).
-    Never part of the verdict."""
-    names = (pep_extension_checks.server_companions(container_type, pg_major)
-             + pgvector_prerequisites(container_type, pg_major) + [request["package_name"]])
-    versions = {n: package_management.query_installed_version(container, n) for n in names}
-    out = os.getenv("PEP_PREREQ_OUT", "test-logs/prerequisite-versions.json")
-    Path(out).parent.mkdir(parents=True, exist_ok=True)
-    Path(out).write_text(json.dumps({"channel": channel, "pg_major": str(pg_major),
-                                     "requested_package": request["package_name"],
-                                     "installed_versions": versions}, indent=2, sort_keys=True) + "\n")
-    for n, v in versions.items():
-        print(f"   installed {n} = {v}")
-    return versions
-
-
-def install_requested_vectorizer(container, container_type, request, pg_major, channel):
-    """Integration mode: the PostgreSQL server for the requested major, then pgvector for it (both
-    unpinned, from the request's channel), then exactly the requested package last (pinned, with
-    checksum evidence), so installing a prerequisite can never replace it; then record the installed
-    versions and require that it is the only vectorizer package installed (-llvmjit included).
-    This is pep_extension_checks.install_requested_extension with the pgvector step added between
-    the server and the requested package (the shared step installs only the server). A missing
-    server or pgvector is reported as a prerequisite failure, not as a failed vectorizer install."""
-    requested = request["package_name"]
-    for label, names in ((f"PostgreSQL {pg_major}", pep_extension_checks.server_companions(container_type, pg_major)),
-                         ("pgvector", pgvector_prerequisites(container_type, pg_major))):
-        print(f"\n--- Installing {label} prerequisite: {', '.join(names)} ---")
-        try:
-            success, _platform, message = package_management.install_package(
-                container=container, package_name=names, pg_major_version=pg_major,
-                install_pg_server=False)
-        except Exception as e:  # install_package raises on a failed install
-            success, message = False, str(e)
-        if not success:
-            pytest.fail(f"{label} prerequisite unavailable from the {channel!r} channel "
-                        f"({', '.join(names)}); {requested} was not installed: {message}")
-    print(f"\n--- Installing requested {requested} ---")
-    pep_integration_mode.install_for_request(container, request)
-    versions = record_prerequisite_versions(container, container_type, request, pg_major, channel)
-    present = pep_extension_checks.installed_component_packages(container, container_type, request)
-    assert present == [requested], (
-        f"expected exactly the requested {request['component']} package {requested!r} to be "
-        f"installed, found {present!r}")
-    print(f"✅ Only {requested} is installed among {request['component']} packages")
-    return versions
 
 
 # A release tag as pgedge-parse-release-tag reads it: "v", the version (the text up to the first
@@ -340,10 +292,12 @@ def test_component_install(container_name, container_type):
         # Execution-side backstop: never install for a request this test cannot serve.
         assert INTEGRATION_PROBLEM is None, f"integration request cannot be served: {INTEGRATION_PROBLEM}"
         container = get_running_container(container_name)
-        # The PostgreSQL server, then pgvector, for the requested major (unpinned, same channel),
-        # then exactly the requested package (pinned, with checksum evidence), then the
-        # only-package check.
-        install_requested_vectorizer(container, container_type, INTEGRATION_REQUEST, pg_major_version, repo)
+        # The shared install step with pgvector as its extra prerequisite: the PostgreSQL server,
+        # then pgvector, for the requested major (unpinned, same channel), then exactly the
+        # requested package (pinned, with checksum evidence), then the only-package check.
+        pep_extension_checks.install_requested_extension(
+            container, container_type, INTEGRATION_REQUEST, pg_major_version, repo,
+            extra_prerequisites=[("pgvector", pgvector_prerequisites(container_type, pg_major_version))])
         return
 
     # Get container-specific configuration

@@ -227,7 +227,7 @@ def anonymizer_binary_owners(container, container_type):
     return sorted(owners), raw
 
 
-# `pgedge-anonymizer version` prints exactly "pgedge-anonymizer <version> (built <build time>)" on
+# `pgedge-anonymizer version` prints one "pgedge-anonymizer <version> (built <build time>)" line on
 # stdout (cmd/pgedge-anonymizer/cmd/root.go versionCmd). A release build stamps the build time with
 # GoReleaser's {{.Date}}, the build's UTC time in RFC 3339 (.goreleaser.yaml ldflags); an unstamped
 # build prints internal/version's defaults: a hand-set version that the owner bumps with each release
@@ -237,15 +237,19 @@ _RFC3339 = re.compile(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d
 
 
 def parse_anonymizer_version(stdout):
-    """``(version, built)`` from the one version line of `pgedge-anonymizer version` stdout, as
-    printed (a leading "v" or any suffix is kept, so the caller's exact comparison sees it).
+    """``(version, built)`` from the one "pgedge-anonymizer <version> (built ...)" line of
+    `pgedge-anonymizer version` stdout, as printed (a leading "v" or any suffix is kept, so the
+    caller's exact comparison sees it). Only lines whose first word is "pgedge-anonymizer" are
+    version lines; any other stdout line is ignored.
 
     Raises ValueError when there is no such line, more than one, the line is malformed, or the
     build time is not a release build's RFC 3339 stamp (an unstamped build prints "unknown", and
     its hand-set default version, which can equal the release being certified, must never pass)."""
-    lines = [line.strip() for line in stdout.splitlines() if line.strip()]
+    lines = [line.strip() for line in stdout.splitlines()
+             if re.match(r"pgedge-anonymizer(\s|$)", line.strip())]
     if len(lines) != 1:
-        raise ValueError(f"expected one line on stdout, found {len(lines)}")
+        raise ValueError(f"expected one 'pgedge-anonymizer <version> (built ...)' line on stdout, "
+                         f"found {len(lines)}")
     match = _ANONYMIZER_VERSION_LINE.fullmatch(lines[0])
     if not match:
         raise ValueError(f"malformed version line {lines[0]!r}")
@@ -588,13 +592,15 @@ def test_binary_version(container_name, container_type):
     and the check skips when it is unset. In integration mode the configured
     value is ignored: /usr/bin/pgedge-anonymizer must first belong to the
     requested package, so the probed binary is the one under test. Then stdout
-    must be exactly one version line whose version is the request's effective
-    tag without the "v" (expected_anonymizer_binary_version, which cross-checks
-    the other release facts) and whose build time is a release build's RFC 3339
-    stamp. The match is exact: "1.0.1" fails on any other build ("v1.0.1",
-    "1.0.1-test1", "1.0.2-next"), and an unstamped build, which reports the
-    source defaults (internal/version/version.go, bumped with each release) and
-    "unknown", never passes, even when that default equals the tag.
+    must hold exactly one version line (a line whose first word is
+    "pgedge-anonymizer"; other stdout lines and stderr are ignored) whose
+    version is the request's effective tag without the "v"
+    (expected_anonymizer_binary_version, which cross-checks the other release
+    facts) and whose build time is a release build's RFC 3339 stamp. The match
+    is exact: "1.0.1" fails on any other build ("v1.0.1", "1.0.1-test1",
+    "1.0.2-next"), and an unstamped build, which reports the source defaults
+    (internal/version/version.go, bumped with each release) and "unknown",
+    never passes, even when that default equals the tag.
     """
     if INTEGRATION_REQUEST is not None:
         expected_version, problems = expected_anonymizer_binary_version(INTEGRATION_REQUEST)

@@ -71,7 +71,8 @@ deb_mcp_components = [c.strip() for c in os.getenv("DEB_MCP_COMPONENTS", "").spl
 # neither installed nor tested, and the requested package is installed and tested even when
 # MCP_COMPONENTS does not name it.
 if INTEGRATION_REQUEST is not None:
-    rhel_mcp_components = deb_mcp_components = [INTEGRATION_REQUEST["package_name"]]
+    rhel_mcp_components = [INTEGRATION_REQUEST["package_name"]]
+    deb_mcp_components = [INTEGRATION_REQUEST["package_name"]]
 
 # Only the integration backstop reads the PostgreSQL major: the MCP tests install and use no
 # PostgreSQL, so each PG leg of a certification repeats the same package test.
@@ -453,7 +454,8 @@ def test_verify_bundled_files(container_name, container_type, component):
 
     except Exception as e:
         # A missing expected-output reference skips a standalone run and fails an integration
-        # run, where the requested release package would otherwise never be compared.
+        # run, where the requested release package would otherwise never be compared. The fail
+        # below is unconditional, so the check fails closed even if _skip_or_fail ever returns.
         if "No expected file found" in str(e):
             _skip_or_fail(str(e))
         pytest.fail(f"Failed to verify bundled files: {str(e)}")

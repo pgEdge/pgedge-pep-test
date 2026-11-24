@@ -11,10 +11,11 @@ test_pep_radar_wiring.py. Versions are synthetic (9.8.7), never a real MCP relea
     only the requested package; requests for the built-but-uncertified CLI or web UI are rejected
     at load; a request the test cannot serve is refused before anything is installed; the requested
     package is installed pinned with its checksum, with no prerequisite and nothing else; no other
-    MCP package may be installed; the shared identity step, with no binary probe;
+    MCP package (named by the policy or by the MCP name prefixes) may be installed; the shared
+    identity step, with no binary probe;
   * required checks fail instead of skipping in integration mode (missing container, missing
     expected-output reference, no SBOM directory), and the located SBOM must belong to the requested
-    package;
+    package alone, by the package manager's answer for exactly that path;
   * the expected-output references derived from the MCP packaging (pkg/rpm/pgedge-nla.spec and
     pkg/deb/debian/rules at pgEdge/pgedge-postgres-mcp 6448336, unchanged through v1.2.0-beta1 and
     main a08aa30), checked through the real
@@ -227,6 +228,7 @@ def test_integration_request_selects_the_package_and_platform(monkeypatch, env, 
     assert m.all_container_component_combinations == [c + ("pgedge-postgres-mcp",) for c in containers]
     assert m.get_mcp_components_for_container("rhel") == ["pgedge-postgres-mcp"]
     assert m.get_mcp_components_for_container("deb") == ["pgedge-postgres-mcp"]
+    assert m.rhel_mcp_components is not m.deb_mcp_components   # two lists, not one aliased list
 
 
 @pytest.mark.parametrize("package", ["pgedge-nla-cli", "pgedge-nla-web"])
@@ -320,6 +322,39 @@ def test_any_mcp_package_other_than_the_request_fails_the_install_step(monkeypat
     assert status == "failed" and "expected exactly the requested MCP package" in msg
 
 
+def _with_mcp_policy(monkeypatch, m, certified, uncertified):
+    """Point the shared policy, as the module under test reads it, at other mcp package names."""
+    policy = dict(m._pr.COMPONENT_POLICY)
+    policy["mcp"] = dict(policy["mcp"], allowed_runtime_package_names=list(certified),
+                         uncertified_runtime_package_names=list(uncertified))
+    monkeypatch.setattr(m._pr, "COMPONENT_POLICY", policy)
+    monkeypatch.setattr(m._pr, "COMPONENT_PACKAGES", dict(m._pr.COMPONENT_PACKAGES, mcp=tuple(certified)))
+
+
+@pytest.mark.parametrize("ctype", ["rhel", "deb"])
+def test_an_uncertified_companion_named_outside_the_prefixes_still_fails_the_install_step(monkeypatch, tmp_path,
+                                                                                         ctype):
+    # Every mcp name in the policy starts with pgedge-postgres-mcp or pgedge-nla today, so the prefixes
+    # alone find them. The policy lookup is what still finds a companion the policy names otherwise.
+    m = load(monkeypatch, _GA_RPM if ctype == "rhel" else _GA_DEB)
+    listing = _pkg_list("pgedge-postgres-mcp", "pgedge-mcp-cli", "pgedge-postgresql17-server")
+    assert m.installed_mcp_packages(_Container(listing), ctype) == ["pgedge-postgres-mcp"]   # not named today
+    _with_mcp_policy(monkeypatch, m, ["pgedge-postgres-mcp"], ["pgedge-mcp-cli", "pgedge-nla-web"])
+    assert m.installed_mcp_packages(_Container(listing), ctype) == ["pgedge-mcp-cli", "pgedge-postgres-mcp"]
+    _wire(monkeypatch, tmp_path, m, _Container(listing))
+    monkeypatch.setattr(m.package_management, "install_pinned", _Spy((True, "ok", "a" * 64)))
+    status, msg = outcome(m.test_mcp_component_install, "x", ctype, "pgedge-postgres-mcp")
+    assert status == "failed" and "found ['pgedge-mcp-cli', 'pgedge-postgres-mcp']" in msg
+
+
+@pytest.mark.parametrize("ctype", ["rhel", "deb"])
+def test_a_certified_name_outside_the_prefixes_is_still_counted(monkeypatch, ctype):
+    m = load(monkeypatch, _GA_RPM if ctype == "rhel" else _GA_DEB)
+    _with_mcp_policy(monkeypatch, m, ["pgedge-mcp-server"], ["pgedge-nla-cli", "pgedge-nla-web"])
+    listing = _pkg_list("pgedge-mcp-server", "pgedge-postgresql17-server")
+    assert m.installed_mcp_packages(_Container(listing), ctype) == ["pgedge-mcp-server"]
+
+
 def test_component_tests_share_the_integration_helper_instances(monkeypatch):
     # Patching package_management / pep_evidence must reach the shared install + identity steps.
     m = load(monkeypatch, _GA_RPM)
@@ -387,6 +422,19 @@ def test_integration_mode_fails_a_missing_bundled_file_reference(monkeypatch):
                         _Spy(Exception("No expected file found for postgres-mcp")))
     status, msg = outcome(m.test_verify_bundled_files, "oel9-amd64", "rhel", "pgedge-postgres-mcp")
     assert status == "failed" and "No expected file found" in msg
+
+
+def test_a_missing_reference_still_fails_if_skip_or_fail_returns(monkeypatch):
+    # _skip_or_fail always raises today; if it ever returned, the check must still fail, not pass.
+    m = load(monkeypatch, _GA_RPM)
+    monkeypatch.setattr(m, "client", _Client(_Container(_nothing)))
+    monkeypatch.setattr(m.file_management, "verify_bundled_files",
+                        _Spy(Exception("No expected file found for postgres-mcp")))
+    returning = _Spy(None)
+    monkeypatch.setattr(m, "_skip_or_fail", returning)
+    status, msg = outcome(m.test_verify_bundled_files, "oel9-amd64", "rhel", "pgedge-postgres-mcp")
+    assert returning.calls == [(("No expected file found for postgres-mcp",), {})]
+    assert status == "failed" and "No expected file found for postgres-mcp" in msg
 
 
 def test_integration_mode_fails_without_an_sbom_directory(monkeypatch):
@@ -458,6 +506,78 @@ def test_a_bad_sbom_signature_fails(monkeypatch):
     m = load(monkeypatch, _GA_RPM)
     monkeypatch.setattr(m, "client", _Client(_Container(_sbom(sig="0 authenticated signatures."))))
     assert outcome(m.test_verify_sbom, "x", "rhel")[0] == "failed"
+
+
+# path_owners reads the package manager's raw answer for the located SBOM path. The _sbom fake above
+# always answers for the queried path; these feed it other answers.
+_SAME_BASENAME = "/opt/x/pgedge-postgres-mcp-sbom.json"
+_DIVERTED = ("diversion by pgedge-nla-cli from: %s\ndiversion by pgedge-nla-cli to: %s.distrib\n"
+             "pgedge-postgres-mcp: %s\n" % (_SBOM, _SBOM, _SBOM))
+
+
+@pytest.mark.parametrize("rc,answer,owners", [
+    (0, "pgedge-postgres-mcp: %s\n" % _SBOM, ["pgedge-postgres-mcp"]),
+    (0, "pgedge-postgres-mcp:amd64: %s\n" % _SBOM, ["pgedge-postgres-mcp"]),
+    (0, "pgedge-postgres-mcp: %s\n" % _SAME_BASENAME, []),
+    (0, "pgedge-nla-cli: %s\n" % _SAME_BASENAME, []),
+    (0, "pgedge-postgres-mcp: %s.asc\n" % _SBOM, []),
+    (0, "pgedge-nla-cli: %s\npgedge-postgres-mcp: %s\n" % (_SAME_BASENAME, _SBOM), ["pgedge-postgres-mcp"]),
+    (0, "pgedge-nla-cli: %s\n" % _SBOM, ["pgedge-nla-cli"]),
+    (0, "pgedge-postgres-mcp, pgedge-nla-cli: %s\n" % _SBOM, ["pgedge-nla-cli", "pgedge-postgres-mcp"]),
+    (1, "dpkg-query: no path found matching pattern %s\n" % _SBOM, []),
+    (2, "pgedge-postgres-mcp: %s\ndpkg-query: error: cannot read the package database\n" % _SBOM, []),
+], ids=["exact", "arch-qualified", "same-basename-other-dir", "same-basename-other-owner", "longer-path",
+        "only-the-exact-line-counts", "other-owner", "two-owners", "unowned", "failed-query-with-output"])
+def test_deb_path_owners_accepts_only_owners_of_the_exact_path(monkeypatch, rc, answer, owners):
+    m = load(monkeypatch, _GA_DEB)
+    c = _Container(lambda cmd: (rc, answer))
+    assert m.path_owners(c, "deb", _SBOM) == (owners, answer.strip())
+    assert c.cmds == [["dpkg-query", "-S", _SBOM]]          # the literal path, no pattern or resolution
+
+
+def test_deb_path_owners_does_not_report_a_diverted_path_as_the_requested_package_alone(monkeypatch):
+    m = load(monkeypatch, _GA_DEB)
+    owners, raw = m.path_owners(_Container(lambda cmd: (0, _DIVERTED)), "deb", _SBOM)
+    assert owners != ["pgedge-postgres-mcp"] and raw == _DIVERTED.strip()
+
+
+@pytest.mark.parametrize("rc,answer,owners", [
+    (0, "pgedge-postgres-mcp\n", ["pgedge-postgres-mcp"]),
+    (0, "pgedge-postgres-mcp\npgedge-postgres-mcp\n", ["pgedge-postgres-mcp"]),   # one line per installed copy
+    (0, "pgedge-nla-cli\n", ["pgedge-nla-cli"]),
+    (0, "pgedge-postgres-mcp\npgedge-nla-cli\n", ["pgedge-nla-cli", "pgedge-postgres-mcp"]),
+    (1, "file %s is not owned by any package\n" % _SBOM, []),
+    (1, "error: file %s: No such file or directory\n" % _SBOM, []),
+], ids=["exact", "duplicate-lines", "other-owner", "two-owners", "unowned", "missing"])
+def test_rpm_path_owners_reads_the_owning_package_names(monkeypatch, rc, answer, owners):
+    m = load(monkeypatch, _GA_RPM)
+    c = _Container(lambda cmd: (rc, answer))
+    assert m.path_owners(c, "rhel", _SBOM) == (owners, answer.strip())
+    assert c.cmds == [["rpm", "-qf", "--queryformat", "%{NAME}\\n", _SBOM]]
+
+
+@pytest.mark.parametrize("rc,answer,ok", [
+    (0, "pgedge-postgres-mcp: %s\n" % _SBOM, True),
+    (0, "pgedge-postgres-mcp:amd64: %s\n" % _SBOM, True),
+    (0, "pgedge-postgres-mcp: %s\n" % _SAME_BASENAME, False),
+    (0, "pgedge-postgres-mcp, pgedge-nla-cli: %s\n" % _SBOM, False),
+    (0, _DIVERTED, False),
+    (2, "pgedge-postgres-mcp: %s\ndpkg-query: error: cannot read the package database\n" % _SBOM, False),
+], ids=["exact", "arch-qualified", "same-basename-other-dir", "two-owners", "diverted", "failed-query-with-output"])
+def test_the_sbom_check_goes_on_only_when_the_requested_package_alone_owns_the_located_path(monkeypatch, rc,
+                                                                                           answer, ok):
+    m = load(monkeypatch, _GA_DEB)
+    monkeypatch.setattr(m.machine_prereq_setup, "ensure_sq_installed", lambda c: None)
+    others = _sbom()
+    c = _Container(lambda cmd: (rc, answer) if cmd[:2] == ["dpkg-query", "-S"] else others(cmd))
+    monkeypatch.setattr(m, "client", _Client(c))
+    status, msg = outcome(m.test_verify_sbom, "x", "deb")
+    verified = any("sq verify" in _key(cmd) and "--help" not in _key(cmd) for cmd in c.cmds)
+    if ok:
+        assert (status, msg, verified) == ("passed", "", True)
+    else:
+        assert status == "failed" and "not only the requested 'pgedge-postgres-mcp'" in msg
+        assert repr(answer.strip()) in msg and not verified       # dpkg's raw answer is reported
 
 
 # --------------------------------------------------------------------------- expected-output references

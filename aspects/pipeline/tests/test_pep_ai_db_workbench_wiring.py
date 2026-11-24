@@ -355,6 +355,17 @@ def test_any_other_workbench_package_fails_the_install_step(monkeypatch, tmp_pat
     assert status == "failed" and "expected exactly the requested pgedge-ai-dba-server and its dependency" in msg
 
 
+@pytest.mark.parametrize("ctype", ["rhel", "deb"])
+def test_a_certified_name_outside_the_prefix_is_still_counted(monkeypatch, ctype):
+    # Every workbench name starts with pgedge-ai-dba- today, so the prefix alone finds them. The policy
+    # lookup is what still counts the certified package if the policy ever names it otherwise.
+    m = load(monkeypatch, _GA_RPM if ctype == "rhel" else _GA_DEB)
+    monkeypatch.setattr(m._pr, "COMPONENT_PACKAGES",
+                        dict(m._pr.COMPONENT_PACKAGES, ai_db_workbench=("pgedge-workbench-server",)))
+    listing = _pkg_list("pgedge-workbench-server", CHECK, "pgedge-postgresql-17")
+    assert m.installed_workbench_packages(_Container(listing), ctype) == [CHECK, "pgedge-workbench-server"]
+
+
 def test_component_tests_share_the_integration_helper_instances(monkeypatch):
     # Patching package_management / pep_evidence must reach the shared install + identity steps.
     m = load(monkeypatch, _GA_RPM)
@@ -503,6 +514,19 @@ def test_integration_mode_fails_a_missing_bundled_file_reference(monkeypatch):
                         _Spy(Exception("No expected file found for ai-dba-server")))
     status, msg = outcome(m.test_verify_bundled_files, "oel9-amd64", "rhel", SERVER)
     assert status == "failed" and "No expected file found" in msg
+
+
+def test_a_missing_reference_still_fails_if_skip_or_fail_returns(monkeypatch):
+    # _skip_or_fail always raises today; if it ever returned, the check must still fail, not pass.
+    m = load(monkeypatch, _GA_RPM)
+    monkeypatch.setattr(m, "client", _Client(_Container(_nothing)))
+    monkeypatch.setattr(m.file_management, "verify_bundled_files",
+                        _Spy(Exception("No expected file found for ai-dba-server")))
+    returning = _Spy(None)
+    monkeypatch.setattr(m, "_skip_or_fail", returning)
+    status, msg = outcome(m.test_verify_bundled_files, "oel9-amd64", "rhel", SERVER)
+    assert returning.calls == [(("No expected file found for ai-dba-server",), {})]
+    assert status == "failed" and "No expected file found for ai-dba-server" in msg
 
 
 def test_integration_mode_fails_an_unset_sbom_location(monkeypatch):

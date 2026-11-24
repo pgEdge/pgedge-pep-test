@@ -535,11 +535,11 @@ def test_verify_bundled_files(container_name, container_type, package):
 
     except Exception as e:
         # A missing expected-output reference skips a standalone run and fails an integration
-        # run, where the requested release package would otherwise never be compared.
+        # run, where the requested release package would otherwise never be compared. The fail
+        # below is unconditional, so the check fails closed even if _skip_or_fail ever returns.
         if "No expected file found" in str(e):
             _skip_or_fail(str(e))
-        else:
-            pytest.fail(f"Failed to verify bundled files: {str(e)}")
+        pytest.fail(f"Failed to verify bundled files: {str(e)}")
 
 
 @pytest.mark.parametrize("container_name,container_type,package", all_container_package_combinations)

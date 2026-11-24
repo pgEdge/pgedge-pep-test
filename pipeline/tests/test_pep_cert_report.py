@@ -662,6 +662,45 @@ def test_tested_package_and_gap_only_package_are_never_merged(tmp_path):
     assert_links(run.out, html)
 
 
+def gap_nt(family, os_token, *names):
+    """The cell gap pep_invocation_plan emits for a cell with no runtime target, naming the files
+    it rejected in ``rejected_packages`` (its own physical_package is None)."""
+    return {"scope": "cell", "cell_id": "pepcell.v1.%s.%s.amd64.pkg" % (family, os_token), "target_id": None,
+            "family": family, "os": os_token, "arch": "amd64", "physical_package": None,
+            "reason": "no_runtime_target", "detail": "package_unclassified",
+            "rejected_packages": [{"physical_package": n, "reasons": ["package_unclassified"],
+                                   "path": "%s.%s" % (n, family), "native_arch": "x86_64", "sha256": "f" * 64}
+                                  for n in names]}
+
+
+def test_a_package_named_only_by_a_no_target_gap_is_its_own_untested_package(tmp_path):
+    """As above, but package B is named only in a no-target cell gap's rejected_packages."""
+    leg_artifact(tmp_path / "dl", "pep-summary-a-a1", INV_A)
+    run = pipeline(tmp_path, [planned(INV_A, pkg="pgedge-rag-server2")], ["pep-summary-a-a1"],
+                   gaps=[gap_nt("deb", "trixie", "pgedge-rag-extra")])
+    html, grid = run.html, heat(run.html)
+    assert "packages pgedge-rag-extra <b>(not tested)</b>, pgedge-rag-server2</div>" in html
+    assert ">oel9-amd64<span>pgedge-rag-server2</span></div>" in grid           # tested row: A
+    assert ">trixie · amd64<span>not tested · pgedge-rag-extra</span></div>" in grid    # gap row: B
+    deb = group(html, "fam-deb")
+    assert "sortGroup(this,'package')" in deb
+    assert re.search(r'<tr class="gaprow" id="gaprow-0".*?<td class="mono">pgedge-rag-extra</td>', deb, re.S)
+    assert "packages `pgedge-rag-extra` (not tested), `pgedge-rag-server2`" in run.md
+    assert md_table(run.md, "**RPM** (1 test run)")[0] == ["Platform", "Package", "PG16"]
+    assert_links(run.out, html)
+
+
+def test_a_release_with_no_tested_package_names_the_rejected_ones_in_the_header(tmp_path):
+    run = pipeline(tmp_path, [], [], gaps=[gap_nt("rpm", "el-9", "pgedge-rag-extra"),
+                                           gap_nt("deb", "trixie", "pgedge-rag-extra", "pgedge-rag-other")])
+    assert run.decision["reason_code"] == "zero_eligible"
+    assert ("packages pgedge-rag-extra <b>(not tested)</b>, pgedge-rag-other <b>(not tested)</b></div>"
+            in run.html)
+    assert ">el-9 · amd64<span>not tested · pgedge-rag-extra</span></div>" in heat(run.html)
+    assert ">trixie · amd64<span>not tested · pgedge-rag-extra, pgedge-rag-other</span></div>" in heat(run.html)
+    assert "packages `pgedge-rag-extra` (not tested), `pgedge-rag-other` (not tested)" in run.md
+
+
 _DEC = {"schema": "pep-cert-decision/1", "reason_code": "x"}
 
 

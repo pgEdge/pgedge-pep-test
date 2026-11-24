@@ -10,8 +10,9 @@ Covers:
   * integration mode: the request selects the package and platform, and only the requested server
     package is exercised; a request the test cannot serve is refused before anything is installed;
     the pinned install with checksum evidence; the server's upgrade-check dependency recorded, and no
-    other workbench package installed; the shared identity step; the release facts that tie the
-    package version to the tag;
+    other workbench package installed; that dependency's declared constraint read from the package
+    metadata (RPM Requires(pre) "=", DEB Pre-Depends ">=" the server's own version), not matched by
+    name; the shared identity step; the release facts that tie the package version to the tag;
   * required checks fail instead of skipping in integration mode (missing container, reference, SBOM
     location); the documented integration skips (package version, upgrade, binary version);
   * the stripped-ELF check and the expected-output references derived from the workbench packaging.
@@ -560,17 +561,113 @@ def test_a_missing_or_unverified_sbom_fails_in_both_modes(monkeypatch, env):
         assert outcome(m.test_verify_sbom, "x", ctype, SERVER)[0] == "failed", fail_on
 
 
-@pytest.mark.parametrize("ctype,query", [("rhel", "rpm -qR pgedge-ai-dba-server | grep -q 'pgedge-ai-dba-upgrade-check'"),
-                                         ("deb", "dpkg -s pgedge-ai-dba-server 2>/dev/null | grep -i Depends | "
-                                                 "grep -q 'pgedge-ai-dba-upgrade-check'")], ids=["rpm", "deb"])
-def test_integration_mode_checks_the_servers_declared_upgrade_check_dependency(monkeypatch, ctype, query):
-    # packaging/rpm/ai-dba-workbench.spec: Requires(pre): pgedge-ai-dba-upgrade-check = %{version}-%{release};
-    # packaging/deb/debian/control: Pre-Depends: pgedge-ai-dba-upgrade-check (>= ${binary:Version}).
+# --------------------------------------------------------------------------- declared upgrade-check constraint
+# packaging/rpm/ai-dba-workbench.spec: Requires(pre): pgedge-ai-dba-upgrade-check = %{version}-%{release};
+# packaging/deb/debian/control: Pre-Depends: pgedge-ai-dba-upgrade-check (>= ${binary:Version}).
+# The metadata below has the shape the two queries print (rpm 4.16/4.19 `deptype`/`depflags` lines,
+# dpkg-query's normalized Pre-Depends field); the server is 9.8.7 build 1 (synthetic).
+_RPM_QUERY = ["rpm", "-q", "--queryformat",
+              "%{VERSION}-%{RELEASE}\\n"
+              "[%{REQUIREFLAGS:deptype}\\t%{REQUIRENAME}\\t%{REQUIREFLAGS:depflags}\\t%{REQUIREVERSION}\\n]", SERVER]
+_DEB_QUERY = ["dpkg-query", "-W", "-f=${Version}\\n${Pre-Depends}\\n", SERVER]
+_RPM_OTHER = ["manual\topenssl\t\t", "rpmlib\trpmlib(CompressedFileNames)\t<=\t3.0.4-1"]
+
+
+def _rpm_meta(*check_lines):
+    return "".join(line + "\n" for line in ["9.8.7-1.el9"] + _RPM_OTHER + list(check_lines))
+
+
+def _deb_meta(pre_depends):
+    return "9.8.7-1.trixie\n%s\n" % pre_depends
+
+
+def _answer(query, text, rc=0):
+    return lambda cmd: (rc, text) if cmd == query else (2, "unexpected command %r" % (cmd,))
+
+
+@pytest.mark.parametrize("ctype,metadata", [
+    ("rhel", _rpm_meta("pre\t%s\t=\t9.8.7-1.el9" % CHECK)),
+    ("rhel", _rpm_meta("manual\t%s\t=\t9.8.7-1.el9" % CHECK, "pre\t%s\t=\t9.8.7-1.el9" % CHECK)),
+    ("deb", _deb_meta("%s (>= 9.8.7-1.trixie)" % CHECK)),
+    ("deb", _deb_meta("libc6 (>= 2.36), %s (>= 9.8.7-1.trixie)" % CHECK)),
+], ids=["rpm-requires-pre-exact", "rpm-also-ordinary", "deb-pre-depends-ge", "deb-among-others"])
+def test_integration_mode_accepts_the_declared_upgrade_check_constraint(monkeypatch, ctype, metadata):
     m = load(monkeypatch, _GA_RPM if ctype == "rhel" else _GA_DEB)
-    for rc, status in ((0, "passed"), (1, "failed")):
-        c = _Container(lambda cmd: (rc, "") if cmd == ["bash", "-c", query] else (2, "unexpected"))
-        monkeypatch.setattr(m, "client", _Client(c))
-        assert outcome(m.test_verify_package_dependencies, "x", ctype, SERVER)[0] == status
+    c = _Container(_answer(_RPM_QUERY if ctype == "rhel" else _DEB_QUERY, metadata))
+    monkeypatch.setattr(m, "client", _Client(c))
+    assert outcome(m.test_verify_package_dependencies, "x", ctype, SERVER) == ("passed", "")
+    assert c.cmds == [_RPM_QUERY if ctype == "rhel" else _DEB_QUERY]     # the server's own metadata only
+
+
+@pytest.mark.parametrize("ctype,metadata,shown", [
+    ("rhel", _rpm_meta(), "declares no requirement on it"),
+    ("rhel", _rpm_meta("manual\t%s\t\t" % CHECK), "declares manual %s" % CHECK),
+    ("rhel", _rpm_meta("pre\t%s\t\t" % CHECK), "declares pre %s" % CHECK),
+    ("rhel", _rpm_meta("manual\t%s\t=\t9.8.7-1.el9" % CHECK), "declares manual %s = 9.8.7-1.el9" % CHECK),
+    ("rhel", _rpm_meta("pre\t%s\t>=\t9.8.7-1.el9" % CHECK), "declares pre %s >= 9.8.7-1.el9" % CHECK),
+    ("rhel", _rpm_meta("pre\t%s\t=\t9.8.6-1.el9" % CHECK), "declares pre %s = 9.8.6-1.el9" % CHECK),
+    ("rhel", _rpm_meta("pre\t%s\t=\t0:9.8.7-1.el9" % CHECK), "declares pre %s = 0:9.8.7-1.el9" % CHECK),
+    ("rhel", _rpm_meta("pre\t%s-extra\t=\t9.8.7-1.el9" % CHECK), "declares no requirement on it"),
+    ("deb", _deb_meta(""), "declares no relation on it"),
+    ("deb", _deb_meta(CHECK), "declares " + CHECK),
+    ("deb", _deb_meta("%s (= 9.8.7-1.trixie)" % CHECK), "declares %s (= 9.8.7-1.trixie)" % CHECK),
+    ("deb", _deb_meta("%s (>> 9.8.7-1.trixie)" % CHECK), "declares %s (>> 9.8.7-1.trixie)" % CHECK),
+    ("deb", _deb_meta("%s (>= 9.8.6-1.trixie)" % CHECK), "declares %s (>= 9.8.6-1.trixie)" % CHECK),
+    ("deb", _deb_meta("%s (>= 9.8.7-1.trixie) | other" % CHECK), "declares %s (>= 9.8.7-1.trixie) | other" % CHECK),
+    ("deb", _deb_meta("%s-extra (>= 9.8.7-1.trixie)" % CHECK), "declares %s-extra (>= 9.8.7-1.trixie)" % CHECK),
+], ids=["rpm-not-declared", "rpm-unversioned-ordinary", "rpm-unversioned-pre", "rpm-ordinary-not-pre",
+        "rpm-wrong-operator", "rpm-wrong-version", "rpm-epoch-spelling", "rpm-other-name",
+        "deb-only-in-depends", "deb-unversioned", "deb-wrong-operator", "deb-strictly-newer",
+        "deb-wrong-version", "deb-alternative", "deb-other-name"])
+def test_integration_mode_rejects_a_dependency_that_is_not_the_declared_constraint(monkeypatch, ctype, metadata,
+                                                                                    shown):
+    # The former name-only checks (`rpm -qR | grep`, `dpkg -s | grep -i Depends | grep`) passed every
+    # case here that names the package, an ordinary dependency and a longer name included.
+    m = load(monkeypatch, _GA_RPM if ctype == "rhel" else _GA_DEB)
+    monkeypatch.setattr(m, "client", _Client(_Container(_answer(_RPM_QUERY if ctype == "rhel" else _DEB_QUERY,
+                                                                metadata))))
+    status, msg = outcome(m.test_verify_package_dependencies, "x", ctype, SERVER)
+    assert status == "failed" and "does not declare the upgrade-check prerequisite" in msg, msg
+    assert shown in msg, msg
+
+
+@pytest.mark.parametrize("ctype,query,metadata", [
+    ("rhel", _RPM_QUERY, ""), ("rhel", _RPM_QUERY, "\n"), ("deb", _DEB_QUERY, ""),
+    ("deb", _DEB_QUERY, _deb_meta("%s (>= 9.8.7-1.trixie)" % CHECK) * 2),
+], ids=["rpm-empty", "rpm-no-version", "deb-empty", "deb-two-packages"])
+def test_integration_mode_fails_metadata_it_cannot_read(monkeypatch, ctype, query, metadata):
+    m = load(monkeypatch, _GA_RPM if ctype == "rhel" else _GA_DEB)
+    monkeypatch.setattr(m, "client", _Client(_Container(_answer(query, metadata))))
+    assert outcome(m.test_verify_package_dependencies, "x", ctype, SERVER)[0] == "failed"
+    full = _rpm_meta("pre\t%s\t=\t9.8.7-1.el9" % CHECK) if ctype == "rhel" else _deb_meta(
+        "%s (>= 9.8.7-1.trixie)" % CHECK)
+    monkeypatch.setattr(m, "client", _Client(_Container(_answer(query, full, rc=1))))
+    status, msg = outcome(m.test_verify_package_dependencies, "x", ctype, SERVER)
+    assert status == "failed" and "Could not read pgedge-ai-dba-server's dependency metadata" in msg
+
+
+def test_a_newer_installed_deb_upgrade_check_still_passes_the_constraint_check(monkeypatch, tmp_path):
+    # The channel's newest upgrade-check (9.8.8) satisfies Pre-Depends (>= 9.8.7-1.trixie): the install
+    # records it, and the constraint check reads only what the server declares.
+    m = load(monkeypatch, _GA_DEB)
+    pkgs, meta = _pkg_list(SERVER, CHECK), _answer(_DEB_QUERY, _deb_meta("%s (>= 9.8.7-1.trixie)" % CHECK))
+    _wire(monkeypatch, tmp_path, m, _Container(lambda cmd: meta(cmd) if cmd == _DEB_QUERY else pkgs(cmd)))
+    monkeypatch.setattr(m.package_management, "install_pinned", _Spy((True, "ok", "b" * 64)))
+    versions = {SERVER: "9.8.7-1.trixie", CHECK: "9.8.8-1.trixie"}
+    monkeypatch.setattr(m.package_management, "query_installed_version", lambda c, n: versions.get(n))
+    assert outcome(m.test_ai_db_workbench_install, "x", "deb", SERVER) == ("passed", "")
+    assert outcome(m.test_verify_package_dependencies, "x", "deb", SERVER) == ("passed", "")
+
+
+def test_standalone_dependency_checks_are_unchanged(monkeypatch):
+    # Standalone declares no server dependency (the release channel predates upgrade-check); the other
+    # packages keep their name check on the server.
+    m = load(monkeypatch, _STANDALONE)
+    query = "rpm -qR %s | grep -q '%s'" % (ALERTER, SERVER)
+    c = _Container(lambda cmd: (0, "") if cmd == ["bash", "-c", query] else (2, "unexpected"))
+    monkeypatch.setattr(m, "client", _Client(c))
+    assert outcome(m.test_verify_package_dependencies, "x", "rhel", ALERTER) == ("passed", "")
+    assert c.cmds == [["bash", "-c", query]]
 
 
 def test_integration_mode_uninstalls_only_the_requested_package(monkeypatch):

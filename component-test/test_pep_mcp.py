@@ -103,6 +103,16 @@ mcp_sbom_package = "pgedge-postgres-mcp"
 # pgedge-postgres-mcp-kb, and pgedge-nla-cli / pgedge-nla-web (source package pgedge-nla).
 _MCP_PACKAGE_PREFIXES = ("pgedge-postgres-mcp", "pgedge-nla")
 
+# The server's state directories (pkg/deb/debian/rules `install -d`, pkg/rpm/pgedge-nla.spec %dir).
+# Both are named postgres-mcp, and the shared Debian file comparison accepts a missing entry when
+# one installed entry has the same name, so either directory would stand in for the other there.
+# Integration mode therefore requires each at its exact path in `dpkg -L` (the RPM comparison is
+# already exact). The unit file keeps the shared comparison, which accepts it under /lib or
+# /usr/lib/systemd/system.
+MCP_DEB_EXACT_PATHS = {
+    "pgedge-postgres-mcp": ("/var/lib/pgedge/postgres-mcp", "/var/log/pgedge/postgres-mcp"),
+}
+
 
 def integration_problem(request, pg_major_env):
     """Why this test cannot serve ``request`` (None when it can, or in standalone mode): it must ask
@@ -166,6 +176,16 @@ def path_owners(container, container_type, path):
         if sep and owned.strip() == path:
             owners.update(p.strip().split(":", 1)[0] for p in packages.split(","))
     return sorted(owners), raw
+
+
+def paths_not_listed(container, package, paths):
+    """The entries of ``paths`` that `dpkg -L <package>` does not list at exactly that path, or None
+    when the listing fails."""
+    exit_code, output = container.exec_run(f"dpkg -L {package}", user="root")
+    if exit_code != 0:
+        return None
+    listed = {line.strip() for line in output.decode().splitlines()}
+    return [p for p in paths if p not in listed]
 
 
 def _skip_or_fail(reason):
@@ -459,6 +479,14 @@ def test_verify_bundled_files(container_name, container_type, component):
         if "No expected file found" in str(e):
             _skip_or_fail(str(e))
         pytest.fail(f"Failed to verify bundled files: {str(e)}")
+
+    exact = MCP_DEB_EXACT_PATHS.get(component, ())
+    if INTEGRATION_REQUEST is not None and container_type == "deb" and exact:
+        missing = paths_not_listed(container, component, exact)
+        assert missing is not None, f"dpkg -L {component} failed on {container_name}"
+        assert not missing, (f"{component} does not list {missing} at the exact path on {container_name} "
+                             f"(the shared comparison matches these by name only)")
+        print(f"✅ {component} lists {', '.join(exact)} at their exact paths")
 
 
 @pytest.mark.parametrize("container_name,container_type", all_containers)

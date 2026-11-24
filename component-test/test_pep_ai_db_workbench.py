@@ -76,6 +76,17 @@ ai_db_workbench_server_binary = os.getenv("AI_DBA_SERVER_BINARY", AI_DBA_SERVER_
 # channel's 1.0.0-1 predates it (2026-11-09 metadata), while staging's 2.0.0~beta1 has it (2026-11-20).
 AI_DBA_UPGRADE_CHECK_PACKAGE = "pgedge-ai-dba-upgrade-check"
 
+# The installed server's own version, then one line per declared dependency, read from the
+# structured package metadata so the upgrade-check constraint is checked as declared, not by name:
+# RPM `<deptype>\t<name>\t<operator>\t<version>` (deptype "pre" for Requires(pre)), DEB its
+# Pre-Depends field, which dpkg-query prints as "name (op version), ...".
+_DECLARED_DEPENDENCY_QUERY = {
+    "rhel": ["rpm", "-q", "--queryformat",
+             "%{VERSION}-%{RELEASE}\\n"
+             "[%{REQUIREFLAGS:deptype}\\t%{REQUIRENAME}\\t%{REQUIREFLAGS:depflags}\\t%{REQUIREVERSION}\\n]"],
+    "deb": ["dpkg-query", "-W", "-f=${Version}\\n${Pre-Depends}\\n"],
+}
+
 # In integration mode the package under test is exactly the requested (validated) server package and
 # its binary is the packaged one; the configured names and paths are not used for it.
 if INTEGRATION_REQUEST is not None:
@@ -145,7 +156,8 @@ ai_db_workbench_dependency_map = {
 }
 # Integration mode tests the release just built from the base packaging, whose server declares its
 # upgrade-check dependency (spec Requires(pre), debian/control Pre-Depends), so that is checked
-# instead of skipping the server's dependency check.
+# instead of skipping the server's dependency check: as the declared constraint, not only by name
+# (upgrade_check_constraint_problem).
 if INTEGRATION_REQUEST is not None:
     ai_db_workbench_dependency_map[ai_db_workbench_server_package] = [AI_DBA_UPGRADE_CHECK_PACKAGE]
 
@@ -272,6 +284,35 @@ def release_version_problems(request):
         problems.append(f"expected_deb {deb!r} does not match effective_tag {tag!r} "
                         f"(expected {deb_upstream}-1.<codename>)")
     return problems
+
+
+def upgrade_check_constraint_problem(container_type, metadata, dep=AI_DBA_UPGRADE_CHECK_PACKAGE):
+    """Why the server's metadata (the ``_DECLARED_DEPENDENCY_QUERY`` output) does not declare the
+    upgrade-check constraint its packaging defines (None when it does): RPM `Requires(pre)` on
+    ``dep`` with "=" the server's own VERSION-RELEASE, DEB `Pre-Depends` on ``dep`` with ">=" the
+    server's own Version (a newer installed upgrade-check still satisfies it). A dependency matched
+    by name only, an ordinary Requires/Depends, another operator or another version is reported."""
+    lines = metadata.splitlines()
+    own = lines[0].strip() if lines else ""
+    if not own:
+        return "the package metadata gave no version for the server"
+    if container_type == "rhel":
+        declared = [line.split("\t") for line in lines[1:]]
+        found = [d for d in declared if len(d) == 4 and d[1] == dep]
+        if any("pre" in d[0].split(",") and d[2] == "=" and d[3] == own for d in found):
+            return None
+        shown = [" ".join(d).strip() for d in found]
+        return (f"expected Requires(pre): {dep} = {own}; the metadata declares "
+                f"{'; '.join(shown) or 'no requirement on it'}")
+    if len(lines) != 2:
+        return f"expected the server's Version and Pre-Depends, got {metadata.strip()!r}"
+    relations = [r.strip() for r in lines[1].split(",")]
+    wanted = f"{dep} (>= {own})"
+    if wanted in relations:
+        return None
+    named = [r for r in relations if dep in r]
+    return (f"expected Pre-Depends: {wanted}; Pre-Depends declares "
+            f"{'; '.join(named) or 'no relation on it'}")
 
 
 def elf_strip_problem(file_output):
@@ -702,6 +743,20 @@ def test_verify_package_dependencies(container_name, container_type, package):
     print(f"\n--- Verifying package dependencies for {package} on {container_name} ({container_type}) ---")
 
     for dep in expected_deps:
+        if INTEGRATION_REQUEST is not None and dep == AI_DBA_UPGRADE_CHECK_PACKAGE:
+            # The constraint itself, not only the name: an unversioned or ordinary dependency
+            # would still let the install leave exactly the expected two packages.
+            exit_code, output = container.exec_run(_DECLARED_DEPENDENCY_QUERY[container_type] + [package],
+                                                   user="root")
+            metadata = output.decode()
+            assert exit_code == 0, (f"Could not read {package}'s dependency metadata on {container_name} "
+                                    f"({container_type}): {metadata.strip()}")
+            problem = upgrade_check_constraint_problem(container_type, metadata)
+            assert problem is None, (f"{package} does not declare the upgrade-check prerequisite its "
+                                     f"packaging defines on {container_name} ({container_type}): {problem}")
+            print(f"✅ {package} declares {'Requires(pre) =' if container_type == 'rhel' else 'Pre-Depends >='} "
+                  f"its own version on '{dep}'")
+            continue
         if container_type == "rhel":
             exit_code, output = container.exec_run(
                 ["bash", "-c", f"rpm -qR {package} | grep -q '{dep}'"],

@@ -574,9 +574,10 @@ def _layout(views: list, gaps: list) -> dict:
     columns are the PG majors the legs actually ran. A (row, PG) bucket keeps EVERY
     leg that falls into it; gaps stay separate rows because they carry no PG."""
     # A package that appears only in a coverage gap is still part of the release: count it,
-    # so its gap is never shown as though it belonged to the one package that was tested.
+    # so its gap is never shown as though it belonged to the one package that was tested. That
+    # includes the packages a no-target cell gap names in ``rejected_packages`` (_gap_packages).
     tested = {_package_name(_pi(v)) for v in views}
-    gap_only = {_txt(g.get("physical_package")) for g in gaps} - {""} - tested
+    gap_only = {n for g in gaps for n in _gap_packages(g)} - {""} - tested
     packages = sorted(tested | gap_only)
     multi = len(packages) > 1
     pgs = sorted({_txt(_pi(v).get("pg_major")) for v in views}, key=_pg_key)

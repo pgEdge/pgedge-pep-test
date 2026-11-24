@@ -5,8 +5,9 @@ test_pep_spock_wiring.py. Spock is the only PG-coupled component every checkout 
 entry stands in for "a PG-coupled extension"; nothing here is Spock-specific. Covers: the server
 companion installed before the pinned package; prerequisite and pinned-install failures; exactly the
 requested package installed (an uncertified companion or another PG major or family fails); version
-facts recorded; the library owner, server major and extension version checks; the two extension
-version rules; and the strict stripped check.
+facts recorded; a caller's extra prerequisites installed between the companion and the pinned
+package, recorded in the same file, and failing as prerequisites; the library owner, server major
+and extension version checks; the two extension version rules; and the strict stripped check.
 """
 import importlib.util
 import json
@@ -159,6 +160,92 @@ def test_anything_but_exactly_the_requested_package_fails(monkeypatch, wired, pr
     monkeypatch.setattr(X.package_management, "query_installed_version", lambda c, n: "x")
     with pytest.raises(AssertionError, match="expected exactly the requested spock package"):
         X.install_requested_extension(_Container(_pkg_list(*present)), "rhel", REQ_RPM, "17", "staging")
+
+
+def test_default_call_keeps_the_companion_wording(monkeypatch, wired, capsys):
+    # Existing callers pass no extra prerequisites: the header and the failure text stay as they were.
+    ip, pinned = _Spy((False, "rhel", "No match")), _Spy((True, "ok", "f" * 64))
+    monkeypatch.setattr(X.package_management, "install_package", ip)
+    monkeypatch.setattr(X.package_management, "install_pinned", pinned)
+    with pytest.raises(pytest.fail.Exception) as failed:
+        X.install_requested_extension(_Container(_pkg_list()), "rhel", REQ_RPM, "17", "staging")
+    assert str(failed.value) == ("PostgreSQL 17 prerequisite unavailable from the 'staging' channel "
+                                 "(pgedge-postgresql17-server); pgedge-spock50_17 was not installed: No match")
+    assert "\n--- Installing PostgreSQL 17 companion: pgedge-postgresql17-server ---\n" in capsys.readouterr().out
+    assert len(ip.calls) == 1 and pinned.calls == []
+
+
+# --------------------------------------------------------------------------- extra prerequisites
+# Two caller-named steps after the server companion (the vectorizer test names one, pgvector).
+_EXTRAS = [("pgvector", ["pgedge-pgvector_17"]), ("helper", ["pgedge-helper_17", "pgedge-helper-common"])]
+
+
+def test_extra_prerequisites_install_after_the_companion_and_before_the_pinned_request(monkeypatch, wired):
+    order = []
+    ip = _Spy((True, "rhel", "installed"), order, "unpinned")
+    pinned = _Spy((True, "ok", "f" * 64), order, "pinned")
+    monkeypatch.setattr(X.package_management, "install_package", ip)
+    monkeypatch.setattr(X.package_management, "install_pinned", pinned)
+    monkeypatch.setattr(X.package_management, "query_installed_version", lambda c, n: "x")
+    c = _Container(_pkg_list("pgedge-spock50_17"))
+
+    X.install_requested_extension(c, "rhel", REQ_RPM, "17", "staging", extra_prerequisites=_EXTRAS)
+
+    assert order == ["unpinned", "unpinned", "unpinned", "pinned"]
+    assert [k for _a, k in ip.calls] == [
+        {"container": c, "package_name": names, "pg_major_version": "17", "install_pg_server": False}
+        for names in (["pgedge-postgresql17-server"], ["pgedge-pgvector_17"],
+                      ["pgedge-helper_17", "pgedge-helper-common"])]
+    assert pinned.calls[0][0][1:] == ("pgedge-spock50_17", "5.0.13-1.el9")
+    marker = json.loads((wired / "install-evidence.json").read_text())
+    assert marker["install_kind"] == "pinned" and marker["installed_sha256"] == "f" * 64
+
+
+def test_extra_prerequisite_versions_are_recorded_in_the_same_file(monkeypatch, wired):
+    monkeypatch.setattr(X.package_management, "install_package", _Spy((True, "rhel", "installed")))
+    monkeypatch.setattr(X.package_management, "install_pinned", _Spy((True, "ok", "f" * 64)))
+    monkeypatch.setattr(X.package_management, "query_installed_version",
+                        lambda c, n: {"pgedge-spock50_17": "5.0.13-1.el9", "pgedge-pgvector_17": "0.8.1-1.el9",
+                                      "pgedge-helper_17": "1.0-1.el9"}.get(n, "17.11-1PGEDGE.el9"))
+
+    got = X.install_requested_extension(_Container(_pkg_list("pgedge-spock50_17")), "rhel", REQ_RPM, "17",
+                                        "staging", extra_prerequisites=_EXTRAS)
+
+    recorded = json.loads((wired / "prerequisite-versions.json").read_text())
+    assert recorded == {
+        "channel": "staging", "pg_major": "17", "requested_package": "pgedge-spock50_17",
+        "installed_versions": {"pgedge-postgresql17-server": "17.11-1PGEDGE.el9",
+                               "pgedge-pgvector_17": "0.8.1-1.el9",
+                               "pgedge-helper_17": "1.0-1.el9",
+                               "pgedge-helper-common": "17.11-1PGEDGE.el9",
+                               "pgedge-spock50_17": "5.0.13-1.el9"}}
+    assert got == recorded["installed_versions"]
+
+
+@pytest.mark.parametrize("ret", [Exception("No match"), (False, "rhel", "No match")],
+                         ids=["raises", "returns-false"])
+def test_a_missing_extra_prerequisite_fails_as_a_prerequisite_and_nothing_is_pinned(monkeypatch, wired, ret):
+    attempted = []
+
+    def install(container, package_name, **k):
+        attempted.append(package_name)
+        if package_name == ["pgedge-pgvector_17"]:
+            if isinstance(ret, Exception):
+                raise ret
+            return ret
+        return True, "rhel", "installed"
+    pinned = _Spy((True, "ok", "f" * 64))
+    monkeypatch.setattr(X.package_management, "install_package", install)
+    monkeypatch.setattr(X.package_management, "install_pinned", pinned)
+    monkeypatch.setattr(X.package_management, "query_installed_version", lambda c, n: "x")
+    with pytest.raises(pytest.fail.Exception) as failed:
+        X.install_requested_extension(_Container(_pkg_list("pgedge-spock50_17")), "rhel", REQ_RPM, "17",
+                                      "staging", extra_prerequisites=_EXTRAS)
+    assert str(failed.value) == ("pgvector prerequisite unavailable from the 'staging' channel "
+                                 "(pgedge-pgvector_17); pgedge-spock50_17 was not installed: No match")
+    assert attempted == [["pgedge-postgresql17-server"], ["pgedge-pgvector_17"]]
+    assert pinned.calls == [] and not (wired / "install-evidence.json").exists()
+    assert not (wired / "prerequisite-versions.json").exists()
 
 
 # --------------------------------------------------------------------------- version rules

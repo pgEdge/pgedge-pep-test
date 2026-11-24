@@ -1363,6 +1363,44 @@ def test_the_sql_script_check_fails_on_a_control_file_without_one_default_versio
     assert got[0] == "failed" and "sets no single default_version" in got[1], got[1]
 
 
+@pytest.mark.parametrize("text,want", [
+    ("default_version = '2.0.0'  # pending rename\n", "2.0.0"),
+    ("default_version = '2.0.0'# pending rename\n", "2.0.0"),
+    ("default_version = '2.0.0' # was '1.3.0' on main\n", "2.0.0"),
+    ("default_version = '2.0#1'\n", "2.0#1"),
+    ("comment = 'lolor'\r\ndefault_version = '2.0.0'\r\nrelocatable = false\r\n", "2.0.0"),
+    ("default_version = '2.0.0'  # pending rename\r\n", "2.0.0"),
+    ("# default_version = '1.3.0'\ndefault_version = '2.0.0'\n", "2.0.0"),
+    ("# default_version = '1.3.0'\n", None),
+    ("default_version = '2.0.0' trailing\n", None),
+    ("default_version = '2.0.0\n", None),
+    ("default_version = 2.0.0\n", None),
+    ("default_version = '2.0.0'\ndefault_version = '2.0.0'\n", None),
+    ("default_version = '1.3.0'\ndefault_version = '2.0.0'  # renamed\n", None),
+], ids=["inline-comment", "inline-comment-no-space", "quote-in-comment", "hash-inside-quotes", "crlf",
+        "crlf-inline-comment", "commented-out-then-declared", "commented-out-only", "trailing-text",
+        "unterminated-quote", "unquoted", "duplicate", "duplicate-second-commented"])
+def test_control_default_version_reads_one_quoted_declaration(text, want):
+    """PostgreSQL reads lolor.control with its configuration-file parser: '#' outside the quotes
+    starts a comment, so a trailing comment keeps the declaration, while a '#' inside the quotes is
+    part of the value. A commented-out line is not a declaration; a malformed or repeated one gives
+    None."""
+    assert load_standalone().control_default_version(text) == want
+
+
+def test_the_sql_script_check_accepts_a_control_line_with_a_trailing_comment(monkeypatch):
+    m = load(monkeypatch, _RPM)
+
+    def respond(cmd):
+        if cmd == ["rpm", "-ql", _RPM["PEP_PACKAGE_NAME"]]:
+            return 0, "\n".join(_ext(_V2)) + "\n"
+        if cmd == ["cat", "/usr/pgsql-17/share/extension/lolor.control"]:
+            return 0, "comment = 'lolor'\r\ndefault_version = '2.0.0'  # pending rename\r\n"
+        return 1, "unexpected %r" % (cmd,)
+    monkeypatch.setattr(m, "client", _Client(_Container(respond)))
+    assert _outcome(m.test_verify_sql_scripts, "rocky9-amd64", "rhel") == ("passed", "")
+
+
 def test_the_standalone_fallback_version_has_a_recorded_sql_script_contract(monkeypatch):
     """Without PGEDGE_LOLOR_<pg>_VERSION the module tests lolor 1.2.2; its SQL scripts (lolor
     v1.2.2 Makefile DATA) are recorded, so a 1.2.2 package is checked rather than rejected."""

@@ -291,6 +291,7 @@ SS_HINT = "This session is restricted to read-only access by the pgedge_safesess
 SS_FINAL_ROWS = "1|setup\n2|setup\n20|control\n30|superuser"     # setup + the allowed writes only
 SS_FINAL_TABLES = "by_control,data"                               # no by_restricted / by_member
 SS_RELOAD_ATTEMPTS = 20
+SS_RELOAD_INTERVAL = 0.5                                          # seconds between attempts
 
 
 def rejection_problem(exit_code, output, command):
@@ -349,7 +350,7 @@ def verify_enforcement(container, pgbin, pguser):
         seen = ok(pguser, "SHOW pgedge_safesession.roles;")
         if seen == SS_RESTRICTED:
             break
-        time.sleep(0.5)
+        time.sleep(SS_RELOAD_INTERVAL)
     assert seen == SS_RESTRICTED, (
         f"pgedge_safesession.roles is {seen!r} in a new session, not {SS_RESTRICTED!r}")
     print(f"✅ pgedge_safesession.roles = {SS_RESTRICTED} in a new session")
@@ -391,15 +392,47 @@ def verify_enforcement(container, pgbin, pguser):
 
 
 def enforcement_cleanup(container, pgbin, pguser):
-    """Remove the setting, schema and roles the enforcement check created. Returns the problems
-    (never raises), so a cleanup failure cannot hide the check's own result."""
+    """Remove the setting, schema and roles the enforcement check created, and wait until new
+    sessions no longer see the setting. Each step is attempted even if an earlier one failed or
+    raised. Returns the problems (never raises), so a cleanup failure cannot hide the check's own
+    result.
+
+    The wait is for pgedge_safesession.roles to stop being the test's value, not for a particular
+    value: the value before the check is not recorded, and ALTER SYSTEM RESET falls back to the
+    server's other configuration, which need not be the built-in default."""
     problems = []
-    for sql in ("ALTER SYSTEM RESET pgedge_safesession.roles;",
-                "SELECT pg_reload_conf();",
-                f"DROP SCHEMA IF EXISTS {SS_SCHEMA} CASCADE; DROP ROLE IF EXISTS {', '.join(SS_ROLES)};"):
-        exit_code, out = _psql_as(container, pgbin, pguser, sql)
+
+    def attempt(sql):
+        """psql's output for ``sql``, or None after recording why it failed or raised."""
+        try:
+            exit_code, out = _psql_as(container, pgbin, pguser, sql)
+        except Exception as exc:                  # e.g. a docker API error from exec_run
+            problems.append(f"{sql} raised {type(exc).__name__}: {exc}")
+            return None
         if exit_code != 0:
             problems.append(f"{sql} failed: {out}")
+            return None
+        return out
+
+    reset = attempt("ALTER SYSTEM RESET pgedge_safesession.roles;")
+    reloaded = attempt("SELECT pg_reload_conf();")
+    if reloaded is not None and reloaded != "t":
+        problems.append(f"SELECT pg_reload_conf(); returned {reloaded!r}: no reload was signalled")
+    if reset is None or reloaded != "t":
+        problems.append(f"did not check that new sessions no longer see pgedge_safesession.roles = "
+                        f"{SS_RESTRICTED!r}: the reset or reload failed")
+    else:
+        # The reload is asynchronous: wait, as the check does, until a NEW session no longer sees it.
+        seen = None
+        for _ in range(SS_RELOAD_ATTEMPTS):
+            seen = attempt("SHOW pgedge_safesession.roles;")
+            if seen != SS_RESTRICTED:             # reset, or the SHOW failed (already recorded)
+                break
+            time.sleep(SS_RELOAD_INTERVAL)
+        if seen == SS_RESTRICTED:
+            problems.append(f"pgedge_safesession.roles is still {SS_RESTRICTED!r} in a new session after "
+                            f"{SS_RELOAD_ATTEMPTS} attempts: the reset did not take effect")
+    attempt(f"DROP SCHEMA IF EXISTS {SS_SCHEMA} CASCADE; DROP ROLE IF EXISTS {', '.join(SS_ROLES)};")
     return problems
 
 
@@ -1061,7 +1094,9 @@ def test_safesession_enforcement(container_name, container_type):
     ALTER SYSTEM + reload, sessions authenticated as the restricted role or a member of it read but
     cannot INSERT or CREATE TABLE (rejected with SafeSession's error and hint), while a control role
     with identical privileges and a superuser member can write; the data is then exactly the setup
-    rows plus the allowed writes. The setting, schema and roles are removed afterwards."""
+    rows plus the allowed writes. The setting, schema and roles are removed afterwards and new
+    sessions must stop seeing the setting; a cleanup problem fails the test, but never replaces the
+    check's own failure."""
     if not check_extensions:
         pep_extension_checks.skip_or_fail(
             INTEGRATION_REQUEST, "Extension check disabled via env; enforcement needs the extension")

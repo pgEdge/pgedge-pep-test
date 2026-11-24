@@ -10,7 +10,8 @@ test_pep_radar_wiring.py. Versions are synthetic (9.8.7), never a real anonymize
     is refused before anything is installed; the requested package is the only install (pinned, with
     checksum evidence) and the only anonymizer package present; the shared identity step; ownership
     of /usr/bin/pgedge-anonymizer and an exact `pgedge-anonymizer version` line derived from the
-    request's effective tag (other stdout lines and stderr are ignored; a second version line fails);
+    request's effective tag (other stdout lines and stderr are ignored; a second version line fails;
+    the build stamp must be a real RFC 3339 instant; stderr that is not UTF-8 is escaped, never fatal);
   * required checks fail instead of skipping in integration mode (missing container, expected-output
     reference or SBOM location);
   * the stripped-ELF check (both modes) and the expected-output references derived from the
@@ -89,9 +90,10 @@ class _Container:
     def exec_run(self, cmd, user=None, demux=False, **kwargs):
         self.cmds.append(cmd)
         ec, out = self.respond(cmd)
+        raw = out if isinstance(out, bytes) else (out or "").encode()    # bytes are returned as given
         if demux:
-            return ec, ((out or "").encode() or None, None)
-        return ec, (out or "").encode()
+            return ec, (raw or None, None)
+        return ec, raw
 
     def get_archive(self, *a, **k):
         raise AssertionError("a file was copied out of the container")
@@ -504,8 +506,54 @@ def test_unrelated_stdout_lines_never_make_a_bad_version_line_pass(monkeypatch, 
     assert status == "failed" and needle in msg, msg
 
 
+# The build stamp must be a real RFC 3339 instant, not just its shape.
+@pytest.mark.parametrize("built", [
+    _STAMP,
+    "2024-02-29T10:11:12Z",                   # a leap day
+    "2026-12-31T23:59:59Z",
+    "2026-11-09T00:00:00Z",
+    "2026-11-09T10:11:12.5+05:00",            # one-digit fraction, which Python 3.9's fromisoformat refuses
+    "2026-11-09T10:11:12.123456789Z",         # nanoseconds (Go's RFC3339Nano)
+    "2026-11-09T10:11:12-23:59",
+    "2026-11-09T10:11:12+00:00",
+    "2026-11-09T10:11:12-00:00",
+], ids=["utc", "leap-day", "year-end", "midnight", "short-fraction", "nanoseconds", "max-offset",
+        "zero-offset", "unknown-offset"])
+def test_a_real_rfc3339_build_stamp_passes(monkeypatch, built):
+    m = load(monkeypatch, _GA_RPM)
+    monkeypatch.setattr(m, "client", _Client(_Container(_binary("pgedge-anonymizer 9.8.7 (built %s)\n" % built))))
+    assert outcome(m.test_binary_version, "x", "rhel") == ("passed", "")
+    assert m.is_release_build_stamp(built)
+
+
+@pytest.mark.parametrize("built", [
+    "2026-02-30T10:11:12Z",                   # February 30
+    "2025-02-29T10:11:12Z",                   # 2025 is not a leap year
+    "2026-11-31T10:11:12Z",                   # November has 30 days
+    "2026-13-09T10:11:12Z",
+    "2026-00-09T10:11:12Z",
+    "2026-11-00T10:11:12Z",
+    "2026-11-09T24:00:00Z",
+    "2026-11-09T10:60:12Z",
+    "2026-11-09T10:11:60Z",                   # a leap second, which Go never writes
+    "2026-11-09T10:11:12+24:00",
+    "2026-11-09T10:11:12+05:60",
+    "\uff12\uff10\uff12\uff16-11-09T10:11:12Z",   # 2026 in full-width digits
+], ids=["feb-30", "feb-29-common-year", "nov-31", "month-13", "month-0", "day-0", "hour-24", "minute-60",
+        "second-60", "offset-hour-24", "offset-minute-60", "non-ascii-digits"])
+def test_an_impossible_build_stamp_fails(monkeypatch, built):
+    m = load(monkeypatch, _GA_RPM)
+    monkeypatch.setattr(m, "client", _Client(_Container(_binary("pgedge-anonymizer 9.8.7 (built %s)\n" % built))))
+    status, msg = outcome(m.test_binary_version, "x", "rhel")
+    assert status == "failed" and "build time %r is not a release build's RFC 3339 stamp" % built in msg, msg
+    with pytest.raises(ValueError, match="is not a release build's RFC 3339 stamp"):
+        m.parse_anonymizer_version("pgedge-anonymizer 9.8.7 (built %s)\n" % built)
+    assert not m.is_release_build_stamp(built)
+
+
 class _StderrContainer(_Container):
-    """A _Container whose demuxed exec_run also returns ``stderr`` on its own stream."""
+    """A _Container whose demuxed exec_run also returns ``stderr`` (text, or bytes as given) on its own
+    stream."""
 
     def __init__(self, respond, stderr):
         super().__init__(respond)
@@ -513,7 +561,8 @@ class _StderrContainer(_Container):
 
     def exec_run(self, cmd, user=None, demux=False, **kwargs):
         ec, out = super().exec_run(cmd, user=user, demux=demux, **kwargs)
-        return (ec, (out[0], self.stderr.encode())) if demux else (ec, out)
+        err = self.stderr if isinstance(self.stderr, bytes) else self.stderr.encode()
+        return (ec, (out[0], err)) if demux else (ec, out)
 
 
 @pytest.mark.parametrize("out,err,needle", [
@@ -529,6 +578,37 @@ def test_stderr_is_never_read_for_the_version(monkeypatch, capsys, out, err, nee
         assert (status, msg) == ("passed", "")
     else:
         assert status == "failed" and needle in msg, msg
+
+
+# stderr bytes that are not UTF-8 (a Latin-1 "e acute" and a lone 0xff).
+_NOT_UTF8 = b"warning: caf\xe9 \xff\n"
+
+
+@pytest.mark.parametrize("out,rc,status,needle", [
+    (_LINE, 0, "passed", None),
+    ("pgedge-anonymizer 9.8.6 (built %s)\n" % _STAMP, 0, "failed", "anonymizer version mismatch"),
+    (_LINE, 1, "failed", "exit code 1"),
+], ids=["right-version", "wrong-version", "failing-command"])
+def test_stderr_that_is_not_utf8_is_escaped_and_never_decides_the_verdict(monkeypatch, capsys, out, rc, status,
+                                                                          needle):
+    # stderr is only printed and quoted, so its bytes are escaped instead of raising UnicodeDecodeError;
+    # the exit-code check and the exact stdout version check still decide.
+    m = load(monkeypatch, _GA_RPM)
+    monkeypatch.setattr(m, "client", _Client(_StderrContainer(_binary(out, rc=rc), _NOT_UTF8)))
+    got, msg = outcome(m.test_binary_version, "x", "rhel")
+    assert got == status and (needle is None or needle in msg), msg
+    assert "stderr: warning: caf\\xe9 \\xff" in capsys.readouterr().out
+    if rc:
+        assert "stderr: 'warning: caf\\\\xe9 \\\\xff\\n'" in msg                 # quoted, escaped
+
+
+def test_stdout_that_is_not_utf8_is_still_decoded_strictly(monkeypatch):
+    # Only stderr is escaped: stdout is what the version is read from, and bytes that are not UTF-8 there
+    # still stop the check instead of being read around.
+    m = load(monkeypatch, _GA_RPM)
+    monkeypatch.setattr(m, "client", _Client(_Container(_binary(_LINE.encode() + b"caf\xe9\n"))))
+    with pytest.raises(UnicodeDecodeError):
+        m.test_binary_version("x", "rhel")
 
 
 def test_a_failing_version_command_fails(monkeypatch):

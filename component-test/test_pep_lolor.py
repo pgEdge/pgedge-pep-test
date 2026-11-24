@@ -213,7 +213,10 @@ LOLOR_SQL_SCRIPTS = {
     "2.0.0": ("lolor--2.0.0.sql",) + _LOLOR_1_2_3_SQL + ("lolor--1.2.3--2.0.0.sql",),
 }
 _LOLOR_SQL_RE = re.compile(r"lolor--[0-9][^/]*\.sql")
-_DEFAULT_VERSION_RE = re.compile(r"""\s*default_version\s*=\s*'([^']*)'\s*""")
+# One default_version line of a control file. PostgreSQL reads control files with its
+# configuration-file parser, where '#' outside a quoted value starts a comment that runs to the end
+# of the line; a '#' inside the quotes is part of the value.
+_DEFAULT_VERSION_RE = re.compile(r"""\s*default_version\s*=\s*'([^']*)'\s*(?:#.*)?""")
 STORAGE_DROP_REFUSAL = "cannot drop lolor storage while it holds"
 # The object the drop check stores before removing the extension, so the drop always meets a
 # non-empty lolor storage whatever the earlier checks left behind.
@@ -447,7 +450,8 @@ def lolor_sql_script_problems(paths, default_version):
 
 
 def control_default_version(text):
-    """The default_version a lolor.control file sets, or None."""
+    """The default_version a lolor.control file sets, or None. The line may end in a '#' comment;
+    a commented-out line is not a declaration, and more than one declaration gives None."""
     found = [m.group(1) for line in (text or "").splitlines() if (m := _DEFAULT_VERSION_RE.fullmatch(line))]
     return found[0] if len(found) == 1 else None
 

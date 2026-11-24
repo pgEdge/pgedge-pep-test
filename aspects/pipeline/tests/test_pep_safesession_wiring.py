@@ -14,8 +14,9 @@ evidence; any other safesession package (-llvmjit, another PG major) failing the
 the binding (library owner, server major, preload, the release workflow's series rule for the
 extension version); enforcement (restricted role and its member rejected with SafeSession's own
 error, an identically privileged control role and a superuser member allowed, exact final data,
-cleanup); missing references failing in integration mode and skipping standalone; the strict
-stripped check; and the bundled-file references against the files the packaging installs.
+a cleanup that attempts every step, waits for the reset to reach new sessions and never raises);
+missing references failing in integration mode and skipping standalone; the strict stripped
+check; and the bundled-file references against the files the packaging installs.
 """
 import importlib.util
 import itertools
@@ -429,18 +430,21 @@ class _Cluster(_Container):
     a member of a listed role, unless it is a superuser; a restricted INSERT / CREATE TABLE fails
     with SafeSession's error and hint; ALTER SYSTEM takes effect after pg_reload_conf(), in sessions
     started ``reload_delay`` sessions later (never if ``reload_applies`` is False). ``faults`` maps
-    (role, statement kind) to the (exit_code, output) to return instead, without changing state."""
+    (role, statement kind) to the (exit_code, output) to return instead, without changing state, or
+    to an exception that exec_run raises; ``cleanup_faults`` does the same from the cleanup's
+    ALTER SYSTEM RESET on."""
 
     SUPERUSERS = {"postgres", _S}
     MEMBERSHIP = {_M: _R, _S: _R}
     GRANTEES = {_R, _M, _C}
 
     def __init__(self, preload="pgedge_safesession", reload_applies=True, reload_delay=0, faults=None,
-                 owner="pgedge-safesession_17", num="170011", ext="1.1", libdir="/usr/pgsql-17/lib",
+                 cleanup_faults=None, owner="pgedge-safesession_17", num="170011", ext="1.1",
+                 libdir="/usr/pgsql-17/lib",
                  file_out="ELF 64-bit LSB shared object, x86-64, dynamically linked, stripped"):
         super().__init__(self._respond)
         self.preload, self.reload_applies, self.reload_delay = preload, reload_applies, reload_delay
-        self.faults = faults or {}
+        self.faults, self.cleanup_faults, self.cleaning = faults or {}, cleanup_faults or {}, False
         self.owner, self.num, self.ext, self.libdir, self.file_out = owner, num, ext, libdir, file_out
         self.guc, self.pending, self.since_reload = "", None, None
         self.rows, self.tables, self.sessions = [], set(), []
@@ -468,8 +472,14 @@ class _Cluster(_Container):
                 self.guc, self.since_reload = self.pending, None
             else:
                 self.since_reload += 1
-        if (role, kind) in self.faults:
-            return self.faults[(role, kind)]
+        self.cleaning = self.cleaning or kind == "reset"
+        fault = self.faults.get((role, kind))
+        if self.cleaning:
+            fault = self.cleanup_faults.get((role, kind), fault)
+        if isinstance(fault, Exception):
+            raise fault
+        if fault is not None:
+            return fault
         if kind == "preload":
             return 0, self.preload
         if kind == "setup":
@@ -581,7 +591,15 @@ _EXPECTED_SESSIONS = [
     (_C, "identity"), (_C, "INSERT"), (_C, "CREATE TABLE"),
     (_S, "identity"), (_S, "INSERT"),
     ("postgres", "rows"), ("postgres", "tables"),
-    ("postgres", "reset"), ("postgres", "reload"), ("postgres", "drop")]
+    ("postgres", "reset"), ("postgres", "reload"), ("postgres", "show"), ("postgres", "drop")]
+_CLEANUP = ["reset", "reload", "show", "drop"]
+_CLEANUP_UNCHECKED = ["reset", "reload", "drop"]          # reset or reload failed: nothing to wait for
+
+
+def _cleanup_kinds(c):
+    """The statement kinds of the cleanup's sessions (from its ALTER SYSTEM RESET on)."""
+    kinds = [k for _r, k, _ in c.sessions]
+    return kinds[kinds.index("reset"):]
 
 
 def _enforce(monkeypatch, env=_STANDALONE, ctype="rhel", alias="rocky9-amd64", **server):
@@ -616,20 +634,24 @@ def test_enforcement_passes_and_every_check_runs_as_the_acting_role(monkeypatch,
 def test_enforcement_waits_for_the_reload_to_reach_new_sessions(monkeypatch):
     (outcome, msg), c = _enforce(monkeypatch, reload_delay=3)
     assert outcome == "passed", msg
-    assert [k for _r, k, _ in c.sessions].count("show") == 4
+    kinds = [k for _r, k, _ in c.sessions]
+    assert kinds[:kinds.index("reset")].count("show") == 4                 # the check's wait
+    assert _cleanup_kinds(c) == ["reset", "reload"] + ["show"] * 4 + ["drop"]   # and the cleanup's
+    assert c.guc == ""
 
 
 def test_enforcement_fails_when_the_setting_never_takes_effect(monkeypatch):
     (outcome, msg), c = _enforce(monkeypatch, reload_applies=False)
     assert outcome == "assert" and "pgedge_safesession.roles is '' in a new session" in msg
     kinds = [k for _r, k, _ in c.sessions]
-    assert kinds.count("show") == 20 and "INSERT" not in kinds and kinds[-1] == "drop"     # cleanup still ran
+    assert kinds[:kinds.index("reset")].count("show") == 20 and "INSERT" not in kinds
+    assert _cleanup_kinds(c) == _CLEANUP                                    # cleanup still ran
 
 
 def test_enforcement_fails_without_the_preload_and_runs_nothing_else(monkeypatch):
     (outcome, msg), c = _enforce(monkeypatch, preload="pg_stat_statements")
     assert outcome == "assert" and "does not include 'pgedge_safesession'" in msg
-    assert [k for _r, k, _ in c.sessions] == ["preload", "reset", "reload", "drop"]
+    assert [k for _r, k, _ in c.sessions] == ["preload"] + _CLEANUP
 
 
 _SAFESESSION_INSERT = (1, "ERROR:  cannot execute INSERT in a read-only session\nHINT:  " + _HINT)
@@ -673,7 +695,8 @@ _SAFESESSION_INSERT = (1, "ERROR:  cannot execute INSERT in a read-only session\
 def test_enforcement_rejects_every_wrong_outcome(monkeypatch, faults, msg):
     (outcome, text), c = _enforce(monkeypatch, faults=faults)
     assert outcome == "assert" and msg in text, text
-    assert [k for _r, k, _ in c.sessions][-3:] == ["reset", "reload", "drop"]        # cleanup still ran
+    # Cleanup still ran (the reload fault also hits the cleanup's reload, so it cannot wait).
+    assert _cleanup_kinds(c) == (_CLEANUP_UNCHECKED if ("postgres", "reload") in faults else _CLEANUP)
 
 
 def test_enforcement_fails_when_cleanup_fails_after_a_pass(monkeypatch):
@@ -684,6 +707,91 @@ def test_enforcement_fails_when_cleanup_fails_after_a_pass(monkeypatch):
 def test_a_cleanup_failure_does_not_hide_the_check_failure(monkeypatch):
     (outcome, msg), _ = _enforce(monkeypatch, faults={(_R, "INSERT"): (0, ""), ("postgres", "drop"): (1, "boom")})
     assert outcome == "assert" and "INSERT succeeded" in msg
+
+
+# The cleanup: every step attempted, a reload that is not signalled or never applied reported, and
+# nothing raised, so a cleanup problem fails the test without replacing the check's own failure.
+def _exec_error():
+    """What exec_run raises when the docker API call itself fails."""
+    return docker.errors.APIError("exec create failed: container is not running")
+
+
+def _cleanup(monkeypatch, **server):
+    """Run the real enforcement_cleanup against a cluster left as the check leaves it (the test's
+    pgedge_safesession.roles in effect). Returns (problems, cluster, sleeps)."""
+    m = load(monkeypatch, _STANDALONE)
+    sleeps = []
+    monkeypatch.setattr(m, "time", types.SimpleNamespace(sleep=sleeps.append))
+    c = _Cluster(**server)
+    c.guc = _R
+    return m.enforcement_cleanup(c, "/usr/pgsql-17/bin", "postgres"), c, sleeps
+
+
+def test_cleanup_resets_reloads_waits_for_new_sessions_and_drops(monkeypatch):
+    problems, c, sleeps = _cleanup(monkeypatch)
+    assert problems == [] and _cleanup_kinds(c) == _CLEANUP and sleeps == []
+    assert c.guc == "" and c.sessions[2][2] == "SHOW pgedge_safesession.roles;"
+
+
+def test_cleanup_waits_while_new_sessions_still_see_the_setting(monkeypatch):
+    problems, c, sleeps = _cleanup(monkeypatch, reload_delay=3)
+    assert problems == [] and c.guc == ""
+    assert _cleanup_kinds(c) == ["reset", "reload"] + ["show"] * 4 + ["drop"]
+    assert sleeps == [0.5] * 3                                                    # the check's interval
+
+
+def test_cleanup_reports_a_reset_that_never_reaches_new_sessions(monkeypatch):
+    problems, c, sleeps = _cleanup(monkeypatch, reload_applies=False)
+    assert problems == ["pgedge_safesession.roles is still 'pep_ss_restricted' in a new session after "
+                        "20 attempts: the reset did not take effect"]
+    assert _cleanup_kinds(c) == ["reset", "reload"] + ["show"] * 20 + ["drop"]       # bounded, then drop
+    assert sleeps == [0.5] * 20
+
+
+def test_cleanup_reports_a_reload_that_was_not_signalled(monkeypatch):
+    problems, c, _ = _cleanup(monkeypatch, faults={("postgres", "reload"): (0, "f")})
+    assert problems == ["SELECT pg_reload_conf(); returned 'f': no reload was signalled",
+                        "did not check that new sessions no longer see pgedge_safesession.roles = "
+                        "'pep_ss_restricted': the reset or reload failed"]
+    assert _cleanup_kinds(c) == _CLEANUP_UNCHECKED
+
+
+@pytest.mark.parametrize("kind,kinds,unchecked", [
+    ("reset", _CLEANUP_UNCHECKED, True), ("reload", _CLEANUP_UNCHECKED, True),
+    ("show", _CLEANUP, False), ("drop", _CLEANUP, False)], ids=["reset", "reload", "show", "drop"])
+def test_cleanup_records_a_raising_step_and_still_attempts_the_rest(monkeypatch, kind, kinds, unchecked):
+    problems, c, _ = _cleanup(monkeypatch, faults={("postgres", kind): _exec_error()})
+    sql = [s for _r, k, s in c.sessions if k == kind][0]
+    want = ["%s raised APIError: exec create failed: container is not running" % sql]
+    if unchecked:
+        want.append("did not check that new sessions no longer see pgedge_safesession.roles = "
+                    "'pep_ss_restricted': the reset or reload failed")
+    assert problems == want
+    assert _cleanup_kinds(c) == kinds and {r for r, _k, _s in c.sessions} == {"postgres"}
+
+
+@pytest.mark.parametrize("kind,answer,text,kinds", [
+    ("reload", (0, "f"), "SELECT pg_reload_conf(); returned 'f'", _CLEANUP_UNCHECKED),
+    ("show", (0, _R), "still 'pep_ss_restricted' in a new session", ["reset", "reload"] + ["show"] * 20 + ["drop"]),
+], ids=["reload-not-signalled", "reset-never-applied"])
+def test_enforcement_fails_when_the_cleanup_reset_is_not_proven(monkeypatch, kind, answer, text, kinds):
+    (outcome, msg), c = _enforce(monkeypatch, cleanup_faults={("postgres", kind): answer})
+    assert outcome == "assert" and "enforcement cleanup failed" in msg and text in msg, msg
+    assert _cleanup_kinds(c) == kinds
+
+
+def test_enforcement_fails_when_a_cleanup_step_raises_after_a_pass(monkeypatch):
+    (outcome, msg), c = _enforce(monkeypatch, cleanup_faults={("postgres", "drop"): _exec_error()})
+    assert outcome == "assert" and "enforcement cleanup failed" in msg and "container is not running" in msg
+    assert _cleanup_kinds(c) == _CLEANUP
+
+
+def test_a_raising_cleanup_does_not_replace_the_check_failure(monkeypatch):
+    faults = {("postgres", k): _exec_error() for k in ("reset", "reload", "drop")}
+    (outcome, msg), c = _enforce(monkeypatch, faults={(_R, "INSERT"): (0, "")}, cleanup_faults=faults)
+    assert outcome == "assert" and "as pep_ss_restricted: INSERT succeeded" in msg, msg
+    assert "cleanup" not in msg
+    assert _cleanup_kinds(c) == _CLEANUP_UNCHECKED                               # every step attempted
 
 
 @pytest.mark.parametrize("env,want", [(_STANDALONE, "skipped"), (_RPM, "failed")], ids=["standalone", "integration"])

@@ -49,8 +49,8 @@ ai_kb_packages = [c.strip() for c in os.getenv("AI_KB_COMPONENTS", _default_comp
 ai_kb_version = os.getenv("PGEDGE_AI_KB_VERSION", "1.0.2")
 ai_kb_version_map = {pkg: ai_kb_version for pkg in ai_kb_packages}
 
-# Decoupled components SBOM location — SBOM files live flat under this directory
-# as <package>-sbom.json / <package>-sbom.json.asc
+# Decoupled components SBOM base location — each package installs its SBOM under
+# <base>/<package>/sboms/<package>-sbom.json / <package>-sbom.json.asc
 decoupled_sbom_path = os.getenv("DECOUPLED_COMPONENTS_SBOM", "/usr/share")
 
 
@@ -273,8 +273,8 @@ def test_verify_bundled_files(container_name, container_type, package):
 def test_verify_sbom(container_name, container_type, package):
     """Verify SBOM signature files for each AI KB package
 
-    SBOM files live flat under DECOUPLED_COMPONENTS_SBOM (e.g. /usr/share) as
-    <package>-sbom.json and <package>-sbom.json.asc.
+    SBOM files live under DECOUPLED_COMPONENTS_SBOM/<package>/sboms/ (e.g.
+    /usr/share/<package>/sboms/) as <package>-sbom.json and <package>-sbom.json.asc.
     """
     container_name = container_name.strip()
     package = package.strip()
@@ -292,7 +292,9 @@ def test_verify_sbom(container_name, container_type, package):
 
     assert container.status == "running"
 
-    sbom_dir = decoupled_sbom_path
+    # SBOM files are installed per-package under
+    # {DECOUPLED_COMPONENTS_SBOM}/<package>/sboms/, not flat in the base dir.
+    sbom_dir = f"{decoupled_sbom_path}/{package}/sboms"
     json_file = f"{package}-sbom.json"
     asc_file = f"{package}-sbom.json.asc"
 

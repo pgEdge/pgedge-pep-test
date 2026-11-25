@@ -1070,7 +1070,24 @@ def test_preview_matrix_is_deterministic():
 # --------------------------------------------------------------------------- #
 import container_resolver as CR
 
-COUNTERPARTS = ["alma10-amd64", "debian12-amd64", "ubuntu2204-amd64", "ubuntu2404-amd64"]
+COUNTERPARTS = ["alma10-amd64", "debian12-amd64"]
+# Ubuntu 22.04/24.04 amd64 were counterparts until containers_list.json gained physical, enabled
+# entries for them (6d41938); a counterpart may never be physical, so they are ordinary platforms now.
+PHYSICAL_UBUNTU_AMD64 = {("deb", "amd64", "ubuntu2204"): "ubuntu2204-amd64",
+                         ("deb", "amd64", "ubuntu2404"): "ubuntu2404-amd64"}
+# The certification platform set v1_STABLE (f16d9f5) planned with: 10 enabled physical containers
+# plus its 4 counterparts, 14 family/arch/OS identities in all. The only intended difference today
+# is el-9 arm64, now served by alma9-arm64 because rocky9-arm64 was disabled (6cc31d1).
+STABLE_CERT_PLATFORMS = {
+    ("rpm", "amd64", "oel9"): "oel9-amd64", ("rpm", "amd64", "alma10"): "alma10-amd64",
+    ("rpm", "arm64", "rocky9"): "rocky9-arm64", ("rpm", "arm64", "alma10"): "alma10-arm64",
+    ("deb", "amd64", "ubuntu2204"): "ubuntu2204-amd64", ("deb", "amd64", "ubuntu2404"): "ubuntu2404-amd64",
+    ("deb", "amd64", "debian12"): "debian12-amd64", ("deb", "amd64", "debian13"): "debian13-amd64",
+    ("deb", "amd64", "ubuntu2604"): "ubuntu2604-amd64",
+    ("deb", "arm64", "ubuntu2204"): "ubuntu2204-arm64", ("deb", "arm64", "ubuntu2404"): "ubuntu2404-arm64",
+    ("deb", "arm64", "debian12"): "debian12-arm64", ("deb", "arm64", "debian13"): "debian13-arm64",
+    ("deb", "arm64", "ubuntu2604"): "ubuntu2604-arm64",
+}
 
 
 def _shipped_exec_catalog():
@@ -1096,7 +1113,7 @@ def _without_counterparts():
     return ec
 
 
-def test_shipped_counterparts_are_the_four_proven_implicit_amd64_containers():
+def test_shipped_counterparts_are_the_two_remaining_implicit_amd64_containers():
     ec = _shipped_exec_catalog()
     assert ec["certification_counterparts"] == COUNTERPARTS
     catalog = CR.load_catalog(CONTAINERS_FILE)
@@ -1104,33 +1121,55 @@ def test_shipped_counterparts_are_the_four_proven_implicit_amd64_containers():
     admitted, errors = P.load_certification_platforms(str(CONTAINERS_FILE), ec)
     assert errors == []
     added = {k: v for k, v in admitted.items() if k not in base}
-    assert added == {("rpm", "amd64", "alma10"): "alma10-amd64", ("deb", "amd64", "debian12"): "debian12-amd64",
-                     ("deb", "amd64", "ubuntu2204"): "ubuntu2204-amd64", ("deb", "amd64", "ubuntu2404"): "ubuntu2404-amd64"}
+    assert added == {("rpm", "amd64", "alma10"): "alma10-amd64", ("deb", "amd64", "debian12"): "debian12-amd64"}
     assert {k: admitted[k] for k in base} == base                  # nothing already enabled changes
+    assert {k: base[k] for k in PHYSICAL_UBUNTU_AMD64} == PHYSICAL_UBUNTU_AMD64   # physical, enabled
     physical = {e.name for e in catalog.entries}
     for alias in COUNTERPARTS:                                     # each one is a synthesized counterpart
         entry = CR.resolve_token(catalog, alias)
         assert entry is not None and entry.name not in physical and entry.alias == alias
 
 
-def test_counterparts_turn_the_four_amd64_gaps_into_legs_and_keep_every_other_invocation(tmp_path):
+def test_certification_platforms_are_v1_stable_s_fourteen_with_el9_arm64_on_alma9():
+    admitted, errors = P.load_certification_platforms(str(CONTAINERS_FILE), _shipped_exec_catalog())
+    assert errors == []
+    want = dict(STABLE_CERT_PLATFORMS)
+    del want[("rpm", "arm64", "rocky9")]
+    want[("rpm", "arm64", "alma9")] = "alma9-arm64"                 # intentional swap, needs live validation
+    assert admitted == want and len(admitted) == 14
+    ec = _shipped_exec_catalog()                                    # the same 14 OS/arch per os_token
+    os_token = {c: p["os_token"] for p in ec["platforms"] for c in p["catalog_os"]}
+    assert sorted((f, a, os_token[o]) for f, a, o in admitted) == sorted(
+        (f, a, os_token[o]) for f, a, o in STABLE_CERT_PLATFORMS)
+
+
+def test_listing_a_physical_ubuntu_amd64_entry_as_a_counterpart_still_fails_closed():
+    for alias in PHYSICAL_UBUNTU_AMD64.values():
+        ec = _shipped_exec_catalog()
+        ec["certification_counterparts"] = COUNTERPARTS + [alias]
+        _, errors = P.load_certification_platforms(str(CONTAINERS_FILE), ec)
+        assert len(errors) == 1 and "is a physical containers_list.json entry" in errors[0] and alias in errors[0]
+
+
+def test_counterparts_turn_the_two_amd64_gaps_into_legs_and_keep_every_other_invocation(tmp_path):
     cells = _rag_cells_from_fixture()                              # 16 RAG cells, incl. 2 EOL bullseye
     before = _plan(tmp_path, cells, ec=_without_counterparts())
     after = _plan(tmp_path, cells)
     assert before["plan_resolved"] is True and after["plan_resolved"] is True
-    four = {("deb", "bookworm"), ("deb", "jammy"), ("deb", "noble"), ("rpm", "el-10")}
+    two = {("deb", "bookworm"), ("rpm", "el-10")}                  # jammy/noble amd64 are physical now
     was = [(g["family"], g["os"], g["arch"], g["reason"]) for g in before["coverage_gaps"]]
     assert sorted(x for x in was if x[3] == P.GAP_NO_ENABLED_PLATFORM) == sorted(
-        (f, o, "amd64", P.GAP_NO_ENABLED_PLATFORM) for f, o in four)
+        (f, o, "amd64", P.GAP_NO_ENABLED_PLATFORM) for f, o in two)
     assert all(g["reason"] == P.GAP_UNSUPPORTED_OS and g["os"] == "bullseye" for g in after["coverage_gaps"])
-    assert len(after["coverage_gaps"]) == len(before["coverage_gaps"]) - 4
+    assert len(after["coverage_gaps"]) == len(before["coverage_gaps"]) - 2
     old = {i["invocation_id"]: i for i in before["matrix"]["include"]}
     new = {i["invocation_id"]: i for i in after["matrix"]["include"]}
     assert all(new[k] == v for k, v in old.items())               # identical, not merely present
     extra = [new[k] for k in sorted(set(new) - set(old))]
-    assert len(extra) == 12 and sorted({i["container_alias"] for i in extra}) == COUNTERPARTS
-    assert sorted(i["pg_major"] for i in extra) == ["16"] * 4 + ["17"] * 4 + ["18"] * 4
-    assert after["counts"]["covered_targets"] == before["counts"]["covered_targets"] + 4
+    assert len(extra) == 6 and sorted({i["container_alias"] for i in extra}) == COUNTERPARTS
+    assert sorted(i["pg_major"] for i in extra) == ["16"] * 2 + ["17"] * 2 + ["18"] * 2
+    assert after["counts"]["covered_targets"] == before["counts"]["covered_targets"] + 2
+    assert {i["container_alias"] for i in before["matrix"]["include"]} >= set(PHYSICAL_UBUNTU_AMD64.values())
     _assert_ids_workflow_valid(after)
 
 

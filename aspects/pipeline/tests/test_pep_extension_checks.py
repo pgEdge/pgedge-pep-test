@@ -177,6 +177,17 @@ def test_series_version_mirrors_the_release_workflows_series_rule(observed, ok):
     assert (X.series_version("1.1")(observed) is None) is ok
 
 
+@pytest.mark.parametrize("observed,ok", [
+    ("1.1", True), ("1.1-beta2", True), ("1.1-alpha1", True),
+    ("1.1-beta2-x", True), ("1.10-beta2", False), ("1.2-beta2", False), ("1.1-", False), ("1.1.0", False),
+    ("1.1~beta2", False), ("", False), (None, False)])
+def test_series_version_applies_the_series_rule_to_a_tag_style_expected_version(observed, ok):
+    """A direct caller may request a pre-release as 1.1-beta2 (L1 accepts that form strictly); the
+    running extension is then held to the same series rule as for 1.1, its series being 1.1. The
+    exact pre-release build is proven by the package identity, not by the extension version."""
+    assert (X.series_version("1.1-beta2")(observed) is None) is ok
+
+
 # --------------------------------------------------------------------------- server binding
 def _server(owner="pgedge-spock50_17", versions=("170011", "170011"), ext=("5.0.13", "5.0.13"),
             libdir="/usr/pgsql-17/lib"):

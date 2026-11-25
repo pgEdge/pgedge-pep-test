@@ -145,13 +145,19 @@ def series_version(expected):
     series of default_version to equal the release version: the part before the first '-' must be
     ``expected`` (the workflow's ``${default_version%%-*}``), and a '-' must be followed by
     something (the product's own pre-release marker, e.g. 1.1-alpha1). Nothing else is required of
-    the marker, exactly as in the release workflow; PostgreSQL validates extension version names."""
+    the marker, exactly as in the release workflow; PostgreSQL validates extension version names.
+    A tag-style ``expected`` (a direct caller's 1.1-beta2, which L1 accepts strictly) is held to
+    the same rule for its own series, 1.1; the exact pre-release build is proven by the package
+    identity, not by the extension version."""
+    want = (expected or "").partition("-")[0]
+
     def problem(observed):
         series, sep, marker = (observed or "").partition("-")
-        if series == expected and (not sep or marker):
+        if series == want and (not sep or marker):
             return None
-        return (f"extension version is {observed!r}, expected {expected!r} "
-                f"or {expected!r} with a pre-release marker")
+        return (f"extension version is {observed!r}, expected {want!r} "
+                f"or {want!r} with a pre-release marker"
+                + ("" if want == expected else f" (the series of {expected!r})"))
     return problem
 
 

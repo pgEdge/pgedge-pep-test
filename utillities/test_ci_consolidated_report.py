@@ -400,9 +400,12 @@ def test_render_header_omits_os_line_when_empty():
 
 def test_container_display_synthesized_counterpart_shows_alias():
     """A synthesized opposite-arch counterpart (absent from containers_list.json)
-    still renders its alias via the resolver fallback. auto-ubuntu2404-arm is a
-    real catalog entry, so auto-ubuntu2404-amd is a valid implicit counterpart."""
-    assert ccr.container_display("auto-ubuntu2404-amd", {}) == "ubuntu2404-amd64"
+    still renders its alias via the resolver fallback. auto-debian12-arm is a
+    real catalog entry, so auto-debian12-amd is a valid implicit counterpart.
+    auto-ubuntu2404-amd used to be the example, but it is now a physical entry,
+    so (like any real name omitted from ``aliases``) it shows its raw name."""
+    assert ccr.container_display("auto-debian12-amd", {}) == "debian12-amd64"
+    assert ccr.container_display("auto-ubuntu2404-amd", {}) == "auto-ubuntu2404-amd"
 
 
 def test_container_display_defensive_when_resolver_unavailable(monkeypatch):

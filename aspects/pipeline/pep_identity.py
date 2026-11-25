@@ -3,29 +3,34 @@
 Compare an OBSERVED installed identity against an EXPECTED identity supplied by
 the caller. These perform strict (L2) comparison: L2a = package-manager version
 (RPM version-release / DEB version), L2b = binary self-reported version. The
-coarser L1 component-version match (`component_version_matches`) reuses the
-shared `pep_version_normalize.normalize_version` (itself extracted from
-aspects.package_management.normalize_version, which now delegates to it).
+coarser L1 component-version match (`component_version_matches`) reads the
+component version out of the package-manager identity by the packaging format
+release pins are built with. (The standalone package check keeps its own
+normalizer, aspects.package_management.normalize_version.)
 
 Stdlib only -> unit-testable in isolation via `pytest aspects/pipeline/tests/test_pep_identity.py`.
 """
 from __future__ import annotations
 
-import importlib.util
 import re
-import sys
-from pathlib import Path
 
 # Architecture tokens that may trail an RPM NVRA (e.g. ...-1.el9.x86_64).
 _RPM_ARCH_RE = re.compile(r"\.(x86_64|aarch64|arm64|noarch|i686|ppc64le|s390x)$")
 _BINARY_VERSION_RE = re.compile(r"^\s*version\s*:\s*(\S+)", re.IGNORECASE | re.MULTILINE)
 
-_nz_spec = importlib.util.spec_from_file_location(
-    "pep_version_normalize", str(Path(__file__).parent / "pep_version_normalize.py")
-)
-_nz = importlib.util.module_from_spec(_nz_spec)
-sys.modules.setdefault("pep_version_normalize", _nz)
-_nz_spec.loader.exec_module(_nz)
+# What may follow the component version in a package-manager identity (L1). Release pins are built
+# as (pipeline/pep_cert_plan.py::_expected_native, after the builders' pkg/common.sh):
+#   RPM VERSION-RELEASE  <version>-<buildnum>.<dist>          1.1-1.el9, 1.1-test1_1.el9
+#   DEB Version          <version>-<n>.<codename>             1.1-1.jammy
+#                        <version>~<pretag>-<n>.<codename>     1.1~test1-1.jammy
+# where a pre-release build number is <pretag>_<n> and both use the build-number characters
+# (pep_request._BUILDNUM_RE). Neither an RPM release nor a DEB revision contains '-'.
+_PRE_RELEASE = r"~[A-Za-z0-9.]+"
+_RELEASE = r"-[A-Za-z0-9._]+"
+# An expected version may also be written the way a tag reads, <version>-<pretag> (1.0.0-beta2):
+# pep-integration.yml's expected_version is a free string, so a direct caller can pass one. The
+# release planner never does (it pins pkg/common.sh's split: version 1.0.0, buildnum beta2_1).
+_HYPHENATED_EXPECTED = re.compile(r"([0-9][A-Za-z0-9.]*)-([A-Za-z][A-Za-z0-9.]*)")
 
 
 def canonical_rpm(identity: str, package_name: str | None = None) -> str:
@@ -75,24 +80,37 @@ def binary_version_matches(expected: str, output: str) -> bool:
 
 
 def component_version_matches(expected: str, observed: str) -> bool:
-    """True iff the normalized expected version is a substring of the normalized
-    observed version (coarse, L1).
+    """True iff the component version in the observed package-manager identity
+    (RPM VERSION-RELEASE or DEB Version) is exactly `expected` (coarse, L1).
 
     Argument order matches the sibling comparators in this module
     (`rpm_identity_matches(expected, observed, ...)`,
     `binary_version_matches(expected, output)`).
 
-    The substring/containment check is DELIBERATE, not an approximation: it
-    mirrors the framework's existing standalone check in
-    aspects.package_management.verify_package_version, which does
-    `normalized_expected not in normalized_installed`. This is intentionally
-    coarse (L1/degraded) — e.g. a shorter expected can substring-match a
-    longer observed (`"1.0"` matching within `"1.0.12"`) — and that coarseness
-    is inherited from the shipping behavior this comparator preserves, not
-    introduced here. Uses the shared `normalize_version` so this stays
-    consistent with aspects.package_management's own normalization.
+    `expected` is the component's whole version in its own format (`1.1` for a
+    major.minor product, `1.2.4` for major.minor.patch); no part is added or
+    dropped, so `1.1` never matches `1.1.0`, `11.1` or `1.10`. After it the
+    observed identity may carry only a `~<pretag>` pre-release marker and one
+    `-<release>` (`_PRE_RELEASE`, `_RELEASE`). The release itself (build number,
+    pre-release in an RPM release, dist or codename) is L2a's to prove exactly,
+    so this confirms the component version, not the build.
+
+    An expected `<version>-<pretag>` (`1.0.0-beta2`, `1.1-rc1`) names that
+    pre-release build and is accepted deliberately and strictly: it matches only
+    the two forms the builders produce for it, RPM `<version>-<pretag>_<n>.<dist>`
+    (`1.0.0-beta2_1.el9`) and DEB `<version>~<pretag>-<n>.<codename>`
+    (`1.0.0~beta2-1.noble`), never the GA build or another pre-release.
     """
-    return _nz.normalize_version(expected) in _nz.normalize_version(observed)
+    expected, observed = expected.strip(), observed.strip()
+    if not expected:
+        return False
+    hyphenated = _HYPHENATED_EXPECTED.fullmatch(expected)
+    if hyphenated:
+        version, pretag = (re.escape(g) for g in hyphenated.groups())
+        pattern = "%s(?:-%s_[A-Za-z0-9._]+|~%s%s)" % (version, pretag, pretag, _RELEASE)
+    else:
+        pattern = "%s(?:%s)?(?:%s)?" % (re.escape(expected), _PRE_RELEASE, _RELEASE)
+    return re.fullmatch(pattern, observed) is not None
 
 
 # Per-rung merge precedence: a failure anywhere dominates a success, which

@@ -14,8 +14,9 @@ evidence; any other safesession package (-llvmjit, another PG major) failing the
 the binding (library owner, server major, preload, the release workflow's series rule for the
 extension version); enforcement (restricted role and its member rejected with SafeSession's own
 error, an identically privileged control role and a superuser member allowed, exact final data,
-cleanup); missing references failing in integration mode and skipping standalone; the strict
-stripped check; and the bundled-file references against the files the packaging installs.
+a cleanup that attempts every step, waits for the reset to reach new sessions and never raises);
+missing references failing in integration mode and skipping standalone; the strict stripped
+check; and the bundled-file references against the files the packaging installs.
 """
 import importlib.util
 import itertools
@@ -337,6 +338,47 @@ def test_identity_proves_the_exact_requested_package_version(monkeypatch, tmp_pa
     assert json.loads((tmp_path / "identity-evidence.json").read_text())["l2a"] == ("proven" if ok else "not_proven")
 
 
+def _identity_with_pin(monkeypatch, tmp_path, env, buildnum, pin, observed):
+    """Run the real test_safesession_identity for release 1.1 pinned to ``pin`` with ``observed``
+    installed. Returns (outcome, message, evidence)."""
+    key = "PEP_EXPECTED_RPM" if env["PEP_FAMILY"] == "rpm" else "PEP_EXPECTED_DEB"
+    m = load(monkeypatch, dict(env, **{key: pin, "PEP_EXPECTED_BUILDNUM": buildnum}))
+    _wire(monkeypatch, tmp_path, m, _Container(_pkg_list()))
+    m.pep_integration_mode.pep_evidence.write_install_evidence(
+        m.INTEGRATION_REQUEST, "run-A", "pinned", pin, str(tmp_path / "install-evidence.json"),
+        installed_sha256="f" * 64)
+    monkeypatch.setattr(m.package_management, "query_installed_version", lambda c, n: observed)
+    ctype = "rhel" if env["PEP_FAMILY"] == "rpm" else "deb"
+    outcome, msg = _outcome(m.test_safesession_identity, env["PEP_CONTAINER_ALIAS"], ctype)
+    return outcome, msg, json.loads((tmp_path / "identity-evidence.json").read_text())
+
+
+# SafeSession's version is major.minor: 1.1 is the whole version. These are the pins the release
+# plan builds for 1.1 (RPM <version>-<buildnum>.<dist>, DEB <version>[~<pretag>]-<n>.<codename>).
+@pytest.mark.parametrize("env,buildnum,pin", [
+    (_RPM, "1", "1.1-1.el9"), (_RPM, "test1_1", "1.1-test1_1.el9"),
+    (_RPM, "rc1_1", "1.1-rc1_1.el9"), (_RPM, "beta1_1", "1.1-beta1_1.el9"),
+    (_DEB, "1", "1.1-1.trixie"), (_DEB, "test1_1", "1.1~test1-1.trixie"),
+    (_DEB, "rc1_1", "1.1~rc1-1.trixie"), (_DEB, "beta1_1", "1.1~beta1-1.trixie"),
+], ids=["rpm-ga", "rpm-test", "rpm-rc", "rpm-beta", "deb-ga", "deb-test", "deb-rc", "deb-beta"])
+def test_identity_proves_a_two_part_release_in_every_build_form(monkeypatch, tmp_path, env, buildnum, pin):
+    outcome, msg, ev = _identity_with_pin(monkeypatch, tmp_path, env, buildnum, pin, pin)
+    assert (outcome, msg) == ("passed", "")
+    assert ev == {"l2a": "proven", "l2b": "not_attempted", "l1": "proven"}
+
+
+# The installed package is exactly the pin, but its component version is not 1.1: L1 alone must
+# fail the identity step (the pin here is deliberately wrong, so L2a cannot be what rejects it).
+@pytest.mark.parametrize("env,pin", [
+    (_DEB, "11.1-1.trixie"), (_DEB, "1.10~test1-1.trixie"), (_RPM, "1.1.1-1.el9"),
+    (_RPM, "1.1.0-1.el9"), (_RPM, "21.1-test1_1.el9"),
+], ids=["11.1", "1.10-test", "1.1.1", "1.1.0", "21.1-test"])
+def test_identity_fails_when_the_component_version_is_not_the_release(monkeypatch, tmp_path, env, pin):
+    outcome, msg, ev = _identity_with_pin(monkeypatch, tmp_path, env, "1", pin, pin)
+    assert outcome == "assert" and "component-version match failed" in msg
+    assert ev == {"l2a": "proven", "l2b": "not_attempted", "l1": "not_proven"}
+
+
 def test_identity_without_install_evidence_fails_with_persisted_evidence(monkeypatch, tmp_path):
     m = load(monkeypatch, _RPM)
     _wire(monkeypatch, tmp_path, m, _Container(_pkg_list()))
@@ -388,18 +430,21 @@ class _Cluster(_Container):
     a member of a listed role, unless it is a superuser; a restricted INSERT / CREATE TABLE fails
     with SafeSession's error and hint; ALTER SYSTEM takes effect after pg_reload_conf(), in sessions
     started ``reload_delay`` sessions later (never if ``reload_applies`` is False). ``faults`` maps
-    (role, statement kind) to the (exit_code, output) to return instead, without changing state."""
+    (role, statement kind) to the (exit_code, output) to return instead, without changing state, or
+    to an exception that exec_run raises; ``cleanup_faults`` does the same from the cleanup's
+    ALTER SYSTEM RESET on."""
 
     SUPERUSERS = {"postgres", _S}
     MEMBERSHIP = {_M: _R, _S: _R}
     GRANTEES = {_R, _M, _C}
 
     def __init__(self, preload="pgedge_safesession", reload_applies=True, reload_delay=0, faults=None,
-                 owner="pgedge-safesession_17", num="170011", ext="1.1", libdir="/usr/pgsql-17/lib",
+                 cleanup_faults=None, owner="pgedge-safesession_17", num="170011", ext="1.1",
+                 libdir="/usr/pgsql-17/lib",
                  file_out="ELF 64-bit LSB shared object, x86-64, dynamically linked, stripped"):
         super().__init__(self._respond)
         self.preload, self.reload_applies, self.reload_delay = preload, reload_applies, reload_delay
-        self.faults = faults or {}
+        self.faults, self.cleanup_faults, self.cleaning = faults or {}, cleanup_faults or {}, False
         self.owner, self.num, self.ext, self.libdir, self.file_out = owner, num, ext, libdir, file_out
         self.guc, self.pending, self.since_reload = "", None, None
         self.rows, self.tables, self.sessions = [], set(), []
@@ -427,8 +472,14 @@ class _Cluster(_Container):
                 self.guc, self.since_reload = self.pending, None
             else:
                 self.since_reload += 1
-        if (role, kind) in self.faults:
-            return self.faults[(role, kind)]
+        self.cleaning = self.cleaning or kind == "reset"
+        fault = self.faults.get((role, kind))
+        if self.cleaning:
+            fault = self.cleanup_faults.get((role, kind), fault)
+        if isinstance(fault, Exception):
+            raise fault
+        if fault is not None:
+            return fault
         if kind == "preload":
             return 0, self.preload
         if kind == "setup":
@@ -488,6 +539,16 @@ def test_binding_accepts_the_release_series_with_at_most_a_pre_release_marker(mo
     assert ("postgres", "preload") in [(r, k) for r, k, _ in c.sessions]
 
 
+@pytest.mark.parametrize("ext,ok", [("1.1-beta2", True), ("1.1", True), ("1.2-beta2", False)])
+def test_binding_holds_a_tag_style_request_to_its_series(monkeypatch, ext, ok):
+    env = dict(_RPM, PEP_EXPECTED_VERSION="1.1-beta2", PEP_EXPECTED_BUILDNUM="beta2_1",
+               PEP_EXPECTED_RPM="1.1-beta2_1.el9")
+    (outcome, msg), _ = _binding(monkeypatch, env, ext=ext)
+    assert (outcome == "passed") is ok, (outcome, msg)
+    if not ok:
+        assert "pgedge_safesession extension version is '1.2-beta2'" in msg, msg
+
+
 def test_binding_passes_on_deb(monkeypatch):
     (outcome, msg), _ = _binding(monkeypatch, _DEB, "deb", owner="pgedge-postgresql-17-safesession",
                                  libdir="/usr/lib/postgresql/17/lib")
@@ -530,7 +591,15 @@ _EXPECTED_SESSIONS = [
     (_C, "identity"), (_C, "INSERT"), (_C, "CREATE TABLE"),
     (_S, "identity"), (_S, "INSERT"),
     ("postgres", "rows"), ("postgres", "tables"),
-    ("postgres", "reset"), ("postgres", "reload"), ("postgres", "drop")]
+    ("postgres", "reset"), ("postgres", "reload"), ("postgres", "show"), ("postgres", "drop")]
+_CLEANUP = ["reset", "reload", "show", "drop"]
+_CLEANUP_UNCHECKED = ["reset", "reload", "drop"]          # reset or reload failed: nothing to wait for
+
+
+def _cleanup_kinds(c):
+    """The statement kinds of the cleanup's sessions (from its ALTER SYSTEM RESET on)."""
+    kinds = [k for _r, k, _ in c.sessions]
+    return kinds[kinds.index("reset"):]
 
 
 def _enforce(monkeypatch, env=_STANDALONE, ctype="rhel", alias="rocky9-amd64", **server):
@@ -565,20 +634,24 @@ def test_enforcement_passes_and_every_check_runs_as_the_acting_role(monkeypatch,
 def test_enforcement_waits_for_the_reload_to_reach_new_sessions(monkeypatch):
     (outcome, msg), c = _enforce(monkeypatch, reload_delay=3)
     assert outcome == "passed", msg
-    assert [k for _r, k, _ in c.sessions].count("show") == 4
+    kinds = [k for _r, k, _ in c.sessions]
+    assert kinds[:kinds.index("reset")].count("show") == 4                 # the check's wait
+    assert _cleanup_kinds(c) == ["reset", "reload"] + ["show"] * 4 + ["drop"]   # and the cleanup's
+    assert c.guc == ""
 
 
 def test_enforcement_fails_when_the_setting_never_takes_effect(monkeypatch):
     (outcome, msg), c = _enforce(monkeypatch, reload_applies=False)
     assert outcome == "assert" and "pgedge_safesession.roles is '' in a new session" in msg
     kinds = [k for _r, k, _ in c.sessions]
-    assert kinds.count("show") == 20 and "INSERT" not in kinds and kinds[-1] == "drop"     # cleanup still ran
+    assert kinds[:kinds.index("reset")].count("show") == 20 and "INSERT" not in kinds
+    assert _cleanup_kinds(c) == _CLEANUP                                    # cleanup still ran
 
 
 def test_enforcement_fails_without_the_preload_and_runs_nothing_else(monkeypatch):
     (outcome, msg), c = _enforce(monkeypatch, preload="pg_stat_statements")
     assert outcome == "assert" and "does not include 'pgedge_safesession'" in msg
-    assert [k for _r, k, _ in c.sessions] == ["preload", "reset", "reload", "drop"]
+    assert [k for _r, k, _ in c.sessions] == ["preload"] + _CLEANUP
 
 
 _SAFESESSION_INSERT = (1, "ERROR:  cannot execute INSERT in a read-only session\nHINT:  " + _HINT)
@@ -622,7 +695,8 @@ _SAFESESSION_INSERT = (1, "ERROR:  cannot execute INSERT in a read-only session\
 def test_enforcement_rejects_every_wrong_outcome(monkeypatch, faults, msg):
     (outcome, text), c = _enforce(monkeypatch, faults=faults)
     assert outcome == "assert" and msg in text, text
-    assert [k for _r, k, _ in c.sessions][-3:] == ["reset", "reload", "drop"]        # cleanup still ran
+    # Cleanup still ran (the reload fault also hits the cleanup's reload, so it cannot wait).
+    assert _cleanup_kinds(c) == (_CLEANUP_UNCHECKED if ("postgres", "reload") in faults else _CLEANUP)
 
 
 def test_enforcement_fails_when_cleanup_fails_after_a_pass(monkeypatch):
@@ -635,6 +709,91 @@ def test_a_cleanup_failure_does_not_hide_the_check_failure(monkeypatch):
     assert outcome == "assert" and "INSERT succeeded" in msg
 
 
+# The cleanup: every step attempted, a reload that is not signalled or never applied reported, and
+# nothing raised, so a cleanup problem fails the test without replacing the check's own failure.
+def _exec_error():
+    """What exec_run raises when the docker API call itself fails."""
+    return docker.errors.APIError("exec create failed: container is not running")
+
+
+def _cleanup(monkeypatch, **server):
+    """Run the real enforcement_cleanup against a cluster left as the check leaves it (the test's
+    pgedge_safesession.roles in effect). Returns (problems, cluster, sleeps)."""
+    m = load(monkeypatch, _STANDALONE)
+    sleeps = []
+    monkeypatch.setattr(m, "time", types.SimpleNamespace(sleep=sleeps.append))
+    c = _Cluster(**server)
+    c.guc = _R
+    return m.enforcement_cleanup(c, "/usr/pgsql-17/bin", "postgres"), c, sleeps
+
+
+def test_cleanup_resets_reloads_waits_for_new_sessions_and_drops(monkeypatch):
+    problems, c, sleeps = _cleanup(monkeypatch)
+    assert problems == [] and _cleanup_kinds(c) == _CLEANUP and sleeps == []
+    assert c.guc == "" and c.sessions[2][2] == "SHOW pgedge_safesession.roles;"
+
+
+def test_cleanup_waits_while_new_sessions_still_see_the_setting(monkeypatch):
+    problems, c, sleeps = _cleanup(monkeypatch, reload_delay=3)
+    assert problems == [] and c.guc == ""
+    assert _cleanup_kinds(c) == ["reset", "reload"] + ["show"] * 4 + ["drop"]
+    assert sleeps == [0.5] * 3                                                    # the check's interval
+
+
+def test_cleanup_reports_a_reset_that_never_reaches_new_sessions(monkeypatch):
+    problems, c, sleeps = _cleanup(monkeypatch, reload_applies=False)
+    assert problems == ["pgedge_safesession.roles is still 'pep_ss_restricted' in a new session after "
+                        "20 attempts: the reset did not take effect"]
+    assert _cleanup_kinds(c) == ["reset", "reload"] + ["show"] * 20 + ["drop"]       # bounded, then drop
+    assert sleeps == [0.5] * 20
+
+
+def test_cleanup_reports_a_reload_that_was_not_signalled(monkeypatch):
+    problems, c, _ = _cleanup(monkeypatch, faults={("postgres", "reload"): (0, "f")})
+    assert problems == ["SELECT pg_reload_conf(); returned 'f': no reload was signalled",
+                        "did not check that new sessions no longer see pgedge_safesession.roles = "
+                        "'pep_ss_restricted': the reset or reload failed"]
+    assert _cleanup_kinds(c) == _CLEANUP_UNCHECKED
+
+
+@pytest.mark.parametrize("kind,kinds,unchecked", [
+    ("reset", _CLEANUP_UNCHECKED, True), ("reload", _CLEANUP_UNCHECKED, True),
+    ("show", _CLEANUP, False), ("drop", _CLEANUP, False)], ids=["reset", "reload", "show", "drop"])
+def test_cleanup_records_a_raising_step_and_still_attempts_the_rest(monkeypatch, kind, kinds, unchecked):
+    problems, c, _ = _cleanup(monkeypatch, faults={("postgres", kind): _exec_error()})
+    sql = [s for _r, k, s in c.sessions if k == kind][0]
+    want = ["%s raised APIError: exec create failed: container is not running" % sql]
+    if unchecked:
+        want.append("did not check that new sessions no longer see pgedge_safesession.roles = "
+                    "'pep_ss_restricted': the reset or reload failed")
+    assert problems == want
+    assert _cleanup_kinds(c) == kinds and {r for r, _k, _s in c.sessions} == {"postgres"}
+
+
+@pytest.mark.parametrize("kind,answer,text,kinds", [
+    ("reload", (0, "f"), "SELECT pg_reload_conf(); returned 'f'", _CLEANUP_UNCHECKED),
+    ("show", (0, _R), "still 'pep_ss_restricted' in a new session", ["reset", "reload"] + ["show"] * 20 + ["drop"]),
+], ids=["reload-not-signalled", "reset-never-applied"])
+def test_enforcement_fails_when_the_cleanup_reset_is_not_proven(monkeypatch, kind, answer, text, kinds):
+    (outcome, msg), c = _enforce(monkeypatch, cleanup_faults={("postgres", kind): answer})
+    assert outcome == "assert" and "enforcement cleanup failed" in msg and text in msg, msg
+    assert _cleanup_kinds(c) == kinds
+
+
+def test_enforcement_fails_when_a_cleanup_step_raises_after_a_pass(monkeypatch):
+    (outcome, msg), c = _enforce(monkeypatch, cleanup_faults={("postgres", "drop"): _exec_error()})
+    assert outcome == "assert" and "enforcement cleanup failed" in msg and "container is not running" in msg
+    assert _cleanup_kinds(c) == _CLEANUP
+
+
+def test_a_raising_cleanup_does_not_replace_the_check_failure(monkeypatch):
+    faults = {("postgres", k): _exec_error() for k in ("reset", "reload", "drop")}
+    (outcome, msg), c = _enforce(monkeypatch, faults={(_R, "INSERT"): (0, "")}, cleanup_faults=faults)
+    assert outcome == "assert" and "as pep_ss_restricted: INSERT succeeded" in msg, msg
+    assert "cleanup" not in msg
+    assert _cleanup_kinds(c) == _CLEANUP_UNCHECKED                               # every step attempted
+
+
 @pytest.mark.parametrize("env,want", [(_STANDALONE, "skipped"), (_RPM, "failed")], ids=["standalone", "integration"])
 def test_disabled_extension_checks_skip_standalone_and_fail_integration(monkeypatch, env, want):
     m = load(monkeypatch, dict(env, CHECK_EXTENSIONS="false"))
@@ -642,6 +801,160 @@ def test_disabled_extension_checks_skip_standalone_and_fail_integration(monkeypa
     for fn, args in ((m.test_safesession_enforcement, ()), (m.test_create_extensions, ("pgedge_safesession",)),
                      (m.test_extension_version, ("pgedge_safesession",))):
         assert _outcome(fn, "rocky9-amd64", "rhel", *args)[0] == want
+
+
+# --------------------------------------------------------------------------- functional tests
+# The single-session functional tests (added alongside test_safesession_enforcement) run in both modes,
+# so integration mode must fail them, never skip, when they cannot run.
+_FUNCTIONAL = ["test_safesession_restricted_role_blocks_writes", "test_safesession_blocks_ddl",
+               "test_safesession_is_restricted_status", "test_safesession_superuser_not_restricted",
+               "test_safesession_set_role_cannot_bypass", "test_safesession_unlisted_role_is_not_restricted"]
+
+
+@pytest.mark.parametrize("env,want", [(_STANDALONE, "skipped"), (_RPM, "failed")], ids=["standalone", "integration"])
+def test_functional_tests_skip_standalone_and_fail_integration_when_disabled(monkeypatch, env, want):
+    m = load(monkeypatch, dict(env, CHECK_EXTENSIONS="false"))
+    monkeypatch.setattr(m, "client", _Client(_Cluster()))
+    for step in _FUNCTIONAL:
+        assert (_outcome(getattr(m, step), "rocky9-amd64", "rhel")[0], step) == (want, step)
+
+
+@pytest.mark.parametrize("env,want", [(_STANDALONE, "skipped"), (_RPM, "failed")], ids=["standalone", "integration"])
+def test_functional_tests_fail_integration_and_skip_standalone_without_a_container(monkeypatch, env, want):
+    m = load(monkeypatch, env)
+    monkeypatch.setattr(m, "client", _Client(None))
+    for step in _FUNCTIONAL:
+        outcome, msg = _outcome(getattr(m, step), "rocky9-amd64", "rhel")
+        assert (outcome, step) == (want, step) and "not found or not running" in msg
+
+
+# What each functional test's single psql session prints when SafeSession behaves as documented:
+# the IDENTITY line (session_user/current_user) printed just before the statement under test, and
+# SafeSession's error plus its hint for each expected rejection.
+_H = "HINT:  This session is restricted to read-only access by the pgedge_safesession extension.\n"
+
+
+def _rej(cmd):
+    return "psql:<stdin>:12: ERROR:  cannot execute %s in a read-only session\n" % cmd + _H
+
+
+_FUNCTIONAL_OK = {
+    "test_safesession_restricted_role_blocks_writes":
+        " IDENTITY=pep_ss_readonly/pep_ss_readonly\n alpha\n beta\n" + _rej("INSERT") + _rej("UPDATE")
+        + _rej("DELETE") + " FINAL_ROWS=2\n",
+    "test_safesession_blocks_ddl": " IDENTITY=pep_ss_ddl/pep_ss_ddl\n" + _rej("CREATE TABLE") + " DDL_TABLE_EXISTS=0\n",
+    "test_safesession_is_restricted_status":
+        " SUPER_RESTRICTED=false\n IDENTITY=pep_ss_status/pep_ss_status\n ROLE_RESTRICTED=true\n",
+    "test_safesession_superuser_not_restricted": " IDENTITY=pep_ss_super/pep_ss_super\n SUPER_ROWS=1\n",
+    "test_safesession_set_role_cannot_bypass": " IDENTITY=pep_ss_byp_ro/pep_ss_byp_rw\n" + _rej("INSERT") + " BYPASS_ROWS=0\n",
+    "test_safesession_unlisted_role_is_not_restricted": " IDENTITY=pep_ss_free/pep_ss_free\n FREE_ROWS=1\n",
+}
+# ... and what it prints when SafeSession does not enforce (or over-enforces), as the right user.
+_FUNCTIONAL_BAD = {
+    "test_safesession_restricted_role_blocks_writes": " IDENTITY=pep_ss_readonly/pep_ss_readonly\n alpha\n beta\n FINAL_ROWS=3\n",
+    "test_safesession_blocks_ddl": " IDENTITY=pep_ss_ddl/pep_ss_ddl\n DDL_TABLE_EXISTS=1\n",
+    "test_safesession_is_restricted_status":
+        " SUPER_RESTRICTED=false\n IDENTITY=pep_ss_status/pep_ss_status\n ROLE_RESTRICTED=false\n",
+    "test_safesession_superuser_not_restricted": " IDENTITY=pep_ss_super/pep_ss_super\n" + _rej("INSERT") + " SUPER_ROWS=0\n",
+    "test_safesession_set_role_cannot_bypass": " IDENTITY=pep_ss_byp_ro/pep_ss_byp_rw\n BYPASS_ROWS=1\n",
+    "test_safesession_unlisted_role_is_not_restricted":
+        " IDENTITY=pep_ss_free/pep_ss_free\n" + _rej("INSERT") + " FREE_ROWS=0\n",
+}
+_SSA_DENIED = "psql:<stdin>:8: ERROR:  permission denied to set session authorization\n"
+_SET_ROLE_DENIED = 'psql:<stdin>:11: ERROR:  permission denied to set role "pep_ss_byp_rw"\n'
+# Failed role switches. With ON_ERROR_STOP on psql stops at the failed switch (exit 3). The rc-0
+# cases are what the old ON_ERROR_STOP=0 script printed: the statement under test then ran as the
+# wrong user, yet every row/marker the old assertions looked at was still "right".
+_FAILED_SWITCH = {
+    "test_safesession_unlisted_role_is_not_restricted": [
+        (3, _SSA_DENIED),
+        (0, _SSA_DENIED + " IDENTITY=postgres/postgres\n FREE_ROWS=1\n"),
+    ],
+    "test_safesession_set_role_cannot_bypass": [
+        (3, " " + _SET_ROLE_DENIED),
+        (0, _SET_ROLE_DENIED + " IDENTITY=pep_ss_byp_ro/pep_ss_byp_ro\n" + _rej("INSERT") + " BYPASS_ROWS=0\n"),
+        # SET ROLE silently not in effect: same session user, but the current role never changed.
+        (0, " IDENTITY=pep_ss_byp_ro/pep_ss_byp_ro\n" + _rej("INSERT") + " BYPASS_ROWS=0\n"),
+    ],
+    "test_safesession_superuser_not_restricted": [
+        (3, _SSA_DENIED),
+        (0, _SSA_DENIED + " IDENTITY=postgres/postgres\n SUPER_ROWS=1\n"),
+    ],
+    "test_safesession_restricted_role_blocks_writes": [
+        (3, _SSA_DENIED),
+        # Right user, but a setup error the old script ignored (the GRANT failed).
+        (0, "psql:<stdin>:6: ERROR:  permission denied for table pep_ss_tbl\n"
+            + _FUNCTIONAL_OK["test_safesession_restricted_role_blocks_writes"]),
+    ],
+    "test_safesession_blocks_ddl": [
+        (3, _SSA_DENIED),
+        # The table was not created, but by core (no privilege), not by SafeSession.
+        (0, " IDENTITY=pep_ss_ddl/pep_ss_ddl\npsql:<stdin>:9: ERROR:  permission denied for schema public\n"
+            " DDL_TABLE_EXISTS=0\n"),
+    ],
+    "test_safesession_is_restricted_status": [
+        (3, " SUPER_RESTRICTED=false\n" + _SSA_DENIED),
+    ],
+}
+
+
+def _script_responder(outputs):
+    """exec_run responder: a psql heredoc script gets ``outputs['script']`` with exit code
+    ``outputs.get('rc', 0)``; cleanup scripts get ''."""
+    def respond(cmd):
+        assert cmd[:2] == ["bash", "-c"] and "psql -X -q" in cmd[2] and "<<'EOSQL'" in cmd[2], cmd
+        if "DROP OWNED BY" in cmd[2] and "SET SESSION AUTHORIZATION" not in cmd[2]:
+            return 0, ""
+        return outputs.get("rc", 0), outputs["script"]
+    return respond
+
+
+@pytest.mark.parametrize("env", [_RPM, _STANDALONE], ids=["integration", "standalone"])
+@pytest.mark.parametrize("step", _FUNCTIONAL)
+def test_functional_tests_pass_on_enforcement_and_fail_without_it(monkeypatch, env, step):
+    m = load(monkeypatch, env)
+    outputs = {"script": _FUNCTIONAL_OK[step]}
+    c = _Container(_script_responder(outputs))
+    monkeypatch.setattr(m, "client", _Client(c))
+    assert _outcome(getattr(m, step), "rocky9-amd64", "rhel") == ("passed", "")
+    # Every scenario script runs as the server's superuser in ONE session and is followed by cleanup.
+    assert len(c.cmds) == 2 and "DROP OWNED BY" in c.cmds[-1][2]
+    outputs["script"] = _FUNCTIONAL_BAD[step]
+    c.cmds.clear()
+    assert _outcome(getattr(m, step), "rocky9-amd64", "rhel")[0] == "assert"
+    assert len(c.cmds) == 2 and "DROP OWNED BY" in c.cmds[-1][2], "cleanup must run after a failure too"
+
+
+@pytest.mark.parametrize("env", [_RPM, _STANDALONE], ids=["integration", "standalone"])
+@pytest.mark.parametrize("step,rc,out", [(st, rc, out) for st, cases in _FAILED_SWITCH.items() for rc, out in cases],
+                         ids=["%s-%d" % (st.replace("test_safesession_", ""), i)
+                              for st, cases in _FAILED_SWITCH.items() for i in range(len(cases))])
+def test_a_failed_role_switch_or_setup_error_never_passes(monkeypatch, env, step, rc, out):
+    m = load(monkeypatch, env)
+    c = _Container(_script_responder({"script": out, "rc": rc}))
+    monkeypatch.setattr(m, "client", _Client(c))
+    outcome, msg = _outcome(getattr(m, step), "rocky9-amd64", "rhel")
+    assert outcome == "assert" and "Untrusted scenario" in msg, (outcome, msg)
+    assert len(c.cmds) == 2 and "DROP OWNED BY" in c.cmds[-1][2], "cleanup must still run"
+
+
+@pytest.mark.parametrize("step", _FUNCTIONAL)
+def test_each_scenario_stops_on_setup_errors_and_proves_its_identity_first(monkeypatch, step):
+    """The scenario session runs with ON_ERROR_STOP on; the IDENTITY query follows the last role
+    switch and precedes the statement under test; ON_ERROR_STOP is off only after it."""
+    m = load(monkeypatch, _RPM)
+    c = _Container(_script_responder({"script": _FUNCTIONAL_OK[step]}))
+    monkeypatch.setattr(m, "client", _Client(c))
+    _outcome(getattr(m, step), "rocky9-amd64", "rhel")
+    script = c.cmds[0][2]
+    assert "-v ON_ERROR_STOP=1 <<'EOSQL'" in script and "ON_ERROR_STOP=0" not in script
+    lines = script.splitlines()
+    ident = lines.index(m.IDENTITY_SQL)
+    switches = [i for i, l in enumerate(lines) if l.startswith(("SET SESSION AUTHORIZATION", "SET ROLE"))]
+    assert switches and max(switches) < ident
+    offs = [i for i, l in enumerate(lines) if l == "\\set ON_ERROR_STOP off"]
+    ons = [i for i, l in enumerate(lines) if l == "\\set ON_ERROR_STOP on"]
+    assert len(offs) == len(ons) <= 1 and all(ident < o < n for o, n in zip(offs, ons))
 
 
 # --------------------------------------------------------------------------- missing references

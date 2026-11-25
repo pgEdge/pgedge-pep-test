@@ -1,4 +1,5 @@
 name: PEP Regression
+run-name: "PEP Regression | ${{ inputs.components || 'all' }} | PG ${{ inputs.pg_versions || 'all' }} | ${{ inputs.repo || 'release' }} | ${{ inputs.execution_mode || 'preview' }}"
 
 on:
   workflow_dispatch:

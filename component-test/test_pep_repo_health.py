@@ -453,6 +453,20 @@ NON_META_COMPONENT_NAMES = {
     # ENTERPRISE_EXTRA_PACKAGES), not this v1 'pgedge-rag-server' component.
     "rag-server",
 }
+
+# Components a meta-package pulls in only as *weak* dependencies (RHEL
+# Recommends / DEB Recommends). dnf installs them when install_weak_deps is on
+# (the default) but drops them when it is off or when the provider isn't
+# selected, so their presence is not guaranteed and must NOT be asserted as a
+# hard dependency. The Patroni integration providers (consul/etcd/aws/zookeeper)
+# are Recommends of enterprise-all — exactly one is needed at runtime, so none
+# is a hard Requires.
+ENTERPRISE_WEAK_DEPENDENCY_NAMES = {
+    "patroni-consul",
+    "patroni-etcd",
+    "patroni-aws",
+    "patroni-zookeeper",
+}
 NON_META_CATEGORIES = {"ai_kb"}
 
 # Packages a meta-package pulls in that are NOT represented by a matrix component,
@@ -477,13 +491,15 @@ ENTERPRISE_POSTGRES_DEPENDENCIES = [
 ]
 
 # pgedge-enterprise-all: every matrix component except the meta-packages
-# themselves and the components no meta-package bundles (AI-KB, ColdFront, DuckDB).
+# themselves, the components no meta-package bundles (AI-KB, ColdFront, DuckDB),
+# and the weak (Recommends) dependencies whose presence isn't guaranteed.
 ENTERPRISE_ALL_DEPENDENCIES = [
     c.get("name")
     for c in _load_matrix_components()
     if c.get("name")
     and c.get("name") not in ENTERPRISE_META_PACKAGE_NAMES
     and c.get("name") not in NON_META_COMPONENT_NAMES
+    and c.get("name") not in ENTERPRISE_WEAK_DEPENDENCY_NAMES
     and c.get("category") not in NON_META_CATEGORIES
 ]
 
@@ -785,6 +801,114 @@ def test_verify_enterprise_dependencies(container_name, container_type):
         + "\n".join(f"  - {p}" for p in missing)
     )
     print(f"✅ All enterprise meta-package dependencies present on {container_name}")
+
+
+@pytest.mark.parametrize("container_name,container_type", all_containers)
+def test_verify_enterprise_dependency_versions(container_name, container_type):
+    """Step 3c: Verify enterprise dependencies are at the expected version.
+
+    After confirming the meta-package pulled its dependencies in (Step 3b),
+    check each dependency component is at the version pinned in the config .env
+    file (via the same RHEL/DEB version map the standalone version check uses).
+    This catches a meta-package that regressed to an older component build even
+    when that component's own version check is toggled off in the matrix.
+    """
+    container_name = container_name.strip()
+    if not container_name:
+        pytest.skip("No container defined in env")
+
+    if not ENABLED_ENTERPRISE_META_PACKAGES:
+        pytest.skip("No enterprise meta-package enabled in packages_test_matrix.json")
+
+    try:
+        container = client.containers.get(container_name)
+    except docker.errors.NotFound:
+        pytest.skip(f"Container {container_name} not found or not running.")
+
+    assert container.status == "running"
+
+    version_map = get_container_config(container_type)["version_map"]
+
+    print(f"\n--- Verifying enterprise dependency versions on {container_name} ({container_type}) ---")
+
+    failed = []
+    skipped = []
+    checked = set()
+    for meta_name in ENABLED_ENTERPRISE_META_PACKAGES:
+        dep_names = ENTERPRISE_DEPENDENCY_MAP.get(meta_name, [])
+        dep_packages = _dependency_packages(dep_names, pg_major_version, container_type)
+        # Append packages that aren't matrix components (e.g. pgedge-rag-server2).
+        for extra in ENTERPRISE_EXTRA_PACKAGES.get(meta_name, {}).get(container_type, []):
+            if extra not in dep_packages:
+                dep_packages.append(extra)
+
+        for pkg in dep_packages:
+            # Resolve which concrete package is installed — postgis ships as one
+            # of two mutually-exclusive series on RHEL, and we verify the series
+            # the meta-package actually selected.
+            installed_name = None
+            for cand in _acceptable_dependency_names(pkg):
+                if package_management.query_installed_version(container, cand):
+                    installed_name = cand
+                    break
+
+            if not installed_name:
+                # Absence is already asserted by test_verify_enterprise_dependencies;
+                # don't double-report it as a version failure here.
+                continue
+
+            # A dependency shared by both metas only needs checking once.
+            if installed_name in checked:
+                continue
+            checked.add(installed_name)
+
+            expected_version = version_map.get(installed_name)
+            if not expected_version:
+                skipped.append(installed_name)
+                continue
+
+            print(f"   Verifying {installed_name} == {expected_version} (required by {meta_name})...")
+            try:
+                success, platform, installed_version, message = package_management.verify_package_version(
+                    container, installed_name, expected_version
+                )
+                if not success:
+                    print(f"   ❌ {installed_name}: {message}")
+                    failed.append(f"{installed_name} (expected {expected_version}, required by {meta_name})")
+                    continue
+
+                # Mirror the standalone version check: when the configured value
+                # pins a packaging release, hold the install to it as well.
+                if _RELEASE_PINNED_RE.match(expected_version.strip()):
+                    expected_release = _packaging_release(expected_version)
+                    installed_release = _packaging_release(installed_version)
+                    if installed_release != expected_release:
+                        print(
+                            f"   ❌ {installed_name}: release mismatch — expected release "
+                            f"{expected_release!r} (from {expected_version}), got "
+                            f"{installed_release!r} (from {installed_version})"
+                        )
+                        failed.append(
+                            f"{installed_name} (expected release {expected_release} from "
+                            f"{expected_version}, installed {installed_version}, required by {meta_name})"
+                        )
+                        continue
+                    print(f"   ✅ {installed_name}: {message} (release {installed_release} matches)")
+                    continue
+
+                print(f"   ✅ {installed_name}: {message}")
+            except Exception as e:
+                print(f"   ❌ {installed_name}: {str(e)}")
+                failed.append(f"{installed_name} ({str(e)}, required by {meta_name})")
+
+    if skipped:
+        print(f"   ⏭ Skipped version check for {len(skipped)} dependencies (no expected version defined)")
+
+    assert not failed, (
+        f"Enterprise dependency version verification failed on {container_name}:\n"
+        + "\n".join(f"  - {p}" for p in failed)
+    )
+    print(f"✅ All enterprise dependency versions match on {container_name}")
 
 
 @pytest.mark.parametrize("container_name,container_type", all_containers)

@@ -571,7 +571,8 @@ def test_api_key_copy_is_unchanged_standalone(monkeypatch, tmp_path):
     cp = _Spy((True, "copied"))
     monkeypatch.setattr(m.file_management, "copy_file_to_container", cp)
     assert _outcome(m.test_copy_api_key, "rocky9-amd64", "rhel") == ("passed", "")
-    assert cp.calls[0][1]["container_file_path"] == "/tmp/api_key_file"
+    # Bandit B108 false positive: the path is the destination inside the test container, asserted on a mocked copy.
+    assert cp.calls[0][1]["container_file_path"] == "/tmp/api_key_file"  # nosec B108
 
 
 def test_the_openai_smoke_is_skipped_in_integration_mode_with_its_reason(monkeypatch):

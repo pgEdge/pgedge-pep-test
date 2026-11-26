@@ -68,6 +68,15 @@ ai_db_workbench_client_package = os.getenv("AI_DBA_CLIENT_PACKAGE", "pgedge-ai-d
 AI_DBA_SERVER_PACKAGED_BINARY = "/usr/bin/ai-dba-server"
 ai_db_workbench_server_binary = os.getenv("AI_DBA_SERVER_BINARY", AI_DBA_SERVER_PACKAGED_BINARY)
 
+# The server's state directories (packaging/deb/debian/rules `install -d`). The shared Debian file
+# comparison accepts a missing entry when one installed entry has the same name, so the server binary
+# or the other directory would stand in for either, and the DEB reference leaves them out. Integration
+# mode requires each at its exact path in `dpkg -L`, as the MCP test does (the RPM reference lists
+# them, compared exactly).
+AI_DBA_SERVER_DEB_EXACT_PATHS = {
+    "pgedge-ai-dba-server": ("/var/lib/pgedge/ai-dba-server", "/var/log/pgedge/ai-dba-server"),
+}
+
 # Every other package of the suite needs pgedge-ai-dba-upgrade-check before it unpacks: the server's
 # RPM declares `Requires(pre): pgedge-ai-dba-upgrade-check = %{version}-%{release}` (spec), its DEB
 # `Pre-Depends: pgedge-ai-dba-upgrade-check (>= ${binary:Version})` (debian/control). Installing the
@@ -329,6 +338,16 @@ def elf_strip_problem(file_output):
     return None
 
 
+def paths_not_listed(container, package, paths):
+    """The entries of ``paths`` that `dpkg -L <package>` does not list at exactly that path, or None
+    when the listing fails."""
+    exit_code, output = container.exec_run(f"dpkg -L {package}", user="root")
+    if exit_code != 0:
+        return None
+    listed = {line.strip() for line in output.decode().splitlines()}
+    return [p for p in paths if p not in listed]
+
+
 def _skip_or_fail(reason):
     """A standalone run skips when an input is missing. In integration mode the check fails
     instead: skips are reported separately, but the certification verdict could still pass with
@@ -581,6 +600,14 @@ def test_verify_bundled_files(container_name, container_type, package):
         if "No expected file found" in str(e):
             _skip_or_fail(str(e))
         pytest.fail(f"Failed to verify bundled files: {str(e)}")
+
+    exact = AI_DBA_SERVER_DEB_EXACT_PATHS.get(package, ())
+    if INTEGRATION_REQUEST is not None and container_type == "deb" and exact:
+        missing = paths_not_listed(container, package, exact)
+        assert missing is not None, f"dpkg -L {package} failed on {container_name}"
+        assert not missing, (f"{package} does not list {missing} at the exact path on {container_name} "
+                             f"(the shared comparison matches these by name only)")
+        print(f"✅ {package} lists {', '.join(exact)} at their exact paths")
 
 
 @pytest.mark.parametrize("container_name,container_type,package", all_container_package_combinations)

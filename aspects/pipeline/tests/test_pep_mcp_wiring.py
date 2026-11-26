@@ -19,8 +19,8 @@ test_pep_radar_wiring.py. Versions are synthetic (9.8.7), never a real MCP relea
   * the expected-output references derived from the MCP packaging (pkg/rpm/pgedge-nla.spec and
     pkg/deb/debian/rules at pgEdge/pgedge-postgres-mcp 6448336, unchanged through v1.2.0-beta1 and
     main a08aa30), checked through the real
-    file_management.verify_bundled_files, and in integration mode the two DEB state directories, which
-    that comparison matches only by name, at their exact paths.
+    file_management.verify_bundled_files, and in integration mode the DEB server binary and two state
+    directories, which that comparison matches only by name, at their exact paths.
 """
 import importlib.util
 import itertools
@@ -670,6 +670,27 @@ def test_integration_mode_requires_the_deb_state_directories_at_their_exact_path
         assert outcome(m.test_verify_bundled_files, "x", "deb", "pgedge-postgres-mcp") == ("passed", "")
 
 
+def test_integration_mode_requires_the_deb_binary_at_its_exact_path(monkeypatch):
+    # The package installs the server at /usr/bin/pgedge-postgres-mcp (pkg/deb/debian/rules). With it
+    # under /opt/bin instead, the shared Debian comparison resolves the missing entry to the installed
+    # path that also ends in bin/pgedge-postgres-mcp and passes; integration mode checks the exact path.
+    moved = [f for f in _DEB_PAYLOAD + _DEB_EXTRAS if f not in ("/usr/bin/pgedge-postgres-mcp", "/usr/bin")]
+    moved += ["/opt", "/opt/bin", "/opt/bin/pgedge-postgres-mcp"]
+    m = load(monkeypatch, _STANDALONE)
+    ok, details, _ = m.file_management.verify_bundled_files(
+        _Container(_dpkg_listing(moved)), "x", "deb", "pgedge-postgres-mcp", "pgedge-postgres-mcp", _REPO)
+    assert ok and details["missing_files"] == []               # the shared comparison alone accepts it
+    monkeypatch.setattr(m, "client", _Client(_Container(_dpkg_listing(moved))))
+    assert outcome(m.test_verify_bundled_files, "x", "deb", "pgedge-postgres-mcp") == ("passed", "")  # standalone
+    for env in (_GA_DEB, _TEST_DEB):
+        m = load(monkeypatch, env)
+        monkeypatch.setattr(m, "client", _Client(_Container(_dpkg_listing(moved))))
+        status, msg = outcome(m.test_verify_bundled_files, "x", "deb", "pgedge-postgres-mcp")
+        assert status == "failed" and "does not list ['/usr/bin/pgedge-postgres-mcp'] at the exact path" in msg, msg
+        monkeypatch.setattr(m, "client", _Client(_Container(_dpkg_listing(_DEB_PAYLOAD + _DEB_EXTRAS))))
+        assert outcome(m.test_verify_bundled_files, "x", "deb", "pgedge-postgres-mcp") == ("passed", "")
+
+
 def test_the_rpm_comparison_already_requires_the_state_directories(monkeypatch):
     m = load(monkeypatch, _GA_RPM)
     for gone in _STATE_DIRS:
@@ -697,7 +718,8 @@ def test_a_failed_second_listing_fails_the_exact_path_check(monkeypatch):
 def test_a_deb_unit_under_lib_systemd_still_matches(monkeypatch):
     # Older debhelper (jammy, bookworm) installs units under /lib/systemd/system; the reference names
     # /usr/lib/systemd/system and the Debian basename match accepts either location. The exact-path
-    # check in integration mode covers only the two state directories, so either unit location passes.
+    # check in integration mode covers the binary and the two state directories, not the unit, so either
+    # unit location passes.
     m = load(monkeypatch, _GA_DEB)
     files = [f.replace("/usr/lib/systemd/", "/lib/systemd/") for f in _DEB_PAYLOAD]
     monkeypatch.setattr(m, "client", _Client(_Container(

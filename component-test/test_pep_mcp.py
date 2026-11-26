@@ -103,14 +103,16 @@ mcp_sbom_package = "pgedge-postgres-mcp"
 # pgedge-postgres-mcp-kb, and pgedge-nla-cli / pgedge-nla-web (source package pgedge-nla).
 _MCP_PACKAGE_PREFIXES = ("pgedge-postgres-mcp", "pgedge-nla")
 
-# The server's state directories (pkg/deb/debian/rules `install -d`, pkg/rpm/pgedge-nla.spec %dir).
-# Both are named postgres-mcp, and the shared Debian file comparison accepts a missing entry when
-# one installed entry has the same name, so either directory would stand in for the other there.
+# The server binary and state directories (pkg/deb/debian/rules `install -D` and `install -d`,
+# pkg/rpm/pgedge-nla.spec %files and %dir). The shared Debian file comparison accepts a missing
+# entry when one installed entry has the same name: either state directory (both named postgres-mcp)
+# would stand in for the other, and a binary in another bin/ directory for the packaged one.
 # Integration mode therefore requires each at its exact path in `dpkg -L` (the RPM comparison is
 # already exact). The unit file keeps the shared comparison, which accepts it under /lib or
 # /usr/lib/systemd/system.
 MCP_DEB_EXACT_PATHS = {
-    "pgedge-postgres-mcp": ("/var/lib/pgedge/postgres-mcp", "/var/log/pgedge/postgres-mcp"),
+    "pgedge-postgres-mcp": ("/usr/bin/pgedge-postgres-mcp", "/var/lib/pgedge/postgres-mcp",
+                            "/var/log/pgedge/postgres-mcp"),
 }
 
 

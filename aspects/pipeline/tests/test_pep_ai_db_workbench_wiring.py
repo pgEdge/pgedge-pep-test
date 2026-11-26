@@ -15,7 +15,9 @@ Covers:
     name; the shared identity step; the release facts that tie the package version to the tag;
   * required checks fail instead of skipping in integration mode (missing container, reference, SBOM
     location); the documented integration skips (package version, upgrade, binary version);
-  * the stripped-ELF check and the expected-output references derived from the workbench packaging.
+  * the stripped-ELF check and the expected-output references derived from the workbench packaging,
+    and in integration mode the two DEB state directories, which the shared comparison matches only by
+    name, at their exact paths.
 """
 import importlib.util
 import itertools
@@ -746,8 +748,9 @@ _STATE_DIRS = ["/var/lib/pgedge/ai-dba-server", "/var/log/pgedge/ai-dba-server"]
 def test_the_deb_reference_leaves_out_the_state_directories_its_comparison_cannot_check(monkeypatch, tmp_path):
     # The shared DEB comparison (aspects/file_management.py) accepts a missing entry when ONE installed
     # entry has the same basename, so /usr/bin/ai-dba-server would stand in for either state directory
-    # (debian/rules lines 35-36) and listing them would claim a check that cannot fail. The RPM
-    # comparison is exact, so the RPM reference keeps them (spec %files lines 245-248).
+    # (debian/rules lines 35-36) and listing them would claim a check that cannot fail. Integration mode
+    # checks them at their exact paths instead (below). The RPM comparison is exact, so the RPM reference
+    # keeps them (spec %files lines 245-248).
     assert not set(_STATE_DIRS) & set(_DEB_PAYLOAD) and set(_STATE_DIRS) <= set(_RPM_PAYLOAD)
     m = load(monkeypatch, _GA_DEB)
     (tmp_path / "expected-output" / "deb").mkdir(parents=True)
@@ -762,11 +765,57 @@ def test_the_deb_reference_leaves_out_the_state_directories_its_comparison_canno
         assert outcome(m.test_verify_bundled_files, "x", "rhel", SERVER)[0] == "failed", gone
 
 
+# A complete `dpkg -L pgedge-ai-dba-server`: the payload, the state directories and the parent
+# directories dpkg lists around them.
+_DEB_COMPLETE = _DEB_PAYLOAD + _STATE_DIRS + [
+    "/.", "/etc", "/etc/pgedge", "/lib", "/lib/systemd", "/lib/systemd/system", "/usr", "/usr/bin", "/usr/share",
+    "/usr/share/doc", "/usr/share/doc/pgedge-ai-dba-server", "/usr/share/pgedge-ai-dba-server", "/var", "/var/lib",
+    "/var/lib/pgedge", "/var/log", "/var/log/pgedge"]
+
+
+@pytest.mark.parametrize("gone", [_STATE_DIRS[:1], _STATE_DIRS[1:], _STATE_DIRS], ids=["lib", "log", "both"])
+def test_integration_mode_requires_the_deb_state_directories_at_their_exact_paths(monkeypatch, tmp_path, gone):
+    # The real shared comparison passes without them, against the DEB reference and against one that
+    # lists them (basename matching), so integration mode checks each exact path in `dpkg -L`, as for MCP.
+    listing = [f for f in _DEB_COMPLETE if f not in gone]
+    (tmp_path / "expected-output" / "deb").mkdir(parents=True)
+    (tmp_path / "expected-output" / "deb" / "ai-dba-server").write_text("\n".join(_DEB_PAYLOAD + _STATE_DIRS) + "\n")
+    m = load(monkeypatch, _STANDALONE)
+    for root in (_REPO, tmp_path):
+        ok, details, _ = m.file_management.verify_bundled_files(
+            _Container(_listing("dpkg -L pgedge-ai-dba-server", listing)), "x", "deb", SERVER, SERVER, root)
+        assert ok and details["missing_files"] == [], root  # the shared comparison alone accepts it
+    monkeypatch.setattr(m, "client", _Client(_Container(_listing("dpkg -L pgedge-ai-dba-server", listing))))
+    assert outcome(m.test_verify_bundled_files, "x", "deb", SERVER) == ("passed", "")  # standalone
+    for env in (_GA_DEB, _TEST_DEB):
+        m = load(monkeypatch, env)
+        monkeypatch.setattr(m, "client", _Client(_Container(_listing("dpkg -L pgedge-ai-dba-server", listing))))
+        status, msg = outcome(m.test_verify_bundled_files, "x", "deb", SERVER)
+        assert status == "failed" and f"does not list {gone} at the exact path" in msg, msg
+        monkeypatch.setattr(m, "client", _Client(_Container(_listing("dpkg -L pgedge-ai-dba-server", _DEB_COMPLETE))))
+        assert outcome(m.test_verify_bundled_files, "x", "deb", SERVER) == ("passed", "")
+
+
+def test_a_failed_second_listing_fails_the_exact_path_check(monkeypatch):
+    m = load(monkeypatch, _GA_DEB)
+    calls = []
+
+    def respond(cmd):
+        calls.append(cmd)
+        if cmd == "dpkg -L pgedge-ai-dba-server" and len(calls) == 1:
+            return 0, "".join(f + "\n" for f in _DEB_COMPLETE)
+        return 1, "dpkg-query: package 'pgedge-ai-dba-server' is not installed"
+    monkeypatch.setattr(m, "client", _Client(_Container(respond)))
+    status, msg = outcome(m.test_verify_bundled_files, "x", "deb", SERVER)
+    assert status == "failed" and "dpkg -L pgedge-ai-dba-server failed" in msg and len(calls) == 2, (msg, calls)
+
+
 def test_a_deb_unit_under_usr_lib_still_matches(monkeypatch):
     # Newer debhelper installs units under /usr/lib/systemd/system; the DEB comparison resolves a
-    # missing entry by its unique basename, so either layout matches the one reference.
+    # missing entry by its unique basename, so either layout matches the one reference. The exact-path
+    # check in integration mode covers only the state directories.
     m = load(monkeypatch, _GA_DEB)
-    moved = [f.replace("/lib/systemd/", "/usr/lib/systemd/") if f.startswith("/lib/") else f for f in _DEB_PAYLOAD]
+    moved = ["/usr" + f if f == "/lib" or f.startswith("/lib/") else f for f in _DEB_COMPLETE]
     monkeypatch.setattr(m, "client", _Client(_Container(_listing("dpkg -L pgedge-ai-dba-server", moved))))
     assert outcome(m.test_verify_bundled_files, "x", "deb", SERVER) == ("passed", "")
 

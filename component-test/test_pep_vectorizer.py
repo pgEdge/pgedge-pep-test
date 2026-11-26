@@ -1,4 +1,6 @@
+import importlib.util as _ilu
 import os
+import re
 import sys
 import subprocess
 from pathlib import Path
@@ -12,8 +14,33 @@ from dotenv import load_dotenv
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 from aspects import configure_repository, package_management, pg_server_management, machine_cleanup, machine_prereq_setup, file_management, container_management
 
+
+def _load_util(name):
+    """Load a shared integration helper from aspects/pipeline/ by path (no package
+    __init__ there), so these imports work however this file is loaded."""
+    spec = _ilu.spec_from_file_location(
+        name, os.path.join(os.path.dirname(__file__), '..', 'aspects', 'pipeline', name + '.py'))
+    mod = _ilu.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+# The integration-mode steps shared by the PG-coupled extension tests, and through them the shared
+# install/identity steps, the request contract and the package-matching rules. One instance of each
+# (taken from pep_extension_checks), so tests that patch them reach every step.
+pep_extension_checks = _load_util('pep_extension_checks')
+pep_integration_mode = pep_extension_checks.pep_integration_mode
+pep_request_env = pep_integration_mode.pep_request_env
+_pr = pep_request_env._pr
+_pp = _pr._pp
+
 load_dotenv()
 client = docker.from_env()
+
+# Integration request built from the PEP_* env contract (validated by normalize_request, which
+# already binds the vectorizer package to its family and PG major). None in standalone mode, which
+# keeps the standalone code paths below.
+INTEGRATION_REQUEST = pep_request_env.build_request_from_env()
 
 # Load values from env
 rhel_containers = [c.strip() for c in os.getenv("CONTAINERS", "").split(",") if c.strip()]
@@ -22,8 +49,10 @@ deb_containers = [c.strip() for c in os.getenv("DEB_CONTAINERS", "").split(",") 
 # Combine all containers with their type
 all_containers = [(c, "rhel") for c in rhel_containers] + [(c, "deb") for c in deb_containers]
 
-# Filter containers based on platform filter (if set)
-platform_filter = os.getenv("PLATFORM_FILTER", "").lower()
+# Filter containers based on platform filter (if set). In integration mode the request family is
+# authoritative and overrides any configured PLATFORM_FILTER.
+platform_filter = (INTEGRATION_REQUEST["family"] if INTEGRATION_REQUEST is not None
+                   else os.getenv("PLATFORM_FILTER", "").lower())
 if platform_filter == "rpm":
     all_containers = [(c, t) for c, t in all_containers if t == "rhel"]
 elif platform_filter == "deb":
@@ -78,23 +107,127 @@ LOCAL_API_KEY_PATH = os.path.normpath(
 )
 CONTAINER_API_KEY_PATH = "/tmp/api_key_file"
 
+# Why integration mode skips the provider-dependent steps. Certification makes no paid calls and has
+# no provider credentials; embedding generation is not covered by certification.
+NO_PROVIDER_KEY = ("needs a model-provider API key; certification makes no paid calls and has no "
+                   "provider credentials")
+
+
+def _integration_problem(request, pg_major_env):
+    """Why an integration request cannot be served by this test (None if it can); checked again
+    before anything is installed. normalize_request already rejects a package that is not the
+    component's package for the request's family and PG major; this backstop also covers a request
+    for another component and a request whose PG major disagrees with PG_MAJOR_VERSION."""
+    if request is None:
+        return None
+    policy = _pr.COMPONENT_POLICY.get(request["component"])
+    if request["component"] != "vectorizer" or not _pp.is_coupled(policy):
+        return f"component {request['component']!r} is not the PG-coupled vectorizer component"
+    if str(request["pg_major"]) != str(pg_major_env):
+        return f"request PG{request['pg_major']} disagrees with PG_MAJOR_VERSION={pg_major_env}"
+    why = _pp.classify(policy, request["package_name"], request["family"], request["pg_major"],
+                       request["expected_version"])
+    if why is not None:
+        return (f"package {request['package_name']!r} is not vectorizer for {request['family']} "
+                f"PG{request['pg_major']} ({why})")
+    return None
+
+
+INTEGRATION_PROBLEM = _integration_problem(INTEGRATION_REQUEST, pg_major_version)
+
 
 def get_container_config(container_type):
-    """Get configuration based on container type (rhel or deb)"""
+    """Get configuration based on container type (rhel or deb). In integration mode the vectorizer
+    package is exactly the requested (validated) package."""
+    requested = INTEGRATION_REQUEST["package_name"] if INTEGRATION_REQUEST is not None else None
     if container_type == "rhel":
         return {
             "pgbin": rhel_pgbin.rstrip('/'),
             "pguser": rhel_pguser,
-            "vectorizer_package": rhel_vectorizer_package,
+            "vectorizer_package": requested or rhel_vectorizer_package,
             "bundled_files": rhel_bundled_files
         }
     else:  # deb
         return {
             "pgbin": deb_pgbin.rstrip('/'),
             "pguser": deb_pguser,
-            "vectorizer_package": deb_vectorizer_package,
+            "vectorizer_package": requested or deb_vectorizer_package,
             "bundled_files": deb_bundled_files
         }
+
+
+def get_running_container(container_name):
+    """The named container, which must be running. A missing container skips a standalone run; in
+    integration mode it fails, because skips are reported separately and the verdict could still
+    pass with the check skipped."""
+    try:
+        container = client.containers.get(container_name)
+    except docker.errors.NotFound:
+        pep_extension_checks.skip_or_fail(INTEGRATION_REQUEST,
+                                          f"Container {container_name} not found or not running.")
+    assert container.status == "running"
+    return container
+
+
+def pgvector_prerequisites(container_type, pg_major):
+    """pgvector for the requested PG major: a hard dependency of the vectorizer packages
+    (pkg/rpm/pgedge_vectorizer.spec Requires pgedge-pgvector_<pg>; pkg/deb/debian/control.in Depends
+    pgedge-postgresql-<pg>-pgvector), and pgedge_vectorizer.control has requires = 'vector'.
+    Integration mode passes it to pep_extension_checks.install_requested_extension as the extra
+    prerequisite installed after the server and before the pinned package."""
+    if container_type == "rhel":
+        return [f"pgedge-pgvector_{pg_major}"]
+    return [f"pgedge-postgresql-{pg_major}-pgvector"]
+
+
+# A release tag as pgedge-parse-release-tag reads it: "v", the version (the text up to the first
+# "-"), then an optional suffix of dot-separated alphanumeric parts.
+_RELEASE_TAG = re.compile(r"v([0-9]+(?:\.[0-9]+)*)(?:-([0-9A-Za-z]+(?:\.[0-9A-Za-z]+)*))?")
+
+
+def expected_extension_version(request):
+    """``(version, problems)``: the pgedge_vectorizer extension version the requested release
+    installs, or None with the reasons the request's release facts do not agree.
+
+    The vectorizer release workflow (release.yml, "Assert tag matches pgedge_vectorizer.control
+    default_version") fails unless the control file's default_version equals the version
+    pgedge-parse-release-tag reads from the tag, and CREATE EXTENSION installs default_version. So
+    the extension version is exactly the request's expected_version, also for a pre-release
+    (v1.2-rc1 installs extension 1.2). The request's other release facts must agree with the tag
+    as the packaging uses it:
+      * buildnum: "<suffix without dots>_1", or "1" without a suffix (pgedge-parse-release-tag);
+      * RPM: <version>-<buildnum>.<dist> (pkg/rpm/pgedge_vectorizer.spec Version and Release);
+      * DEB: <version>[~<suffix without dots>]-1.<codename> (pkg/common.sh moves the part of the
+        buildnum before "_" into the version after "~"; pkg/build-deb.sh writes
+        <version>-<buildnum>.<codename>)."""
+    tag = request.get("effective_tag")
+    if not tag:
+        return None, ["effective_tag is required to check the request's release facts"]
+    match = _RELEASE_TAG.fullmatch(tag)
+    if not match:
+        return None, [f"effective_tag {tag!r} is not v<version>[-<suffix>]"]
+    version, suffix = match.group(1), match.group(2)
+    compact = suffix.replace(".", "") if suffix else None
+    buildnum = f"{compact}_1" if suffix else "1"
+    deb_upstream = f"{version}~{compact}" if suffix else version
+    problems = []
+    if version != request.get("expected_version"):
+        problems.append(f"effective_tag {tag!r} does not match expected_version "
+                        f"{request.get('expected_version')!r}")
+    if request.get("expected_buildnum") is not None and request["expected_buildnum"] != buildnum:
+        problems.append(f"expected_buildnum {request['expected_buildnum']!r} does not match "
+                        f"effective_tag {tag!r} (expected {buildnum!r})")
+    rpm = request.get("expected_rpm")
+    if rpm is not None and not re.fullmatch(re.escape(f"{version}-{buildnum}.") + r"[0-9A-Za-z_+]+", rpm):
+        problems.append(f"expected_rpm {rpm!r} does not match effective_tag {tag!r} "
+                        f"(expected {version}-{buildnum}.<dist>)")
+    deb = request.get("expected_deb")
+    if deb is not None and not re.fullmatch(re.escape(f"{deb_upstream}-1.") + r"[0-9A-Za-z]+", deb):
+        problems.append(f"expected_deb {deb!r} does not match effective_tag {tag!r} "
+                        f"(expected {deb_upstream}-1.<codename>)")
+    if problems:
+        return None, problems
+    return version, []
 
 
 # ============================================================================
@@ -134,12 +267,7 @@ def test_configure_repository(container_name, container_type):
     if not container_name:
         pytest.skip("No container defined in env")
 
-    try:
-        container = client.containers.get(container_name)
-    except docker.errors.NotFound:
-        pytest.skip(f"Container {container_name} not found or not running.")
-
-    assert container.status == "running"
+    container = get_running_container(container_name)
 
     print(f"\n--- Configuring repository in {container_name} ---")
 
@@ -160,16 +288,23 @@ def test_component_install(container_name, container_type):
     if not container_name:
         pytest.skip("No container defined in env")
 
+    if INTEGRATION_REQUEST is not None:
+        # Execution-side backstop: never install for a request this test cannot serve.
+        assert INTEGRATION_PROBLEM is None, f"integration request cannot be served: {INTEGRATION_PROBLEM}"
+        container = get_running_container(container_name)
+        # The shared install step with pgvector as its extra prerequisite: the PostgreSQL server,
+        # then pgvector, for the requested major (unpinned, same channel), then exactly the
+        # requested package (pinned, with checksum evidence), then the only-package check.
+        pep_extension_checks.install_requested_extension(
+            container, container_type, INTEGRATION_REQUEST, pg_major_version, repo,
+            extra_prerequisites=[("pgvector", pgvector_prerequisites(container_type, pg_major_version))])
+        return
+
     # Get container-specific configuration
     config = get_container_config(container_type)
     vectorizer_package = config["vectorizer_package"]
 
-    try:
-        container = client.containers.get(container_name)
-    except docker.errors.NotFound:
-        pytest.skip(f"Container {container_name} not found or not running.")
-
-    assert container.status == "running"
+    container = get_running_container(container_name)
 
     print(f"\n--- Installing {vectorizer_package} on {container_name} ({container_type}) ---")
 
@@ -186,6 +321,8 @@ def test_component_install(container_name, container_type):
 @pytest.mark.parametrize("container_name,container_type", all_containers)
 def test_component_upgrade(container_name, container_type):
     """Upgrade component package if UPGRADE=true"""
+    if INTEGRATION_REQUEST is not None:
+        pytest.skip("integration mode: the pinned requested package is never upgraded")
     if os.getenv("UPGRADE", "false").lower() != "true":
         pytest.skip("Skipping upgrade tests because UPGRADE=false in env")
 
@@ -197,12 +334,7 @@ def test_component_upgrade(container_name, container_type):
     config = get_container_config(container_type)
     vectorizer_package = config["vectorizer_package"]
 
-    try:
-        container = client.containers.get(container_name)
-    except docker.errors.NotFound:
-        pytest.skip(f"Container {container_name} not found or not running.")
-
-    assert container.status == "running"
+    container = get_running_container(container_name)
 
     print(f"\n--- Upgrading {vectorizer_package} on {container_name} ({container_type}) ---")
 
@@ -233,6 +365,9 @@ def test_component_package_version(container_name, container_type):
     if not container_name:
         pytest.skip("No container defined in env")
 
+    if INTEGRATION_REQUEST is not None:
+        pytest.skip("integration mode: test_vectorizer_identity checks the exact requested version")
+
     if not vectorizer_version:
         pytest.skip("No VECTORIZER_VERSION defined in env, skipping version check")
 
@@ -240,12 +375,7 @@ def test_component_package_version(container_name, container_type):
     config = get_container_config(container_type)
     vectorizer_package = config["vectorizer_package"]
 
-    try:
-        container = client.containers.get(container_name)
-    except docker.errors.NotFound:
-        pytest.skip(f"Container {container_name} not found or not running.")
-
-    assert container.status == "running"
+    container = get_running_container(container_name)
 
     print(f"\n--- Verifying {vectorizer_package} version on {container_name} ({container_type}) ---")
 
@@ -260,6 +390,29 @@ def test_component_package_version(container_name, container_type):
     except Exception as e:
         pytest.fail(f"Failed to verify {vectorizer_package} version: {str(e)}")
 
+
+@pytest.mark.parametrize("container_name,container_type", all_containers)
+def test_vectorizer_identity(container_name, container_type):
+    """Integration mode: one consolidated identity verdict for the requested vectorizer package
+    (install-before-identity, then the exact package-manager version; the extension has no binary
+    to probe). The evidence is persisted before any failure. Skipped in standalone mode."""
+    req = INTEGRATION_REQUEST
+    if req is None:
+        pytest.skip("integration mode only")
+
+    container_name = container_name.strip()
+    if not container_name:
+        pytest.skip("No container defined in env")
+
+    container = get_running_container(container_name)
+
+    ev, problems = pep_integration_mode.record_identity(container, req)
+    if ev is None:
+        pytest.fail("; ".join(problems))
+    print(f"identity evidence ({req['package_name']}): {ev}")
+    assert not problems, "; ".join(problems)
+
+
 @pytest.mark.parametrize("container_name,container_type", all_containers)
 def test_verify_bundled_files(container_name, container_type):
     """Verify bundled files for each component match expected files
@@ -272,12 +425,7 @@ def test_verify_bundled_files(container_name, container_type):
     if not container_name:
         pytest.skip("Invalid container")
 
-    try:
-        container = client.containers.get(container_name)
-    except docker.errors.NotFound:
-        pytest.skip(f"Container {container_name} not found or not running.")
-
-    assert container.status == "running"
+    container = get_running_container(container_name)
 
     # Get the actual package name for the platform
     config = get_container_config(container_type)
@@ -315,9 +463,10 @@ def test_verify_bundled_files(container_name, container_type):
             pytest.fail(f"{message}{details_str}")
 
     except Exception as e:
-        # Handle cases like missing expected files
+        # No expected-output reference -> a standalone run skips; in integration mode it fails,
+        # because the verdict could still pass with this verification skipped.
         if "No expected file found" in str(e):
-            pytest.skip(str(e))
+            pep_extension_checks.skip_or_fail(INTEGRATION_REQUEST, str(e))
         else:
             pytest.fail(f"Failed to verify bundled files: {str(e)}")
 
@@ -329,12 +478,7 @@ def test_verify_sbom(container_name, container_type):
     if not container_name:
         pytest.skip("No container defined in env")
 
-    try:
-        container = client.containers.get(container_name)
-    except docker.errors.NotFound:
-        pytest.skip(f"Container {container_name} not found or not running.")
-
-    assert container.status == "running"
+    container = get_running_container(container_name)
 
     if container_type == "rhel":
         sbom_dir = f"{rhel_pg_path}/sbom"
@@ -393,16 +537,14 @@ def test_verify_sbom(container_name, container_type):
 @pytest.mark.parametrize("container_name,container_type", all_containers)
 def test_copy_api_key(container_name, container_type):
     """Step 4: Copy OpenAI API key to container using file_management module"""
+    if INTEGRATION_REQUEST is not None:
+        pytest.skip(f"integration mode: no OpenAI API key is copied; the functional smoke that would use it "
+                    f"{NO_PROVIDER_KEY}")
     container_name = container_name.strip()
     if not container_name:
         pytest.skip("No container defined in env")
 
-    try:
-        container = client.containers.get(container_name)
-    except docker.errors.NotFound:
-        pytest.skip(f"Container {container_name} not found or not running.")
-
-    assert container.status == "running"
+    container = get_running_container(container_name)
 
     print(f"\n--- Copying API key to {container_name} ---")
 
@@ -434,12 +576,7 @@ def test_init_cluster(container_name, container_type):
     if not container_name:
         pytest.skip("No container defined in env")
 
-    try:
-        container = client.containers.get(container_name)
-    except docker.errors.NotFound:
-        pytest.skip(f"Container {container_name} not found or not running.")
-
-    assert container.status == "running"
+    container = get_running_container(container_name)
 
     # Get container-specific configuration
     config = get_container_config(container_type)
@@ -448,7 +585,10 @@ def test_init_cluster(container_name, container_type):
 
     print(f"\n--- Initializing cluster on {container_name} ---")
 
-    # Define Vectorizer-specific GUC parameters
+    # Define Vectorizer-specific GUC parameters. CREATE EXTENSION does not need the preload
+    # (src/pgedge_vectorizer.c _PG_init registers the background workers only when preloaded); the
+    # test preloads it in both modes as before. In integration mode no API key file is copied: the
+    # provider is configured but never called, because no row is queued for embedding.
     guc_parameters = {
         "shared_preload_libraries": "'pgedge_vectorizer'",
         "pgedge_vectorizer.databases": "'postgres'",
@@ -481,12 +621,7 @@ def test_start_server(container_name, container_type):
     if not container_name:
         pytest.skip("No container defined in env")
 
-    try:
-        container = client.containers.get(container_name)
-    except docker.errors.NotFound:
-        pytest.skip(f"Container {container_name} not found or not running.")
-
-    assert container.status == "running"
+    container = get_running_container(container_name)
 
     # Get container-specific configuration
     config = get_container_config(container_type)
@@ -512,12 +647,7 @@ def test_check_connection(container_name, container_type):
     if not container_name:
         pytest.skip("No container defined in env")
 
-    try:
-        container = client.containers.get(container_name)
-    except docker.errors.NotFound:
-        pytest.skip(f"Container {container_name} not found or not running.")
-
-    assert container.status == "running"
+    container = get_running_container(container_name)
 
     # Get container-specific configuration
     config = get_container_config(container_type)
@@ -535,6 +665,39 @@ def test_check_connection(container_name, container_type):
         print(f"✅ {message}")
     except Exception as e:
         pytest.fail(f"Failed to check PostgreSQL connection: {str(e)}")
+
+@pytest.mark.parametrize("container_name,container_type", all_containers)
+def test_vectorizer_requested_extension(container_name, container_type):
+    """Integration mode: create the vector extension, then pgedge_vectorizer (its control file has
+    requires = 'vector'), then check that the running server's pgedge_vectorizer.so belongs to the
+    requested package, the server runs the requested PostgreSQL major, and the extension version
+    equals the release version exactly (expected_extension_version: the release workflow requires
+    pgedge_vectorizer.control's default_version to equal the tag's version). Nothing here calls an
+    embedding provider. Skipped in standalone mode, where the functional smoke's SQL file creates
+    both extensions."""
+    req = INTEGRATION_REQUEST
+    if req is None:
+        pytest.skip("integration mode only")
+
+    version, problems = expected_extension_version(req)
+    assert not problems, ("cannot derive the expected pgedge_vectorizer version from the request: "
+                          + "; ".join(problems))
+
+    container = get_running_container(container_name.strip())
+    config = get_container_config(container_type)
+    pgbin, pguser = config["pgbin"], config["pguser"]
+
+    for extname in ("vector", "pgedge_vectorizer"):
+        exit_code, output = pg_server_management.execute_psql_query(
+            container, pgbin, pgport, pguser, f"CREATE EXTENSION {extname};")
+        assert exit_code == 0, f"CREATE EXTENSION {extname} failed: {output}"
+        print(f"✅ CREATE EXTENSION {extname}")
+
+    pep_extension_checks.verify_requested_extension(
+        container, container_type, req, ports=[pgport], pguser=pguser,
+        library="pgedge_vectorizer.so", extname="pgedge_vectorizer", pg_major=pg_major_version,
+        version_problem=pep_extension_checks.exact_version(version))
+
 
 # @pytest.mark.parametrize("container_name,container_type", all_containers)
 # @pytest.mark.parametrize("extension", base_extensions)
@@ -587,7 +750,14 @@ def test_component_functional_smoke(container_name, container_type, component):
 
     This runs SQL test files from sql/<component-name>.sql
     and stores output in actual-output/sql/<component-name>/<pg_major_version>/rpm/<timestamp>.txt
+
+    sql/vectorizer.sql calls enable_vectorization without an embedding dimension, so the extension
+    sends a dimension probe to the configured OpenAI provider (detect_embedding_dimension), and the
+    workers then embed the rows: it needs a provider API key and makes paid calls.
     """
+    if INTEGRATION_REQUEST is not None:
+        pytest.skip("integration mode: sql/vectorizer.sql calls enable_vectorization without an "
+                    f"embedding dimension, which probes the OpenAI provider; it {NO_PROVIDER_KEY}")
     if not check_extensions:
         pytest.skip("Extension check disabled via env")
 
@@ -597,12 +767,7 @@ def test_component_functional_smoke(container_name, container_type, component):
     if not container_name or not component:
         pytest.skip("Invalid container or component")
 
-    try:
-        container = client.containers.get(container_name)
-    except docker.errors.NotFound:
-        pytest.skip(f"Container {container_name} not found or not running.")
-
-    assert container.status == "running"
+    container = get_running_container(container_name)
 
     # Get container-specific configuration
     config = get_container_config(container_type)
@@ -701,12 +866,7 @@ def test_stop_server(container_name, container_type):
     if not container_name:
         pytest.skip("No container defined in env")
 
-    try:
-        container = client.containers.get(container_name)
-    except docker.errors.NotFound:
-        pytest.skip(f"Container {container_name} not found or not running.")
-
-    assert container.status == "running"
+    container = get_running_container(container_name)
 
     # Get container-specific configuration
     config = get_container_config(container_type)
@@ -739,12 +899,7 @@ def test_package_uninstall(container_name, container_type):
     config = get_container_config(container_type)
     vectorizer_package = config["vectorizer_package"]
 
-    try:
-        container = client.containers.get(container_name)
-    except docker.errors.NotFound:
-        pytest.skip(f"Container {container_name} not found or not running.")
-
-    assert container.status == "running"
+    container = get_running_container(container_name)
 
     print(f"\n--- Uninstalling {vectorizer_package} on {container_name} ({container_type}) ---")
 
@@ -768,12 +923,7 @@ def test_pgedge_cleanup(container_name, container_type):
     if not container_name:
         pytest.skip("No container defined in env")
 
-    try:
-        container = client.containers.get(container_name)
-    except docker.errors.NotFound:
-        pytest.skip(f"Container {container_name} not found or not running.")
-
-    assert container.status == "running"
+    container = get_running_container(container_name)
 
     # Get container-specific configuration
     config = get_container_config(container_type)

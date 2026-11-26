@@ -1,18 +1,18 @@
 """Integration-mode checks shared by the PG-coupled extension component tests.
 
-Used by component-test/test_pep_{snowflake,lolor,safesession}.py, which install and verify an
-extension package the same way. Spock (test_pep_spock.py) keeps its own copies unchanged. Only the
-steps that are identical for these extensions live here:
-  * install_requested_extension: the PostgreSQL server for the requested major first, unpinned,
-    from the request's channel; then the requested package through the shared pinned install
-    (pep_integration_mode.install_for_request, which records the checksum evidence); then the
-    installed versions (audit only); then a check that no other package of the component is
+Used by component-test/test_pep_{snowflake,lolor,safesession,vectorizer}.py. Spock
+(test_pep_spock.py) keeps its own copies unchanged. Only steps these extension tests share live here:
+  * install_requested_extension (all four): the PostgreSQL server for the requested major first,
+    then any extra prerequisites the caller names (only the vectorizer test names one, pgvector),
+    all unpinned, from the request's channel; then the requested package through the shared pinned
+    install (pep_integration_mode.install_for_request, which records the checksum evidence); then
+    the installed versions (audit only); then a check that no other package of the component is
     installed, including uncertified companions such as -llvmjit;
-  * verify_requested_extension: the running server's library belongs to the requested package,
-    every node runs the requested PostgreSQL major, and the SQL extension version is the one the
-    release facts allow;
-  * stripped_problem: one ELF file is stripped (`file` prints "not stripped" otherwise, which a
-    plain substring check for "stripped" would accept).
+  * verify_requested_extension (all four): the running server's library belongs to the requested
+    package, every node runs the requested PostgreSQL major, and the SQL extension version is the
+    one the release facts allow;
+  * stripped_problem (snowflake, lolor, safesession): one ELF file is stripped (`file` prints
+    "not stripped" otherwise, which a plain substring check for "stripped" would accept).
 Product checks stay in each test. The module loads pep_integration_mode by path; a component test
 uses THIS module's instance (and its pep_request_env, pep_verify, pep_evidence), so tests that patch
 them see one object.
@@ -80,10 +80,12 @@ def installed_component_packages(container, container_type, request):
                                   request["expected_version"]) != _pp.R_NOT_ALLOWED)
 
 
-def record_prerequisite_versions(container, container_type, request, pg_major, channel):
-    """Audit only: the installed versions of the server companion and of the requested package,
-    printed and written to PEP_PREREQ_OUT. Never part of the verdict."""
-    names = server_companions(container_type, pg_major) + [request["package_name"]]
+def record_prerequisite_versions(container, container_type, request, pg_major, channel,
+                                 extra_names=()):
+    """Audit only: the installed versions of the server companion, of ``extra_names`` (a caller's
+    extra prerequisites, none by default) and of the requested package, printed and written to
+    PEP_PREREQ_OUT. Never part of the verdict."""
+    names = server_companions(container_type, pg_major) + list(extra_names) + [request["package_name"]]
     versions = {n: package_management.query_installed_version(container, n) for n in names}
     out = os.getenv("PEP_PREREQ_OUT", "test-logs/prerequisite-versions.json")
     Path(out).parent.mkdir(parents=True, exist_ok=True)
@@ -95,26 +97,33 @@ def record_prerequisite_versions(container, container_type, request, pg_major, c
     return versions
 
 
-def install_requested_extension(container, container_type, request, pg_major, channel):
-    """Install the server companion, then exactly the requested package (pinned, with checksum
-    evidence), then record versions and require that it is the only package of its component.
-    The companion goes first so installing it can never replace the pinned package, and a missing
-    server is reported as a prerequisite failure, not as a failed extension install."""
+def install_requested_extension(container, container_type, request, pg_major, channel,
+                                extra_prerequisites=()):
+    """Install the server companion, then each ``(label, package_names)`` step of
+    ``extra_prerequisites`` in order (none by default), then exactly the requested package (pinned,
+    with checksum evidence), then record versions and require that it is the only package of its
+    component. The companion and extra steps are unpinned, from the request's channel, and go first
+    so installing one can never replace the pinned package; a missing one is reported as a
+    prerequisite failure, not as a failed extension install."""
     requested = request["package_name"]
-    companions = server_companions(container_type, pg_major)
-    print(f"\n--- Installing PostgreSQL {pg_major} companion: {', '.join(companions)} ---")
-    try:
-        success, _platform, message = package_management.install_package(
-            container=container, package_name=companions, pg_major_version=pg_major,
-            install_pg_server=False)
-    except Exception as e:  # install_package raises on a failed install
-        success, message = False, str(e)
-    if not success:
-        pytest.fail(f"PostgreSQL {pg_major} prerequisite unavailable from the {channel!r} channel "
-                    f"({', '.join(companions)}); {requested} was not installed: {message}")
+    extras = [(label, list(names)) for label, names in extra_prerequisites]
+    steps = [(f"PostgreSQL {pg_major}", "companion", server_companions(container_type, pg_major))]
+    steps += [(label, "prerequisite", names) for label, names in extras]
+    for label, kind, names in steps:
+        print(f"\n--- Installing {label} {kind}: {', '.join(names)} ---")
+        try:
+            success, _platform, message = package_management.install_package(
+                container=container, package_name=names, pg_major_version=pg_major,
+                install_pg_server=False)
+        except Exception as e:  # install_package raises on a failed install
+            success, message = False, str(e)
+        if not success:
+            pytest.fail(f"{label} prerequisite unavailable from the {channel!r} channel "
+                        f"({', '.join(names)}); {requested} was not installed: {message}")
     print(f"\n--- Installing requested {requested} ---")
     pep_integration_mode.install_for_request(container, request)
-    versions = record_prerequisite_versions(container, container_type, request, pg_major, channel)
+    versions = record_prerequisite_versions(container, container_type, request, pg_major, channel,
+                                            extra_names=[n for _label, names in extras for n in names])
     present = installed_component_packages(container, container_type, request)
     assert present == [requested], (
         f"expected exactly the requested {request['component']} package {requested!r} to be "

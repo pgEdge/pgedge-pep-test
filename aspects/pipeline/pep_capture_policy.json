@@ -66,6 +66,26 @@
       },
       "uncertified_reason": "RPM-only JIT bitcode companion; the lolor functional test does not install it or exercise JIT",
       "expected_binary_version": ""
+    },
+    "docloader": {
+      "allowed_runtime_package_names": ["pgedge-docloader"],
+      "expected_binary_version": ""
+    },
+    "anonymizer": {
+      "allowed_runtime_package_names": ["pgedge-anonymizer"],
+      "expected_binary_version": ""
+    },
+    "vectorizer": {
+      "pg_coupled": true,
+      "runtime_package_templates": {
+        "rpm": ["pgedge-vectorizer_{pg}"],
+        "deb": ["pgedge-postgresql-{pg}-vectorizer"]
+      },
+      "uncertified_runtime_package_templates": {
+        "rpm": ["pgedge-vectorizer_{pg}-llvmjit"]
+      },
+      "uncertified_reason": "RPM-only JIT bitcode companion; the vectorizer test does not install it or exercise JIT",
+      "expected_binary_version": ""
     }
   }
 }

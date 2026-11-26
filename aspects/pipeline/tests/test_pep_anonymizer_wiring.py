@@ -283,7 +283,8 @@ def test_the_backstop_names_each_request_it_cannot_serve(monkeypatch):
 ], ids=["rpm", "deb"])
 def test_only_the_requested_package_is_installed_pinned_with_evidence(monkeypatch, tmp_path, env, ctype, exact):
     m = load(monkeypatch, env)
-    _wire(monkeypatch, tmp_path, m, _Container(_pkg_list("pgedge-anonymizer", "pgedge-radar")))
+    c = _Container(_pkg_list("pgedge-anonymizer", "pgedge-radar"))
+    _wire(monkeypatch, tmp_path, m, c)
     ip, pinned = _Spy((True, "rhel", "installed")), _Spy((True, "ok", "a" * 64))
     monkeypatch.setattr(m.package_management, "install_package", ip)
     monkeypatch.setattr(m.package_management, "install_pinned", pinned)
@@ -292,7 +293,8 @@ def test_only_the_requested_package_is_installed_pinned_with_evidence(monkeypatc
 
     # No prerequisite: the test never uses PostgreSQL or any other package.
     assert ip.calls == []
-    assert pinned.calls[0][0][1:] == ("pgedge-anonymizer", exact)
+    # Exactly one pinned install, into this container, of the requested package at the exact pin.
+    assert pinned.calls == [((c, "pgedge-anonymizer", exact), {})]
     marker = json.loads((tmp_path / "install-evidence.json").read_text())
     assert marker["install_kind"] == "pinned" and marker["installed_sha256"] == "a" * 64
     assert not (tmp_path / "prerequisite-versions.json").exists()

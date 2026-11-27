@@ -1,5 +1,25 @@
-# PEP maintainers. The v*_STABLE ruleset requires a code owner's approval for every promotion
-# or rollback of the stable channel (docs/CI.md, "Stable channel"). GitHub also requests these
-# owners' review automatically on other PRs, including PRs to main; main itself does not
-# require code-owner approval.
-* @hayee-bhatti @zaidshabbir25
+# Code owners under the Code Review and Commit Policy v2.0.
+# pgedge-pep-test is Tier 2. The last matching line wins.
+
+# Workflows, release, packaging and signing: a code owner or build-packaging.
+/.github/workflows/  @hayee-bhatti @zaidshabbir25 @pgEdge/build-packaging
+/.github/actions/  @hayee-bhatti @zaidshabbir25 @pgEdge/build-packaging
+action.yml  @hayee-bhatti @zaidshabbir25 @pgEdge/build-packaging
+action.yaml  @hayee-bhatti @zaidshabbir25 @pgEdge/build-packaging
+.goreleaser*.yml  @hayee-bhatti @zaidshabbir25 @pgEdge/build-packaging
+.goreleaser*.yaml  @hayee-bhatti @zaidshabbir25 @pgEdge/build-packaging
+*.spec  @hayee-bhatti @zaidshabbir25 @pgEdge/build-packaging
+debian/  @hayee-bhatti @zaidshabbir25 @pgEdge/build-packaging
+rpm/  @hayee-bhatti @zaidshabbir25 @pgEdge/build-packaging
+packaging/  @hayee-bhatti @zaidshabbir25 @pgEdge/build-packaging
+release*.sh  @hayee-bhatti @zaidshabbir25 @pgEdge/build-packaging
+sign*.sh  @hayee-bhatti @zaidshabbir25 @pgEdge/build-packaging
+sign*.py  @hayee-bhatti @zaidshabbir25 @pgEdge/build-packaging
+Dockerfile*  @hayee-bhatti @zaidshabbir25 @pgEdge/build-packaging
+
+# Ownership and AI review configuration: code owners only.
+/CODEOWNERS  @hayee-bhatti @zaidshabbir25
+/.github/CODEOWNERS  @hayee-bhatti @zaidshabbir25
+/docs/CODEOWNERS  @hayee-bhatti @zaidshabbir25
+/REVIEW.md  @hayee-bhatti @zaidshabbir25
+/.coderabbit.yaml  @hayee-bhatti @zaidshabbir25

@@ -199,9 +199,10 @@ def _validate_envelope(inp):
         ebv = pol.get("expected_binary_version")
         if ebv is not None and not isinstance(ebv, str):
             d.append("component_policy.expected_binary_version must be a string")
-        # Any PG-coupled key (even beside a flat list, which the shared rules reject) means the
-        # whole entry must pass the same validation the policy loaders apply.
-        if any(k in pol for k in PP.COUPLED_KEYS):
+        # Any PG-coupled key (even beside a flat list, which the shared rules reject) or a flat
+        # entry's uncertified names mean the whole entry must pass the same validation the policy
+        # loaders apply.
+        if any(k in pol for k in PP.COUPLED_KEYS + PP.FLAT_UNCERTIFIED_KEYS):
             d.extend("component_policy: %s" % e for e in PP.validate_entry(pol))
     jr = inp.get("job_records")
     if isinstance(jr, list):
@@ -443,11 +444,20 @@ def _package_reason(policy, allowed, name, family, pg_norm, release_intent):
     reason. A flat policy keeps today's check (``package_not_allowed`` off the allowlist). A
     PG-coupled policy uses the shared rules for this cell's family, BUILD PG major and the
     release's intended version, so a package for another family, PG major or series gets its own
-    reason (kept visible by the planner) instead of the silent ``package_not_allowed``."""
+    reason (kept visible by the planner) instead of the silent ``package_not_allowed``. A flat entry
+    that names its companions marks them ``runtime_not_certified`` and any other name
+    ``package_unclassified``."""
     if PP.is_coupled(policy):
         return PP.classify(policy, name, family, pg_norm.get("build_pg_major"),
                            release_intent.get("intended_version"))
-    return None if name in allowed else "package_not_allowed"
+    if name in allowed:
+        return None
+    companions = PP.flat_uncertified_names(policy)
+    if not companions:
+        return "package_not_allowed"          # a plain flat entry: unchanged, silent exclusion
+    # a named, built-but-not-certified companion is listed (never a gap); any other name is
+    # unclassified, so the planner keeps it visible as a coverage gap
+    return PP.R_UNCERTIFIED if name in companions else PP.R_UNCLASSIFIED
 
 
 def _select_targets(cell, art, policy, release_intent, provenance, family, allowed, pg_norm):
@@ -866,7 +876,7 @@ def reduce(inp):
         "component_policy": {
             "allowed_runtime_package_names": sorted(allowed_set),   # same sanitized value
             "expected_binary_version": policy.get("expected_binary_version"),
-            **(PP.describe(policy) or {})},                        # PG-coupled templates only
+            **(PP.describe(policy) or {})},          # coupled templates / flat uncertified names
         "cells": cells_out,
         "coverage_denominators": {
             "planned_build_cells": len(planned_list),   # honest: original planned entries

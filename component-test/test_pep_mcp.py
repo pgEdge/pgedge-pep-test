@@ -1,3 +1,4 @@
+import importlib.util as _ilu
 import os
 import sys
 import subprocess
@@ -12,8 +13,32 @@ from dotenv import load_dotenv
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 from aspects import configure_repository, package_management, pg_server_management, machine_cleanup, machine_prereq_setup, file_management, container_management
 
+
+def _load_util(name):
+    """Load a shared integration helper from aspects/pipeline/ by path (no package
+    __init__ there), so these imports work however this file is loaded."""
+    spec = _ilu.spec_from_file_location(
+        name, os.path.join(os.path.dirname(__file__), '..', 'aspects', 'pipeline', name + '.py'))
+    mod = _ilu.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+# The shared integration-mode install/identity steps, and through them the request contract and the
+# shared component policy (the same ones the radar, ACE, RAG and Spock tests use).
+pep_integration_mode = _load_util('pep_integration_mode')
+pep_request_env = pep_integration_mode.pep_request_env
+_pr = pep_request_env._pr
+
 load_dotenv()
 client = docker.from_env()
+
+# Integration request built from the PEP_* env contract (validated by normalize_request against the
+# shared component policy, which certifies only pgedge-postgres-mcp for mcp and rejects a request for
+# the built-but-uncertified pgedge-nla-cli or pgedge-nla-web). None in standalone mode, which keeps
+# the standalone options below (MCP_COMPONENTS, DEB_MCP_COMPONENTS, PLATFORM_FILTER and the version
+# variables) unchanged.
+INTEGRATION_REQUEST = pep_request_env.build_request_from_env()
 
 # Load values from env
 rhel_containers = [c.strip() for c in os.getenv("CONTAINERS", "").split(",") if c.strip()]
@@ -22,8 +47,10 @@ deb_containers = [c.strip() for c in os.getenv("DEB_CONTAINERS", "").split(",") 
 # Combine all containers with their type
 all_containers = [(c, "rhel") for c in rhel_containers] + [(c, "deb") for c in deb_containers]
 
-# Filter containers based on platform filter (if set)
-platform_filter = os.getenv("PLATFORM_FILTER", "").lower()
+# Filter containers based on platform filter (if set). In integration mode the request family is
+# authoritative and overrides any configured PLATFORM_FILTER.
+platform_filter = (INTEGRATION_REQUEST["family"] if INTEGRATION_REQUEST is not None
+                   else os.getenv("PLATFORM_FILTER", "").lower())
 if platform_filter == "rpm":
     all_containers = [(c, t) for c, t in all_containers if t == "rhel"]
 elif platform_filter == "deb":
@@ -38,6 +65,18 @@ skip_cleanup = os.getenv("SKIP_CLEANUP", "false").lower() == "true"
 # MCP Components - standalone packages (no PG version suffix)
 rhel_mcp_components = [c.strip() for c in os.getenv("MCP_COMPONENTS", "").split(",") if c.strip()]
 deb_mcp_components = [c.strip() for c in os.getenv("DEB_MCP_COMPONENTS", "").split(",") if c.strip()]
+
+# In integration mode the only package exercised is the requested (validated) one: the server package
+# pgedge-postgres-mcp. The CLI, the web UI and the legacy knowledge-base package in MCP_COMPONENTS are
+# neither installed nor tested, and the requested package is installed and tested even when
+# MCP_COMPONENTS does not name it.
+if INTEGRATION_REQUEST is not None:
+    rhel_mcp_components = [INTEGRATION_REQUEST["package_name"]]
+    deb_mcp_components = [INTEGRATION_REQUEST["package_name"]]
+
+# Only the integration backstop reads the PostgreSQL major: the MCP tests install and use no
+# PostgreSQL, so each PG leg of a certification repeats the same package test.
+pg_major_version = os.getenv("PG_MAJOR_VERSION", "")
 
 # MCP Component versions
 mcp_version = os.getenv("PGEDGE_POSTGRES_MCP_VERSION", "")
@@ -55,6 +94,120 @@ mcp_version_map = {
 
 # Decoupled components SBOM path
 decoupled_sbom_path = os.getenv("DECOUPLED_COMPONENTS_SBOM", "")
+
+# The server package's SBOM (pgEdge/pgedge-postgres-mcp pkg/rpm/pgedge-nla.spec %files and
+# pkg/deb/debian/rules ship /usr/share/pgedge-postgres-mcp/pgedge-postgres-mcp-sbom.json and .asc).
+mcp_sbom_package = "pgedge-postgres-mcp"
+
+# Name prefixes of the packages the MCP repository builds or built: the server and the legacy
+# pgedge-postgres-mcp-kb, and pgedge-nla-cli / pgedge-nla-web (source package pgedge-nla).
+_MCP_PACKAGE_PREFIXES = ("pgedge-postgres-mcp", "pgedge-nla")
+
+# The server binary and state directories (pkg/deb/debian/rules `install -D` and `install -d`,
+# pkg/rpm/pgedge-nla.spec %files and %dir). The shared Debian file comparison accepts a missing
+# entry when one installed entry has the same name: either state directory (both named postgres-mcp)
+# would stand in for the other, and a binary in another bin/ directory for the packaged one.
+# Integration mode therefore requires each at its exact path in `dpkg -L` (the RPM comparison is
+# already exact). The unit file keeps the shared comparison, which accepts it under /lib or
+# /usr/lib/systemd/system.
+MCP_DEB_EXACT_PATHS = {
+    "pgedge-postgres-mcp": ("/usr/bin/pgedge-postgres-mcp", "/var/lib/pgedge/postgres-mcp",
+                            "/var/log/pgedge/postgres-mcp"),
+}
+
+
+def integration_problem(request, pg_major_env):
+    """Why this test cannot serve ``request`` (None when it can, or in standalone mode): it must ask
+    for the mcp component, for one of mcp's certified packages in the shared policy, and for the
+    PostgreSQL major of the configuration this run loaded (PG_MAJOR_VERSION). Checked again before
+    anything is installed."""
+    if request is None:
+        return None
+    if request["component"] != "mcp":
+        return f"component {request['component']!r} is not mcp"
+    allowed = _pr.COMPONENT_PACKAGES.get("mcp", ())
+    if request["package_name"] not in allowed:
+        return (f"package {request['package_name']!r} is not an mcp package PEP certifies "
+                f"(expected one of {list(allowed)})")
+    if str(request["pg_major"]) != str(pg_major_env):
+        return f"request PG{request['pg_major']} disagrees with PG_MAJOR_VERSION={pg_major_env}"
+    return None
+
+
+INTEGRATION_PROBLEM = integration_problem(INTEGRATION_REQUEST, pg_major_version)
+
+
+def installed_mcp_packages(container, container_type):
+    """Installed packages that belong to the MCP repository, read from the package manager: the
+    names mcp's policy entry certifies or lists as built but not certified, and any other
+    pgedge-postgres-mcp* or pgedge-nla* package. Returns None if the query fails."""
+    if container_type == "rhel":
+        cmd = ["rpm", "-qa", "--queryformat", "%{NAME}\\n"]
+    else:
+        cmd = ["dpkg-query", "-W", "-f=${Package} ${Status}\\n"]
+    exit_code, output = container.exec_run(cmd, user="root")
+    if exit_code != 0:
+        return None
+    names = set()
+    for line in output.decode().splitlines():
+        parts = line.split()
+        if not parts or (container_type != "rhel" and "installed" not in parts[-1:]):
+            continue
+        names.add(parts[0])
+    policy = _pr.COMPONENT_POLICY.get("mcp", {})
+    known = set(_pr.COMPONENT_PACKAGES.get("mcp", ())) | set(_pr._pp.flat_uncertified_names(policy))
+    return sorted(n for n in names if n in known or n.startswith(_MCP_PACKAGE_PREFIXES))
+
+
+def path_owners(container, container_type, path):
+    """``(owners, raw)``: the packages the package manager says own ``path`` (sorted; [] when it
+    is unowned or the query fails) and the raw answer."""
+    if container_type == "rhel":
+        cmd = ["rpm", "-qf", "--queryformat", "%{NAME}\\n", path]
+    else:
+        cmd = ["dpkg-query", "-S", path]
+    exit_code, output = container.exec_run(cmd, user="root")
+    raw = output.decode().strip()
+    if exit_code != 0:
+        return [], raw
+    if container_type == "rhel":
+        return sorted({line.strip() for line in raw.splitlines() if line.strip()}), raw
+    owners = set()
+    for line in raw.splitlines():
+        packages, sep, owned = line.partition(": ")
+        if sep and owned.strip() == path:
+            owners.update(p.strip().split(":", 1)[0] for p in packages.split(","))
+    return sorted(owners), raw
+
+
+def paths_not_listed(container, package, paths):
+    """The entries of ``paths`` that `dpkg -L <package>` does not list at exactly that path, or None
+    when the listing fails."""
+    exit_code, output = container.exec_run(f"dpkg -L {package}", user="root")
+    if exit_code != 0:
+        return None
+    listed = {line.strip() for line in output.decode().splitlines()}
+    return [p for p in paths if p not in listed]
+
+
+def _skip_or_fail(reason):
+    """A standalone run skips when an input is missing. In integration mode the check fails
+    instead: skips are reported separately, but the certification verdict could still pass with
+    the check skipped."""
+    if INTEGRATION_REQUEST is not None:
+        pytest.fail(reason)
+    pytest.skip(reason)
+
+
+def _running_container(container_name):
+    """The named container, which must be running. A missing container skips a standalone run
+    and fails an integration run."""
+    try:
+        container = client.containers.get(container_name)
+    except docker.errors.NotFound:
+        _skip_or_fail(f"Container {container_name} not found or not running.")
+    assert container.status == "running"
+    return container
 
 
 def get_container_config(container_type):
@@ -127,12 +280,7 @@ def test_configure_repository(container_name, container_type):
     if not container_name:
         pytest.skip("No container defined in env")
 
-    try:
-        container = client.containers.get(container_name)
-    except docker.errors.NotFound:
-        pytest.skip(f"Container {container_name} not found or not running.")
-
-    assert container.status == "running"
+    container = _running_container(container_name)
 
     print(f"\n--- Configuring repository in {container_name} ---")
 
@@ -155,12 +303,26 @@ def test_mcp_component_install(container_name, container_type, component):
     if not container_name or not component:
         pytest.skip("No container or component defined")
 
-    try:
-        container = client.containers.get(container_name)
-    except docker.errors.NotFound:
-        pytest.skip(f"Container {container_name} not found or not running.")
+    container = _running_container(container_name)
 
-    assert container.status == "running"
+    if INTEGRATION_REQUEST is not None:
+        # Execution-side backstop: never install for a request this test cannot serve, and never a
+        # package other than the requested one.
+        assert INTEGRATION_PROBLEM is None, f"integration request cannot be served: {INTEGRATION_PROBLEM}"
+        requested = INTEGRATION_REQUEST["package_name"]
+        assert component == requested, (
+            f"integration mode installs only the requested {requested!r}, not {component!r}")
+        # No prerequisite: the server package depends on no other pgEdge package (pgedge-nla.spec
+        # declares no Requires for it; debian/control: ${shlibs:Depends}, ${misc:Depends}). The
+        # requested package is installed exactly as the request decides (pinned + checksum evidence).
+        print(f"\n--- Installing requested {requested} on {container_name} ---")
+        pep_integration_mode.install_for_request(container, INTEGRATION_REQUEST)
+        present = installed_mcp_packages(container, container_type)
+        assert present == [requested], (
+            f"expected exactly the requested MCP package {requested!r} to be installed, "
+            f"found {present!r}")
+        print(f"✅ Only {requested} is installed among MCP packages")
+        return
 
     print(f"\n--- Installing {component} on {container_name} ({container_type}) ---")
 
@@ -177,6 +339,8 @@ def test_mcp_component_install(container_name, container_type, component):
 @pytest.mark.parametrize("container_name,container_type,component", all_container_component_combinations)
 def test_mcp_component_upgrade(container_name, container_type, component):
     """Upgrade MCP component if UPGRADE=true"""
+    if INTEGRATION_REQUEST is not None:
+        pytest.skip("integration mode: certification never upgrades; the requested package is pinned")
     if os.getenv("UPGRADE", "false").lower() != "true":
         pytest.skip("Skipping upgrade tests because UPGRADE=false in env")
 
@@ -186,12 +350,7 @@ def test_mcp_component_upgrade(container_name, container_type, component):
     if not container_name or not component:
         pytest.skip("No container or component defined")
 
-    try:
-        container = client.containers.get(container_name)
-    except docker.errors.NotFound:
-        pytest.skip(f"Container {container_name} not found or not running.")
-
-    assert container.status == "running"
+    container = _running_container(container_name)
 
     print(f"\n--- Upgrading {component} on {container_name} ({container_type}) ---")
 
@@ -217,6 +376,10 @@ def test_mcp_component_upgrade(container_name, container_type, component):
 @pytest.mark.parametrize("container_name,container_type,component", all_container_component_combinations)
 def test_mcp_component_version(container_name, container_type, component):
     """Step 3: Check the MCP component version using package_management module"""
+    if INTEGRATION_REQUEST is not None:
+        pytest.skip("integration mode: superseded by test_mcp_identity, which checks the exact "
+                    "requested version")
+
     container_name = container_name.strip()
     component = component.strip()
 
@@ -228,12 +391,7 @@ def test_mcp_component_version(container_name, container_type, component):
     if not expected_version:
         pytest.skip(f"No version defined for {component} in env, skipping version check")
 
-    try:
-        container = client.containers.get(container_name)
-    except docker.errors.NotFound:
-        pytest.skip(f"Container {container_name} not found or not running.")
-
-    assert container.status == "running"
+    container = _running_container(container_name)
 
     print(f"\n--- Verifying {component} version on {container_name} ({container_type}) ---")
 
@@ -249,6 +407,29 @@ def test_mcp_component_version(container_name, container_type, component):
         pytest.fail(f"Failed to verify {component} version: {str(e)}")
 
 
+@pytest.mark.parametrize("container_name,container_type", all_containers)
+def test_mcp_identity(container_name, container_type):
+    """Integration mode: one consolidated identity verdict for the requested MCP package
+    (install-before-identity, then the exact package-manager version, with the checksum of the
+    pinned install recorded by test_mcp_component_install). No binary version is probed: the server
+    has no --version flag (none through v1.2.0-beta1), and the version it reports elsewhere (-openapi,
+    /health) is the source constant ServerVersion (internal/mcp/server.go), set by hand in a release
+    commit and not derived from the release tag: GoReleaser's -X main.version names no variable of the
+    server's main package, and v1.1.0-rc1 reported 1.1.0. So the release request implies no binary
+    version. The evidence is persisted before any failure. Skipped in standalone mode."""
+    req = INTEGRATION_REQUEST
+    if req is None:
+        pytest.skip("integration mode only")
+
+    container = _running_container(container_name.strip())
+
+    ev, problems = pep_integration_mode.record_identity(container, req)
+    if ev is None:
+        pytest.fail("; ".join(problems))
+    print(f"identity evidence ({req['package_name']}): {ev}")
+    assert not problems, "; ".join(problems)
+
+
 @pytest.mark.parametrize("container_name,container_type,component", all_container_component_combinations)
 def test_verify_bundled_files(container_name, container_type, component):
     """Verify bundled files for each MCP component match expected files
@@ -262,12 +443,7 @@ def test_verify_bundled_files(container_name, container_type, component):
     if not container_name or not component:
         pytest.skip("Invalid container or component")
 
-    try:
-        container = client.containers.get(container_name)
-    except docker.errors.NotFound:
-        pytest.skip(f"Container {container_name} not found or not running.")
-
-    assert container.status == "running"
+    container = _running_container(container_name)
 
     # Get project root directory (parent of component-test/)
     project_root = Path(__file__).parent.parent
@@ -299,11 +475,20 @@ def test_verify_bundled_files(container_name, container_type, component):
             pytest.fail(f"{message}{details_str}")
 
     except Exception as e:
-        # Handle cases like missing expected files
+        # A missing expected-output reference skips a standalone run and fails an integration
+        # run, where the requested release package would otherwise never be compared. The fail
+        # below is unconditional, so the check fails closed even if _skip_or_fail ever returns.
         if "No expected file found" in str(e):
-            pytest.skip(str(e))
-        else:
-            pytest.fail(f"Failed to verify bundled files: {str(e)}")
+            _skip_or_fail(str(e))
+        pytest.fail(f"Failed to verify bundled files: {str(e)}")
+
+    exact = MCP_DEB_EXACT_PATHS.get(component, ())
+    if INTEGRATION_REQUEST is not None and container_type == "deb" and exact:
+        missing = paths_not_listed(container, component, exact)
+        assert missing is not None, f"dpkg -L {component} failed on {container_name}"
+        assert not missing, (f"{component} does not list {missing} at the exact path on {container_name} "
+                             f"(the shared comparison matches these by name only)")
+        print(f"✅ {component} lists {', '.join(exact)} at their exact paths")
 
 
 @pytest.mark.parametrize("container_name,container_type", all_containers)
@@ -314,16 +499,11 @@ def test_verify_sbom(container_name, container_type):
         pytest.skip("No container defined in env")
 
     if not decoupled_sbom_path:
-        pytest.skip("DECOUPLED_COMPONENTS_SBOM not defined in env, skipping SBOM verification")
+        # Integration mode fails instead: the requested package's SBOM would otherwise go unchecked.
+        _skip_or_fail("DECOUPLED_COMPONENTS_SBOM not defined in env: no directory to locate the "
+                      "SBOM in, so SBOM verification cannot run")
 
-    try:
-        container = client.containers.get(container_name)
-    except docker.errors.NotFound:
-        pytest.skip(f"Container {container_name} not found or not running.")
-
-    assert container.status == "running"
-
-    mcp_sbom_package = "pgedge-postgres-mcp"
+    container = _running_container(container_name)
 
     # The SBOM basename is not uniform across builds/platforms: it ships either
     # with the full package name (pgedge-postgres-mcp-sbom.json) or with the
@@ -348,6 +528,16 @@ def test_verify_sbom(container_name, container_type):
     sbom_dir = os.path.dirname(found_path)
     sbom_file = os.path.basename(found_path)
     print(f"Located SBOM: {found_path}")
+
+    if INTEGRATION_REQUEST is not None:
+        # The located SBOM must be the one the requested package installed, not a file another
+        # package (or an earlier install) left under the search directory.
+        requested = INTEGRATION_REQUEST["package_name"]
+        owners, raw = path_owners(container, container_type, found_path)
+        assert owners == [requested], (
+            f"{found_path} is owned by {owners or 'no package'}, not only the requested "
+            f"{requested!r} (package manager said: {raw!r})")
+        print(f"✅ {found_path} belongs to {requested}")
 
     if container_type == "rhel":
         print(f"\n--- Verifying SBOM on {container_name} (RHEL) in {sbom_dir} ---")
@@ -411,12 +601,7 @@ def test_mcp_component_uninstall(container_name, container_type, component):
     if not container_name or not component:
         pytest.skip("No container or component defined")
 
-    try:
-        container = client.containers.get(container_name)
-    except docker.errors.NotFound:
-        pytest.skip(f"Container {container_name} not found or not running.")
-
-    assert container.status == "running"
+    container = _running_container(container_name)
 
     print(f"\n--- Uninstalling {component} on {container_name} ({container_type}) ---")
 
@@ -440,12 +625,7 @@ def test_pgedge_cleanup(container_name, container_type):
     if not container_name:
         pytest.skip("No container defined in env")
 
-    try:
-        container = client.containers.get(container_name)
-    except docker.errors.NotFound:
-        pytest.skip(f"Container {container_name} not found or not running.")
-
-    assert container.status == "running"
+    container = _running_container(container_name)
 
     print(f"\n--- Full pgEdge cleanup on {container_name} ---")
 

@@ -165,6 +165,8 @@ GAP_TARGET_INELIGIBLE = "target_ineligible"
 GAP_MEMBER_REJECTED = "member_rejected"
 # A PG-coupled package that does not belong to its target's family, PG major or series.
 GAP_PACKAGE_POLICY_MISMATCH = "package_policy_mismatch"
+# A runtime package that a flat entry naming its companions lists neither as certified nor as a companion.
+GAP_UNCLASSIFIED_PACKAGE = "unclassified_runtime_package"
 
 # cert-plan/1 member exclusions that are deliberate policy, not evidence defects: never gaps.
 _POLICY_EXCLUSIONS = frozenset({"non_runtime", "package_not_allowed"})
@@ -614,13 +616,39 @@ def _no_target_gap(cell):
         names = sorted({str(m.get("package_name")) for m in members if not _exclusions(m)})
         return _cell_gap(cell, GAP_SCOPE_CELL, GAP_TARGET_AMBIGUOUS, ", ".join(names) or None)
     reasons = sorted({r for m in members for r in _exclusions(m)})
-    return _cell_gap(cell, GAP_SCOPE_CELL, GAP_NO_RUNTIME_TARGET,
-                     ", ".join(reasons) or "no inspected packages")
+    gap = _cell_gap(cell, GAP_SCOPE_CELL, GAP_NO_RUNTIME_TARGET, ", ".join(reasons) or "no inspected packages")
+    rejected = _rejected_identities(cell)
+    if rejected:
+        # the files a target would have kept visible as member gaps, named on this cell's ONE gap
+        gap["rejected_packages"] = rejected
+    return gap
 
 
 def _member_identity(m):
     return tuple(m.get(k) if _nonblank_str(m.get(k)) else None
                  for k in ("package_name", "artifact_member_path", "native_arch", "sha256"))
+
+
+def _visible_rejections(cell):
+    """(member, exclusion reasons) for each inspected file whose rejection must stay visible: every
+    exclusion except the deliberate policy ones (``non_runtime``, ``package_not_allowed``) and a
+    listed companion's sole ``runtime_not_certified``."""
+    for m in _members(cell):
+        rs = _exclusions(m)
+        if not rs or _POLICY_EXCLUSIONS.intersection(rs) or rs == [_pp.R_UNCERTIFIED]:
+            continue
+        yield m, rs
+
+
+def _rejected_identities(cell):
+    """The identities of a no-target cell's visibly rejected files (``_visible_rejections``), sorted.
+    They ride on the cell's single gap, so the cell is still one gap and no member is counted."""
+    out = []
+    for m, rs in _visible_rejections(cell):
+        name, path, native, sha = _member_identity(m)
+        out.append({"physical_package": name, "reasons": rs, "path": path, "native_arch": native, "sha256": sha})
+    return sorted(out, key=lambda r: tuple(str(r[k] or "") for k in ("physical_package", "path", "native_arch",
+                                                                      "sha256")))
 
 
 def _rejected_member_gaps(cell):
@@ -632,18 +660,18 @@ def _rejected_member_gaps(cell):
     package name is still a gap. The detail names the file's artifact path, native arch and checksum.
     A PG-coupled package for the wrong family, PG major or series is an ordinary rejected member, so
     it stays visible beside a valid target. A runtime companion whose ONLY exclusion is the policy's
-    ``runtime_not_certified`` is not a gap: it is listed by ``_uncertified_runtime_packages``."""
+    ``runtime_not_certified`` is not a gap: it is listed by ``_uncertified_runtime_packages``. A runtime
+    file that a flat entry naming its companions does not account for (``package_unclassified``) is an
+    ``unclassified_runtime_package`` gap: never certified and never silently dropped."""
     gaps = []
-    for m in _members(cell):
-        rs = _exclusions(m)
-        if not rs or _POLICY_EXCLUSIONS.intersection(rs) or rs == [_pp.R_UNCERTIFIED]:
-            continue
+    for m, rs in _visible_rejections(cell):
         name, path, native, sha = _member_identity(m)
         detail = ",".join(rs)
         for label, value in (("path", path), ("native_arch", native), ("sha256", sha and sha[:12])):
             if value:
                 detail += "; %s=%s" % (label, value)
-        gaps.append(_cell_gap(cell, GAP_SCOPE_MEMBER, GAP_MEMBER_REJECTED, detail, physical_package=name))
+        reason = GAP_UNCLASSIFIED_PACKAGE if _pp.R_UNCLASSIFIED in rs else GAP_MEMBER_REJECTED
+        gaps.append(_cell_gap(cell, GAP_SCOPE_MEMBER, reason, detail, physical_package=name))
     return gaps          # ordered by the plan-wide gap sort; each detail carries its unique path
 
 

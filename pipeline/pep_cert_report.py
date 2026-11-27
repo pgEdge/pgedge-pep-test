@@ -476,6 +476,9 @@ _GAP_REASON_TEXT = {
     "no_enabled_platform": "No enabled PEP test container for this OS/arch",
     "package_evidence_rejected": ("Capture rejected the receipt or package for this build as invalid "
                                   "(code in Detail); this blocks certification in both modes"),
+    "unclassified_runtime_package": ("A runtime package built in this cell that the component's policy "
+                                     "names neither as certified nor as built but not certified; "
+                                     "nothing tested it"),
 }
 # Package proof, in words that hold whether the captured package came from a build
 # receipt or from a published-package replay.
@@ -571,9 +574,10 @@ def _layout(views: list, gaps: list) -> dict:
     columns are the PG majors the legs actually ran. A (row, PG) bucket keeps EVERY
     leg that falls into it; gaps stay separate rows because they carry no PG."""
     # A package that appears only in a coverage gap is still part of the release: count it,
-    # so its gap is never shown as though it belonged to the one package that was tested.
+    # so its gap is never shown as though it belonged to the one package that was tested. That
+    # includes the packages a no-target cell gap names in ``rejected_packages`` (_gap_packages).
     tested = {_package_name(_pi(v)) for v in views}
-    gap_only = {_txt(g.get("physical_package")) for g in gaps} - {""} - tested
+    gap_only = {n for g in gaps for n in _gap_packages(g)} - {""} - tested
     packages = sorted(tested | gap_only)
     multi = len(packages) > 1
     pgs = sorted({_txt(_pi(v).get("pg_major")) for v in views}, key=_pg_key)
@@ -1055,7 +1059,39 @@ def _gap_words(g: dict) -> str:
 
 def _gap_tip(g: dict) -> str:
     keys = ("scope", "cell_id", "target_id", "physical_package", "family", "os", "arch", "reason", "detail")
-    return " · ".join("%s=%s" % (k, _txt(g.get(k))) for k in keys if _txt(g.get(k)))
+    tip = " · ".join("%s=%s" % (k, _txt(g.get(k))) for k in keys if _txt(g.get(k)))
+    names = _gap_packages(g) if not _txt(g.get("physical_package")) else []
+    return tip + (" · rejected=%s" % ", ".join(names) if names else "")
+
+
+def _rejected_records(g: dict) -> list:
+    """A no-target cell gap's ``rejected_packages`` records (dicts only; anything else is ignored)."""
+    value = g.get("rejected_packages") if isinstance(g, dict) else None
+    return [r for r in value if isinstance(r, dict)] if isinstance(value, list) else []
+
+
+def _gap_packages(g: dict) -> list:
+    """The package names a gap is about: its own package, else the files a no-target cell rejected
+    (so a cell without a certified package still names what it did build)."""
+    own = _txt(g.get("physical_package"))
+    if own:
+        return [own]
+    return sorted({_txt(r.get("physical_package")) for r in _rejected_records(g)} - {""})
+
+
+def _rejected_detail_html(g: dict) -> str:
+    rows = []
+    for r in _rejected_records(g):
+        reasons = r.get("reasons")
+        parts = [", ".join(_txt(x) for x in reasons if _txt(x)) if isinstance(reasons, list) else ""]
+        for label, key, cut in (("path", "path", None), ("native_arch", "native_arch", None),
+                                ("sha256", "sha256", 12)):
+            value = _txt(r.get(key))
+            if value:
+                parts.append("%s=%s" % (label, value[:cut] if cut else value))
+        rows.append('<div class="rc">rejected <code>%s</code>: %s</div>' % (
+            _esc(_dash(_txt(r.get("physical_package")))), _esc("; ".join(p for p in parts if p))))
+    return "".join(rows)
 
 
 def _matrix(layout: dict) -> str:
@@ -1088,7 +1124,7 @@ def _matrix(layout: dict) -> str:
                 parts.append(_matrix_cell(row["cells"].get(pg, []), where))
             parts.append(_row_total(row))
         for i, g in f["gaps"]:
-            pkg = _txt(g.get("physical_package"))
+            pkg = ", ".join(_gap_packages(g))
             parts.append('<div class="h rowlbl sticky-left gaplbl" title="%s">%s<span>not tested%s</span></div>'
                          % (_esc(_gap_tip(g)), _esc(_gap_label(g)),
                             _esc(" · " + pkg) if layout["multi"] and pkg else ""))
@@ -1180,7 +1216,7 @@ def _gap_row(i: int, g: dict, multi: bool) -> str:
         '<td class="muted" colspan="4">no test run on any PG</td>'
         '<td><a class="report-link" href="#gap-%d">Gap detail &darr;</a></td></tr>'
     ) % (i, _esc(_gap_label(g)), _esc(_dash(_txt(g.get("cell_id")))), _esc(_dash(_txt(g.get("arch")))),
-         ('<td class="mono">%s</td>' % _esc(_dash(_txt(g.get("physical_package"))))) if multi else "",
+         ('<td class="mono">%s</td>' % _esc(_dash(", ".join(_gap_packages(g))))) if multi else "",
          _pill("NOT TESTED", "gap"), _esc(_gap_words(g)), i)
 
 
@@ -1250,15 +1286,16 @@ def _gaps_table(gaps: list) -> str:
     header = ("<tr><th>Scope</th><th>Cell</th><th>Package</th><th>Family</th><th>OS</th>"
               "<th>Arch</th><th>Reason</th><th>Detail</th></tr>")
     rows = "".join(
-        '<tr id="gap-%d"><td>%s</td><td><code>%s</code></td><td><code>%s</code></td><td>%s</td><td>%s</td>'
-        "<td>%s</td><td>%s</td><td>%s</td></tr>" % (
+        '<tr id="gap-%d"><td>%s</td><td><code>%s</code></td><td>%s</td><td>%s</td><td>%s</td>'
+        "<td>%s</td><td>%s</td><td>%s%s</td></tr>" % (
             i, _esc(_dash(g.get("scope"))), _esc(_dash(g.get("cell_id"))),
-            _esc(_dash(g.get("physical_package"))), _esc(_dash(g.get("family"))),
+            ", ".join("<code>%s</code>" % _esc(n) for n in _gap_packages(g)) or "<code>%s</code>" % _esc(_dash(None)),
+            _esc(_dash(g.get("family"))),
             _esc(_dash(g.get("os"))), _esc(_dash(g.get("arch"))),
             _pill(_dash(g.get("reason")).upper().replace("_", " "), "gap")
             + ('<div class="rc">%s</div>' % _esc(_GAP_REASON_TEXT[_txt(g.get("reason"))])
                if _txt(g.get("reason")) in _GAP_REASON_TEXT else ""),
-            _esc(_dash(g.get("detail"))))
+            _esc(_dash(g.get("detail"))), _rejected_detail_html(g))
         for i, g in enumerate(gaps) if isinstance(g, dict))
     return ('<h2 id="gaps">Not tested (planned but not certified)</h2>'
             '<p class="sub">Each row is a planned build cell, package target or rejected package '
@@ -1268,8 +1305,17 @@ def _gaps_table(gaps: list) -> str:
             'not listed.</p><div class="scroll"><table>%s%s</table></div>' % (header, rows))
 
 
-_UNCERTIFIED_TEXT = ("in this release's build artifacts, but the certification deliberately does not "
-                     "install or test them")
+def _uncertified_text(plural: bool = True) -> str:
+    """Claims only what is true of every listed package: it was built, its build receipt records its
+    identity and checksum, and PEP does not certify it or verify it as an installed certification
+    target. It may still be installed as a dependency of the package under test."""
+    if plural:
+        return ("in this release's build artifacts, and the build receipts record their identities and "
+                "checksums, but PEP does not certify them: no test targets them, and PEP does not verify "
+                "them as installed certification targets")
+    return ("in this release's build artifacts, and the build receipt records its identity and checksum, "
+            "but PEP does not certify it: no test targets it, and PEP does not verify it as an installed "
+            "certification target")
 
 
 def _uncertified_entries(result: dict):
@@ -1307,11 +1353,12 @@ def _uncertified_table(result: dict) -> str:
             _pill("MALFORMED RECORD", "issue"),
             _esc("malformed record list: uncertified_runtime_packages is not a list")))
     return ('<h2 id="uncertified">Runtime packages not certified by policy (%d)</h2>'
-            '<p class="sub">These runtime packages are %s. They are listed so the result never '
+            '<p class="sub">These runtime packages are %s. One may still be installed as a dependency '
+            'of the package under test. They are listed so the result never '
             'implies every runtime package was certified, and they are not counted as coverage '
             'gaps.</p><div class="scroll"><table><tr><th>Package</th><th>Cell</th>'
             '<th>Family</th><th>OS</th><th>Arch</th><th>Reason</th></tr>%s</table></div>'
-            % (len(entries), _UNCERTIFIED_TEXT, "".join(rows)))
+            % (len(entries), _uncertified_text(), "".join(rows)))
 
 
 def _md_uncertified(result: dict) -> list:
@@ -1324,7 +1371,7 @@ def _md_uncertified(result: dict) -> list:
         out += ["", "**Not certified by policy:** %s %s %s (%s); not counted as coverage gaps." % (
             ", ".join(presentation.md_code(n) for n in names),
             "is" if len(names) == 1 else "are",
-            _UNCERTIFIED_TEXT.replace("them", "it" if len(names) == 1 else "them"),
+            _uncertified_text(plural=len(names) != 1),
             presentation.md_text(_txt(good[0].get("reason")), 160))]
     if bad:
         out += ["", "⚠ Not certified by policy: %s could not be read; see the report." % (
@@ -1510,7 +1557,7 @@ def _md_gaps(gaps: list) -> list:
         out.append("| %s | %s | %s | %s%s |" % (
             presentation.md_text(_txt(g.get("family")).upper() or "-"),
             presentation.md_text(_gap_label(g)),
-            presentation.md_code(_txt(g.get("physical_package"))),
+            ", ".join(presentation.md_code(n) for n in _gap_packages(g)) or presentation.md_code(""),
             presentation.md_text(_gap_words(g), 160),
             (" (%s)" % presentation.md_text(detail, 160)) if detail else ""))
     if len(gaps) > _MD_MAX_GAP_ROWS:

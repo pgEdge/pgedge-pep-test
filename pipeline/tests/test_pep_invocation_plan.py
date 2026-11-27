@@ -196,8 +196,10 @@ def test_radar_is_planned_like_ace_on_every_supported_major_with_its_release_fac
 
 
 @pytest.mark.parametrize("component,package", [("docloader", "pgedge-docloader"),
-                                               ("anonymizer", "pgedge-anonymizer")])
-def test_docloader_and_anonymizer_are_planned_like_radar_on_every_supported_major(component, package):
+                                               ("anonymizer", "pgedge-anonymizer"),
+                                               ("mcp", "pgedge-postgres-mcp"),
+                                               ("ai_db_workbench", "pgedge-ai-dba-server")])
+def test_pg_independent_flat_products_are_planned_like_radar_on_every_supported_major(component, package):
     # PG-independent flat packages (one per OS/arch cell). The planner has no per-component PG rule, so
     # each built cell becomes one leg per supported PostgreSQL major, as for radar -- even though these
     # components' tests do not use the server: the legs repeat the same package test, they are not

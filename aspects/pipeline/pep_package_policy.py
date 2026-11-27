@@ -7,8 +7,14 @@ invocation planner's backstop (pipeline/pep_invocation_plan.py) and the per-run 
 call it, so their rules cannot diverge.
 
 A policy entry has one of two forms:
-  * flat (unchanged): ``allowed_runtime_package_names`` -- ordered alternative names of the one
-    runtime package, the same for every family and PG major (rag, pgedge-capture-smoke);
+  * flat: ``allowed_runtime_package_names`` -- ordered alternative names of the one runtime package,
+    the same for every family and PG major (rag, pgedge-capture-smoke). An optional
+    ``uncertified_runtime_package_names`` (with a required ``uncertified_reason``) names the OTHER
+    runtime packages the release builds in each cell but the component does not certify (e.g. a CLI
+    or an arch-independent web UI beside the server it tests); they are reported, never silently
+    dropped. Such an entry accounts for every runtime package it expects, so any OTHER name is
+    ``package_unclassified`` (a coverage gap downstream), never the silent exclusion. A flat entry
+    without the list is unchanged;
   * PG-coupled templates: ``"pg_coupled": true`` with ``runtime_package_templates``, a per-family
     list of name templates. ``{pg}`` is the PostgreSQL major the package was built for and
     ``{series}`` is the product series, derived from the release version's leading major through
@@ -21,8 +27,9 @@ A policy entry has one of two forms:
 
 ``classify`` returns None for the package to certify, or ONE reason code. ``package_not_allowed``
 is the existing, intentional policy exclusion (an unrelated package). Every other reason means
-"this is the component's package, but for the wrong family / PG major / series", or a known runtime
-companion that is not certified; consumers keep those visible. Stdlib only, pure.
+"this is the component's package, but for the wrong family / PG major / series", a known runtime
+companion that is not certified, or (a flat entry that names its companions) a package the entry
+does not account for; consumers keep those visible. Stdlib only, pure.
 """
 from __future__ import annotations
 
@@ -37,9 +44,12 @@ R_SERIES = "series_mismatch"                     # ... of another product series
 R_NO_PG = "pg_major_unknown"                     # PG-coupled policy, but no canonical PG major known
 R_NO_SERIES = "series_unknown"                   # the release version maps to no known series
 R_UNCERTIFIED = "runtime_not_certified"          # a declared runtime companion, not certified
+R_UNCLASSIFIED = "package_unclassified"          # flat entry naming its companions: a name it does not list
 
 COUPLED_KEYS = ("pg_coupled", "runtime_package_templates", "series_by_version_major",
                 "uncertified_runtime_package_templates", "uncertified_reason")
+# A flat entry's optional uncertified companions (``uncertified_reason`` is shared with the coupled form).
+FLAT_UNCERTIFIED_KEYS = ("uncertified_runtime_package_names", "uncertified_reason")
 
 _PLACEHOLDER_RE = re.compile(r"\{([a-z]+)\}")
 _PLACEHOLDERS = {"pg": r"(?P<pg>[0-9]+)", "series": r"(?P<series>[0-9]+)"}
@@ -94,10 +104,33 @@ def _family_templates_errors(label, value, uses_series):
     return errs
 
 
+def _flat_uncertified_errors(entry, certified):
+    unc = entry.get("uncertified_runtime_package_names")
+    errs = []
+    if not (isinstance(unc, list) and unc and all(_nonblank(x) for x in unc)):
+        errs.append("uncertified_runtime_package_names must be a non-empty list of nonblank strings")
+    elif len(set(unc)) != len(unc):
+        errs.append("uncertified_runtime_package_names has duplicate package names")
+    elif set(unc) & set(certified):
+        errs.append("uncertified_runtime_package_names names a package that is also certified: %s"
+                    % sorted(set(unc) & set(certified)))
+    if not _nonblank(entry.get("uncertified_reason")):
+        errs.append("uncertified_reason must be a nonblank string")
+    return errs
+
+
+def flat_uncertified_names(entry):
+    """A flat entry's named uncertified runtime packages (string entries only), else ()."""
+    if is_coupled(entry) or not isinstance(entry, dict):
+        return ()
+    unc = entry.get("uncertified_runtime_package_names")
+    return tuple(x for x in unc if isinstance(x, str)) if isinstance(unc, list) else ()
+
+
 def validate_entry(entry):
     """Deterministic list of shape errors for one policy entry (empty == valid). Both loaders
     (request and capture) and the cert-plan envelope use it, so they accept exactly the same
-    entries. The flat form's rules are unchanged."""
+    entries. A flat entry without uncertified names is validated exactly as before."""
     if not isinstance(entry, dict):
         return ["entry is not an object"]
     errs = []
@@ -106,14 +139,24 @@ def validate_entry(entry):
         errs.append("expected_binary_version must be a string")
     flat = entry.get("allowed_runtime_package_names")
     coupled_keys = [k for k in COUPLED_KEYS if k in entry]
-    if flat is not None or not coupled_keys:
-        if coupled_keys:
+    flat_unc = "uncertified_runtime_package_names" in entry
+    if flat is not None or flat_unc or not coupled_keys:
+        if flat is None and flat_unc and [k for k in coupled_keys if k != "uncertified_reason"]:
+            return errs + ["uncertified_runtime_package_names is only for flat entries (a PG-coupled "
+                           "entry names companions in uncertified_runtime_package_templates)"]
+        # a flat entry may carry uncertified_reason only together with its uncertified names
+        mixed = [k for k in coupled_keys if not (k == "uncertified_reason" and flat_unc)]
+        if mixed == ["uncertified_reason"]:
+            return errs + ["uncertified_reason needs uncertified_runtime_package_names on a flat entry"]
+        if mixed:
             return errs + ["allowed_runtime_package_names cannot be combined with PG-coupled keys %s"
-                           % coupled_keys]
+                           % mixed]
         if not (isinstance(flat, list) and flat and all(_nonblank(x) for x in flat)):
             return errs + ["needs a nonempty allowed_runtime_package_names list of nonblank strings"]
         if len(set(flat)) != len(flat):
             errs.append("allowed_runtime_package_names has duplicate package names")
+        if flat_unc:
+            errs.extend(_flat_uncertified_errors(entry, flat))
         return errs
     if entry.get("pg_coupled") is not True:
         return errs + ["PG-coupled templates need \"pg_coupled\": true"]
@@ -201,7 +244,12 @@ def classify(entry, name, family, pg_major, version):
     if not isinstance(name, str):
         return R_NOT_ALLOWED
     if not is_coupled(entry):
-        return None if name in expected_names(entry, family, pg_major, version) else R_NOT_ALLOWED
+        if name in expected_names(entry, family, pg_major, version):
+            return None
+        companions = flat_uncertified_names(entry)
+        if name in companions:
+            return R_UNCERTIFIED
+        return R_UNCLASSIFIED if companions else R_NOT_ALLOWED
     if name in expected_names(entry, family, pg_major, version):
         return None
     matches = _parse(entry, name)
@@ -239,9 +287,13 @@ def is_component_runtime_package(entry, name):
 
 
 def describe(entry):
-    """The policy facts a cert-plan records for traceability (flat entries keep today's shape)."""
+    """The policy facts a cert-plan records for traceability. A flat entry adds only its uncertified
+    names and reason, when it has them (otherwise None: plain flat entries keep today's shape)."""
     if not is_coupled(entry):
-        return None
+        if not isinstance(entry, dict) or "uncertified_runtime_package_names" not in entry:
+            return None
+        return {"uncertified_runtime_package_names": entry.get("uncertified_runtime_package_names"),
+                "uncertified_reason": entry.get("uncertified_reason")}
     out = {"pg_coupled": True,
            "runtime_package_templates": entry.get("runtime_package_templates"),
            "series_by_version_major": entry.get("series_by_version_major")}

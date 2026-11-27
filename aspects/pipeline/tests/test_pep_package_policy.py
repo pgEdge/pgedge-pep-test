@@ -98,6 +98,69 @@ def test_repository_policy_entries_are_valid():
     assert {c: pp.validate_entry(e) for c, e in doc["components"].items()} == {c: [] for c in doc["components"]}
 
 
+# A flat component may also build runtime packages it does not certify (e.g. a CLI or an
+# arch-independent web UI next to the server it certifies); it names them, with one reason.
+FLAT_UNC = {"allowed_runtime_package_names": ["p-server"],
+            "uncertified_runtime_package_names": ["p-cli", "p-web"],
+            "uncertified_reason": "built beside the server; the test installs only the server",
+            "expected_binary_version": ""}
+
+
+def test_flat_entry_may_name_uncertified_runtime_packages():
+    assert pp.validate_entry(FLAT_UNC) == []
+    assert pp.expected_names(FLAT_UNC, "rpm", None, "1.0") == ("p-server",)
+    for family in ("rpm", "deb"):
+        assert pp.classify(FLAT_UNC, "p-server", family, None, "1.0") is None
+        assert pp.classify(FLAT_UNC, "p-cli", family, None, "1.0") == pp.R_UNCERTIFIED
+        assert pp.classify(FLAT_UNC, "p-web", family, "17", "9.9") == pp.R_UNCERTIFIED
+        # an entry that names its companions accounts for every runtime package it expects, so any
+        # other name is unclassified (reported as a coverage gap), never the silent exclusion
+        assert pp.classify(FLAT_UNC, "p-other", family, None, "1.0") == pp.R_UNCLASSIFIED
+    assert pp.is_component_runtime_package(FLAT_UNC, "p-server") is True
+    assert pp.is_component_runtime_package(FLAT_UNC, "p-other") is False
+    assert pp.is_component_runtime_package(FLAT_UNC, "p-cli") is False     # named, never certified
+
+
+def test_describe_records_flat_uncertified_names_and_keeps_plain_flat_entries_unchanged():
+    assert pp.describe(FLAT_UNC) == {"uncertified_runtime_package_names": ["p-cli", "p-web"],
+                                     "uncertified_reason": FLAT_UNC["uncertified_reason"]}
+    assert pp.describe(RAG) is None
+    assert pp.classify(RAG, "p-cli", "rpm", None, "1.0") == pp.R_NOT_ALLOWED
+
+
+def test_only_a_flat_entry_naming_its_companions_has_unclassified_packages():
+    # plain flat and PG-coupled entries keep package_not_allowed for an unrelated name
+    assert pp.R_UNCLASSIFIED == "package_unclassified"
+    for family in ("rpm", "deb"):
+        assert pp.classify(RAG, "p-other", family, None, "1.0") == pp.R_NOT_ALLOWED
+        assert pp.classify(SPOCK, "p-other", family, "17", "5.0.13") == pp.R_NOT_ALLOWED
+    assert pp.classify(FLAT_UNC, None, "rpm", None, "1.0") == pp.R_NOT_ALLOWED      # not a name at all
+
+
+@pytest.mark.parametrize("over,fragment", [
+    ({"uncertified_reason": None}, "uncertified_reason"),
+    ({"uncertified_reason": " "}, "uncertified_reason"),
+    ({"uncertified_runtime_package_names": None}, "uncertified_runtime_package_names"),
+    ({"uncertified_runtime_package_names": []}, "uncertified_runtime_package_names"),
+    ({"uncertified_runtime_package_names": "p-cli"}, "uncertified_runtime_package_names"),
+    ({"uncertified_runtime_package_names": ["p-cli", " "]}, "uncertified_runtime_package_names"),
+    ({"uncertified_runtime_package_names": ["p-cli", "p-cli"]}, "duplicate"),
+    ({"uncertified_runtime_package_names": ["p-cli", "p-server"]}, "also certified"),
+    ({"uncertified_runtime_package_templates": {"rpm": ["p{pg}"]}}, "cannot be combined"),
+    ({"allowed_runtime_package_names": None}, "needs a nonempty allowed_runtime_package_names"),
+], ids=["reason-missing", "reason-blank", "names-missing", "names-empty", "names-not-list", "name-blank",
+        "name-duplicate", "name-also-certified", "coupled-templates", "no-certified-list"])
+def test_flat_uncertified_entry_is_rejected_when_malformed(over, fragment):
+    entry = {k: v for k, v in dict(FLAT_UNC, **over).items() if v is not None}
+    errs = pp.validate_entry(entry)
+    assert errs and any(fragment in e for e in errs), errs
+
+
+def test_flat_uncertified_names_are_rejected_on_a_pg_coupled_entry():
+    errs = pp.validate_entry(dict(SPOCK, uncertified_runtime_package_names=["p-cli"]))
+    assert errs and any("uncertified_runtime_package_names" in e for e in errs), errs
+
+
 @pytest.mark.parametrize("entry,fragment", [
     ("x", "not an object"),
     ({}, "allowed_runtime_package_names"),

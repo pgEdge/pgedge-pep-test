@@ -178,9 +178,11 @@ def normalize_request(raw: dict, *, catalog_path=None) -> dict:
     package_name = _require(raw, "package_name")
     coupled = _pp.is_coupled(COMPONENT_POLICY[component])
     if not coupled and package_name not in COMPONENT_PACKAGES[component]:
+        # a flat component's named companion is built but never certified: say so
+        why = _pp.classify(COMPONENT_POLICY[component], package_name, None, None, None)
         raise RequestError(
             f"package_name {package_name!r} does not match component {component!r} "
-            f"(expected one of {list(COMPONENT_PACKAGES[component])})")
+            f"({why}; expected one of {list(COMPONENT_PACKAGES[component])})")
     channel = _enum(_require(raw, "channel"), VALID_CHANNELS, "channel")
 
     # REQUIRED and build-authoritative — never fall back to config.
